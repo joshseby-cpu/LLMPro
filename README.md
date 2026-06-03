@@ -165,6 +165,11 @@ documentation set is load-bearing — it's how knowledge survives between
 sessions. **If you change code (or you direct an agent to), you (or it) are
 expected to update the relevant docs in the same session.**
 
+A purpose-built subagent team lives in [`.claude/agents/`](.claude/agents/) —
+start with [`Main`](.claude/agents/Main.md), the orchestrator. See the
+[agent-team section](CLAUDE.md#-work-through-the-agent-team--start-with-main) in
+`CLAUDE.md` for the roster and routing.
+
 See the [doc-maintenance contract](CLAUDE.md#%EF%B8%8F-documentation-is-part-of-the-work--read-this-section-twice)
 in `CLAUDE.md` for the what-triggers-what mapping. Minimum: append one line
 to the **Recent session log** in [`docs/STATE.md`](docs/STATE.md) so the next
