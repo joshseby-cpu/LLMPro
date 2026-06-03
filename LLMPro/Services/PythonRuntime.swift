@@ -67,7 +67,13 @@ final class PythonRuntime {
             let uv = try await resolveUV()
 
             phase = .creatingVenv
-            try await runUV(uv, ["venv", PathResolver.venvDir.path, "--python", "3.11"])
+            // `--clear` makes this idempotent: if a venv dir already exists but we
+            // reached bootstrap anyway (verifyMLXLM was slow/transient on a cold
+            // first launch, or a previous install was interrupted), recreate over
+            // it instead of hard-failing with "a virtual environment already
+            // exists". Without it, a transient verify failure wedges the runtime
+            // until the user manually wipes the venv.
+            try await runUV(uv, ["venv", PathResolver.venvDir.path, "--python", "3.11", "--clear"])
 
             phase = .installingMLXLM("Installing mlx-lm + datasets (this can take a few minutes)")
             try await runUV(uv, [
