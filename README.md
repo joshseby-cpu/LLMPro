@@ -18,6 +18,54 @@ specializes them into coding assistants you actually use.
 
 ---
 
+## Screenshots
+
+The whole app is one closed feedback loop — **download a model → teach it → try it
+→ use it for coding** — wrapped in a friendly, no-jargon UI.
+
+### Home
+Plain-language dashboard: models on your Mac, lessons ready, fine-tunes completed,
+free memory, and recent training runs.
+
+![Home](docs/screenshots/home.png)
+
+### Models
+Search HuggingFace (or filter to `mlx-community`) and manage the models already on
+your Mac, with per-model disk usage.
+
+![Models](docs/screenshots/models.png)
+
+### Teach
+Fine-tune in three choices — pick a model, pick a dataset, pick how long. LLMPro
+auto-tunes every hyperparameter; there are no knobs to learn.
+
+![Teach](docs/screenshots/teach.png)
+
+### Progress
+Friendly training narrator with a 5-star "how well it's learning" rating and ETA;
+charts and logs live behind a *Technical details* disclosure.
+
+![Progress](docs/screenshots/progress.png)
+
+### Code
+An agentic coding assistant + 3-pane IDE, driven by a fully-offline five-role team
+(Orchestrator · Planner · Researcher · Coder · UI) with editable agents and Skills.
+
+![Code](docs/screenshots/code.png)
+
+### Inspect
+A live MLX model inspector — peek at the weights, attention, and chain-of-thought
+of any local model, no ML background required.
+
+![Inspect](docs/screenshots/inspect.png)
+
+> More sections — **Lessons** (dataset catalog + editor), **Try it out** (base-vs-
+> fine-tune arena), **Practice** (recursive self-improvement), **Fusion** (model
+> merging), **Memory**, and **Save & Use** (export to Ollama / LM Studio) — are
+> covered in [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
+
+---
+
 ## Documentation
 
 **Agents and contributors should start with [`CLAUDE.md`](CLAUDE.md)** — the
