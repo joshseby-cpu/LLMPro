@@ -165,10 +165,12 @@ documentation set is load-bearing — it's how knowledge survives between
 sessions. **If you change code (or you direct an agent to), you (or it) are
 expected to update the relevant docs in the same session.**
 
-A purpose-built subagent team lives in [`.claude/agents/`](.claude/agents/) —
-start with [`Main`](.claude/agents/Main.md), the orchestrator. See the
-[agent-team section](CLAUDE.md#-work-through-the-agent-team--start-with-main) in
-`CLAUDE.md` for the roster and routing.
+Purpose-built specialist subagents live in [`.claude/agents/`](.claude/agents/)
+(Builder-Swift, Builder-SwiftUI, Builder-Python, Builder-Text, Planner,
+Researcher) — a Claude Code session in this project auto-discovers them and can
+delegate file-type-specific work to the matching one. See the
+[subagents section](CLAUDE.md#-specialist-subagents-live-in-claudeagents) in
+`CLAUDE.md` for the roster and how delegation actually works.
 
 See the [doc-maintenance contract](CLAUDE.md#%EF%B8%8F-documentation-is-part-of-the-work--read-this-section-twice)
 in `CLAUDE.md` for the what-triggers-what mapping. Minimum: append one line

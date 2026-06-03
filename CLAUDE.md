@@ -6,39 +6,44 @@ existing decisions. **Read it fully once, then dip into [`docs/`](docs/) as need
 
 ---
 
-## 🤖 Work through the agent team — start with `Main`
+## 🤖 Specialist subagents live in `.claude/agents/`
 
-This repo ships its own subagent team in [`.claude/agents/`](.claude/agents/). **Use
-it.** Don't do multi-step or multi-domain work as a single monolithic agent — route
-it through the team so each change is made by the right specialist under consistent
-rules.
+This repo ships a set of specialist subagents in [`.claude/agents/`](.claude/agents/).
+A fresh Claude Code session running in this project **auto-discovers them** (no opt-in,
+no trust prompt). **Delegate file-type-specific work to the matching specialist**
+instead of doing every kind of edit yourself — each one carries focused conventions
+for its domain.
 
-**[`Main`](.claude/agents/Main.md) is the orchestration entry point.** For anything
-beyond a trivial one-file edit, begin with Main. Main decomposes the work, dispatches
-specialists (in parallel where the work is independent), is the **only** agent that
-talks to the user directly, and relays specialists' questions back to you. Main does
-**not** edit files itself — every concrete change goes through a builder.
+**How this actually works (don't be misled by the file named `Main`):** in Claude
+Code, *you* — the running session — are the orchestrator and the only thing the user
+talks to. Everything in `.claude/agents/` is a **subagent** you spawn via the Agent
+tool; none of them replaces you as the entry point. So **you** decompose the task,
+decide what to delegate, relay questions to the user, and own the result. Treat
+`Main.md` as a written description of *how to orchestrate* (the loop, parallelism
+discipline, self-contained dispatch prompts) that **you** follow — not as a separate
+agent that runs the show. Note also that on stock Claude Code, delegation is one level
+deep: a subagent generally can't spawn further subagents, so don't rely on
+"Builder calls Researcher calls …" chains — plan the fan-out from the main session.
 
 The roster (full descriptions in each file's frontmatter):
 
-| Agent | Use for | Relevance here |
+| Subagent | Delegate when the task is… | Relevance here |
 |---|---|---|
-| [`Main`](.claude/agents/Main.md) | Orchestration / entry point for any multi-step task | **Start here** |
-| [`Planner`](.claude/agents/Planner.md) | Sequencing a task that spans subsystems before any edits | Use for cross-tab / multi-service features |
-| [`Researcher`](.claude/agents/Researcher.md) | Empirical questions (mlx-lm API, HF behaviour) via web + sandbox tests | Builders may call it directly |
 | [`Builder-Swift`](.claude/agents/Builder-Swift.md) | `.swift`, `project.yml`, entitlements, model/service/concurrency code | **Primary builder** — most of `MLXStudio/` |
 | [`Builder-SwiftUI`](.claude/agents/Builder-SwiftUI.md) | SwiftUI view-layer: `View`/`Scene`/previews/navigation/`@Observable` view models | **Primary builder** — everything in `Features/` |
 | [`Builder-Python`](.claude/agents/Builder-Python.md) | `.py` — the `Resources/helpers/` scripts and `tools/` | The mlx-lm/HF/weight-surgery helpers |
 | [`Builder-Text`](.claude/agents/Builder-Text.md) | `.md`/`.txt` docs — `docs/`, this file, README, INSTALL | **The doc-maintenance contract below runs through here** |
 | [`Builder-TypeScript`](.claude/agents/Builder-TypeScript.md) | `.ts/.tsx/.js` | Not used — this repo has no TypeScript |
+| [`Planner`](.claude/agents/Planner.md) | Sequencing a multi-subsystem task before any edits | Cross-tab / multi-service features |
+| [`Researcher`](.claude/agents/Researcher.md) | An empirical unknown (mlx-lm API, HF behaviour) worth a web search or sandbox test | Resolve before committing to an approach |
+| [`Main`](.claude/agents/Main.md) | — (orchestration *playbook*, not a dispatchable role) | Read it as guidance for how the main session should coordinate |
 
-**The team does not exempt anyone from the rules in this file.** Whichever builder
+**Delegating does not exempt anyone from the rules in this file.** Whichever subagent
 makes a change still owes the **load-bearing decisions** (§"The minimum you must know")
-and the **doc-maintenance contract** (next section). When Main dispatches a builder,
-the relevant rules from this file should travel in the dispatch prompt, since
-subagents don't inherit the conversation. A Swift change that adds a file still
-requires the matching `ARCHITECTURE.md` update — typically a follow-up `Builder-Text`
-task in the same session.
+and the **doc-maintenance contract** (next section). Subagents don't inherit this
+conversation, so **the relevant rules must travel in the dispatch prompt.** A Swift
+change that adds a file still requires the matching `ARCHITECTURE.md` update — usually
+a follow-up `Builder-Text` delegation in the same session.
 
 ---
 
