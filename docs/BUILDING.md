@@ -1,4 +1,4 @@
-# Building and running MLX Studio
+# Building and running LLMPro
 
 > 📝 **Maintainers**: when you discover a build issue, a workaround, a Swift 6
 > gotcha, a signing/notarization quirk, or anything else that took you longer
@@ -22,14 +22,14 @@ brew install xcodegen
 xcodegen generate
 
 # Build the app:
-xcodebuild -project MLXStudio.xcodeproj \
-           -scheme MLXStudio \
+xcodebuild -project LLMPro.xcodeproj \
+           -scheme LLMPro \
            -configuration Debug \
            -destination 'platform=macOS' \
            build
 
 # Run it:
-open ~/Library/Developer/Xcode/DerivedData/MLXStudio-*/Build/Products/Debug/MLXStudio.app
+open ~/Library/Developer/Xcode/DerivedData/LLMPro-*/Build/Products/Debug/LLMPro.app
 ```
 
 That's it. The app's runtime dependencies (Python venv, mlx-lm, etc.) install
@@ -50,7 +50,7 @@ themselves on first launch — you don't need to set anything up manually.
 For the runtime dependencies that the app bootstraps for itself on first launch:
 
 - `uv` (the modern Python package manager). The app prefers a bundled `uv`
-  binary at `MLXStudio/Resources/uv-aarch64-apple-darwin` (not currently
+  binary at `LLMPro/Resources/uv-aarch64-apple-darwin` (not currently
   shipped). Falls back to `~/.local/bin/uv`, `/opt/homebrew/bin/uv`, or
   `/usr/local/bin/uv` on the user's PATH. Install via
   `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`.
@@ -83,7 +83,7 @@ brew install xcodegen
 ### Project regeneration
 
 `project.yml` is the source of truth for the Xcode project. It globs the source
-tree under `MLXStudio/`, declares the entitlements, plist properties, build
+tree under `LLMPro/`, declares the entitlements, plist properties, build
 settings, asset-catalog config, and schemes.
 
 Every time you:
@@ -99,7 +99,7 @@ Every time you:
 xcodegen generate
 ```
 
-This writes `MLXStudio.xcodeproj/`. It is **generated, not committed** — it's in
+This writes `LLMPro.xcodeproj/`. It is **generated, not committed** — it's in
 `.gitignore`, because `project.yml` is the source of truth and every fresh clone
 runs `xcodegen generate` (see [`INSTALL.md`](../INSTALL.md)). **Don't manually
 edit the generated `.xcodeproj` files** — regeneration clobbers your changes; edit
@@ -108,11 +108,11 @@ edit the generated `.xcodeproj` files** — regeneration clobbers your changes; 
 ### Build
 
 For day-to-day development you can either open the project in Xcode
-(`open MLXStudio.xcodeproj`) and hit ⌘R, or build from the CLI:
+(`open LLMPro.xcodeproj`) and hit ⌘R, or build from the CLI:
 
 ```bash
-xcodebuild -project MLXStudio.xcodeproj \
-           -scheme MLXStudio \
+xcodebuild -project LLMPro.xcodeproj \
+           -scheme LLMPro \
            -configuration Debug \
            -destination 'platform=macOS' \
            build
@@ -122,12 +122,12 @@ Add `clean` before `build` if you suspect stale derived data (often needed when
 the icon set changes or you flip entitlements).
 
 The built `.app` ends up in
-`~/Library/Developer/Xcode/DerivedData/MLXStudio-<hash>/Build/Products/Debug/MLXStudio.app`.
+`~/Library/Developer/Xcode/DerivedData/LLMPro-<hash>/Build/Products/Debug/LLMPro.app`.
 
 ### Run
 
 ```bash
-APP=$(find ~/Library/Developer/Xcode/DerivedData -name 'MLXStudio.app' -type d | head -1)
+APP=$(find ~/Library/Developer/Xcode/DerivedData -name 'LLMPro.app' -type d | head -1)
 open "$APP"
 ```
 
@@ -148,7 +148,7 @@ When the user (or you, while developing) runs the app for the first time:
 
 2. The **Python runtime bootstrap** does:
    - Finds `uv` (bundled, then `~/.local/bin`, then PATH)
-   - `uv venv ~/Library/Application Support/MLXStudio/runtime/.venv --python 3.11`
+   - `uv venv ~/Library/Application Support/LLMPro/runtime/.venv --python 3.11`
    - `uv pip install mlx-lm huggingface_hub datasets safetensors sentencepiece protobuf`
      — this downloads several hundred MB; budget 5-10 minutes on first run
    - Copies helper Python scripts from the app bundle into `.venv/../helpers/`
@@ -175,8 +175,8 @@ on every launch, so the new version takes effect. If you want to skip the
 relaunch, run the helper directly:
 
 ```bash
-~/Library/Application\ Support/MLXStudio/runtime/.venv/bin/python \
-  MLXStudio/Resources/helpers/<helper>.py <args>
+~/Library/Application\ Support/LLMPro/runtime/.venv/bin/python \
+  LLMPro/Resources/helpers/<helper>.py <args>
 ```
 
 ### "I edited the app icon"
@@ -200,7 +200,7 @@ changes require a fresh code sign, which `clean build` triggers.
 ### "I want to wipe the user data and start fresh"
 
 ```bash
-rm -rf ~/Library/Application\ Support/MLXStudio/
+rm -rf ~/Library/Application\ Support/LLMPro/
 ```
 
 This nukes the venv, models, datasets, adapters, exports, and SwiftData store.
@@ -235,7 +235,7 @@ Add `nonisolated(unsafe)`:
 nonisolated(unsafe) private static let myRegex = /pattern/
 ```
 
-See [`Core/LogStreamParser.swift`](../MLXStudio/Core/LogStreamParser.swift) for examples.
+See [`Core/LogStreamParser.swift`](../LLMPro/Core/LogStreamParser.swift) for examples.
 
 ### Swift 6 concurrency error: "Sending 'job' risks data races"
 
@@ -267,7 +267,7 @@ Full path: `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 Open the latest job folder:
 
 ```bash
-ls -t ~/Library/Application\ Support/MLXStudio/adapters/ | head -1
+ls -t ~/Library/Application\ Support/LLMPro/adapters/ | head -1
 ```
 
 Read `config.yaml`. Common culprit: `model:` is a bare folder name (no `/`).
@@ -360,14 +360,14 @@ Run helpers from the CLI before integrating them into a Swift service. The venv
 Python is at:
 
 ```
-~/Library/Application Support/MLXStudio/runtime/.venv/bin/python
+~/Library/Application Support/LLMPro/runtime/.venv/bin/python
 ```
 
 Test JSON-event output by running with `tee` to see what the Swift side will receive:
 
 ```bash
-~/Library/Application\ Support/MLXStudio/runtime/.venv/bin/python \
-    MLXStudio/Resources/helpers/your_helper.py args... \
+~/Library/Application\ Support/LLMPro/runtime/.venv/bin/python \
+    LLMPro/Resources/helpers/your_helper.py args... \
     2>&1 | tee /tmp/helper.log
 ```
 

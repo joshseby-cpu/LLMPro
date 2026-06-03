@@ -1,6 +1,6 @@
-# Installing MLX Studio on your Mac
+# Installing LLMPro on your Mac
 
-This guide takes you from a fresh Mac to a running copy of **MLX Studio** — a
+This guide takes you from a fresh Mac to a running copy of **LLMPro** — a
 native macOS app for fine-tuning and running local LLMs on Apple Silicon.
 
 There is no pre-built download yet, so you build the app once on your own Mac.
@@ -86,7 +86,7 @@ brew install xcodegen uv
 ```
 
 - **`xcodegen`** generates the Xcode project from the repo's `project.yml`.
-- **`uv`** is a fast Python installer. **MLX Studio needs it** — the app uses it
+- **`uv`** is a fast Python installer. **LLMPro needs it** — the app uses it
   on first launch to set up its Python environment. Don't skip it.
 
 Confirm both:
@@ -134,7 +134,7 @@ From inside the project folder:
 
 ```bash
 xcodegen generate
-xcodebuild -project MLXStudio.xcodeproj -scheme MLXStudio \
+xcodebuild -project LLMPro.xcodeproj -scheme LLMPro \
            -configuration Debug -destination 'platform=macOS' build
 ```
 
@@ -146,10 +146,10 @@ red `** BUILD FAILED **` is a problem — see [Troubleshooting](#troubleshooting
 
 ```bash
 xcodegen generate
-open MLXStudio.xcodeproj
+open LLMPro.xcodeproj
 ```
 
-Xcode opens. At the very top, make sure the scheme selector says **MLXStudio**
+Xcode opens. At the very top, make sure the scheme selector says **LLMPro**
 and the run target is **My Mac**. Then press the **▶︎ Run** button (or **⌘ R**).
 Xcode builds and launches the app for you — and any errors show up inline. With
 this option you can skip step 5.
@@ -161,15 +161,15 @@ this option you can skip step 5.
 If you built with Option A (Terminal), launch the app you just built:
 
 ```bash
-open ~/Library/Developer/Xcode/DerivedData/MLXStudio-*/Build/Products/Debug/MLXStudio.app
+open ~/Library/Developer/Xcode/DerivedData/LLMPro-*/Build/Products/Debug/LLMPro.app
 ```
 
 (If that doesn't find it, run
-`find ~/Library/Developer/Xcode/DerivedData -name 'MLXStudio.app' -type d` and
+`find ~/Library/Developer/Xcode/DerivedData -name 'LLMPro.app' -type d` and
 `open` the path it prints.)
 
 Because **you** built it on **your** Mac, macOS trusts it — Gatekeeper won't
-block it. (If someone instead hands you a pre-built `MLXStudio.app`, see
+block it. (If someone instead hands you a pre-built `LLMPro.app`, see
 [the Gatekeeper note](#someone-gave-me-a-pre-built-app-and-it-wont-open).)
 
 ---
@@ -191,10 +191,10 @@ this step downloads software and a model.
 5. **Done** — you land on the Home screen.
 
 Everything the app creates lives in one folder:
-`~/Library/Application Support/MLXStudio/` (the Python environment, models,
+`~/Library/Application Support/LLMPro/` (the Python environment, models,
 datasets, and your fine-tuned results). Nothing is installed system-wide.
 
-That's it — you're running MLX Studio. For what to do next (download a model →
+That's it — you're running LLMPro. For what to do next (download a model →
 pick lessons → Teach → Try it out), see the **Quick start** section of
 [`README.md`](README.md).
 
@@ -208,8 +208,8 @@ You already have Xcode 26+, Homebrew, and an Apple-Silicon Mac:
 brew install xcodegen uv
 cd <the project folder>
 xcodegen generate
-xcodebuild -project MLXStudio.xcodeproj -scheme MLXStudio -configuration Debug -destination 'platform=macOS' build
-open ~/Library/Developer/Xcode/DerivedData/MLXStudio-*/Build/Products/Debug/MLXStudio.app
+xcodebuild -project LLMPro.xcodeproj -scheme LLMPro -configuration Debug -destination 'platform=macOS' build
+open ~/Library/Developer/Xcode/DerivedData/LLMPro-*/Build/Products/Debug/LLMPro.app
 ```
 
 ---
@@ -265,7 +265,7 @@ A `.app` built on a *different* Mac is ad-hoc signed, so macOS quarantines it.
 flag:
 
 ```bash
-xattr -dr com.apple.quarantine /path/to/MLXStudio.app
+xattr -dr com.apple.quarantine /path/to/LLMPro.app
 ```
 
 This does **not** apply if you built the app yourself with the steps above.
@@ -275,7 +275,7 @@ This deletes the app's Python environment, downloaded models, datasets, and your
 fine-tuned results (it does **not** touch the source code):
 
 ```bash
-rm -rf ~/Library/Application\ Support/MLXStudio
+rm -rf ~/Library/Application\ Support/LLMPro
 ```
 
 Relaunch the app and the first-launch setup runs again.

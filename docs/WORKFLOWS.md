@@ -14,7 +14,7 @@ and to know which code paths an agent must not break when changing one feature.
 ## 0. App launch + first run
 
 ```
-MLXStudioApp.body
+LLMProApp.body
   → WindowGroup contains RootView()
     → @AppStorage("firstRunComplete")
       false → FirstRunView (5-step TabView)
@@ -41,10 +41,10 @@ On *every* launch (independent of first run):
     PID dead + checkpoint → mark .orphaned, offer Resume
 ```
 
-**Files involved**: [`MLXStudioApp.swift`](../MLXStudio/App/MLXStudioApp.swift),
-[`FirstRunView.swift`](../MLXStudio/Features/Settings/FirstRunView.swift),
-[`PythonRuntime.swift`](../MLXStudio/Services/PythonRuntime.swift),
-[`JobRegistry.swift`](../MLXStudio/Services/JobRegistry.swift).
+**Files involved**: [`LLMProApp.swift`](../LLMPro/App/LLMProApp.swift),
+[`FirstRunView.swift`](../LLMPro/Features/Settings/FirstRunView.swift),
+[`PythonRuntime.swift`](../LLMPro/Services/PythonRuntime.swift),
+[`JobRegistry.swift`](../LLMPro/Services/JobRegistry.swift).
 
 ---
 
@@ -55,8 +55,8 @@ The individual flows below (§1–§13) are the **stages of one closed loop** �
 → test → use → (retrain)*. This trace stitches them together via the **cross-tab
 CTAs** that hand the artifact forward so the user never copies a disk path by hand.
 The conceptual model is in [`CONCEPT.md`](CONCEPT.md); each transition's mechanism is
-a `Notification.Name` carrying a [`ModelHandoff`](../MLXStudio/Core/LoopHandoff.swift)
-`{model, adapterPath?}` (received in [`RootView`](../MLXStudio/App/RootView.swift) +
+a `Notification.Name` carrying a [`ModelHandoff`](../LLMPro/Core/LoopHandoff.swift)
+`{model, adapterPath?}` (received in [`RootView`](../LLMPro/App/RootView.swift) +
 the destination view).
 
 ```
@@ -104,24 +104,24 @@ EXIT — Save & Use (§7): ExportWizardView's ExportSource wraps a TrainingJob O
 ```
 
 **The new CTAs (all user-driven — completion never auto-navigates):**
-- **Completion card** — [`TrainingMonitorView`](../MLXStudio/Features/Monitor/TrainingMonitorView.swift)
+- **Completion card** — [`TrainingMonitorView`](../LLMPro/Features/Monitor/TrainingMonitorView.swift)
   when `job.status == .completed`.
-- **Arena decision bar** — [`ArenaView`](../MLXStudio/Features/Chat/ArenaView.swift)
+- **Arena decision bar** — [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift)
   once an adapter is loaded.
 - **Practice "Use this fine-tune" menu** — per completed run in
-  [`SelfImproveView`](../MLXStudio/Features/SelfImprove/SelfImproveView.swift).
+  [`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift).
 - **Teach "Continue a previous fine-tune?"** picker —
-  [`TrainingConfigView`](../MLXStudio/Features/Training/TrainingConfigView.swift).
+  [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift).
 
-**Files involved**: [`LoopHandoff.swift`](../MLXStudio/Core/LoopHandoff.swift),
-[`RootView.swift`](../MLXStudio/App/RootView.swift),
-[`TrainingMonitorView.swift`](../MLXStudio/Features/Monitor/TrainingMonitorView.swift),
-[`ArenaView.swift`](../MLXStudio/Features/Chat/ArenaView.swift),
-[`CodeView.swift`](../MLXStudio/Features/Code/CodeView.swift),
-[`TrainingConfigView.swift`](../MLXStudio/Features/Training/TrainingConfigView.swift),
-[`SelfImproveView.swift`](../MLXStudio/Features/SelfImprove/SelfImproveView.swift),
-[`ExportWizardView.swift`](../MLXStudio/Features/Export/ExportWizardView.swift),
-[`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift).
+**Files involved**: [`LoopHandoff.swift`](../LLMPro/Core/LoopHandoff.swift),
+[`RootView.swift`](../LLMPro/App/RootView.swift),
+[`TrainingMonitorView.swift`](../LLMPro/Features/Monitor/TrainingMonitorView.swift),
+[`ArenaView.swift`](../LLMPro/Features/Chat/ArenaView.swift),
+[`CodeView.swift`](../LLMPro/Features/Code/CodeView.swift),
+[`TrainingConfigView.swift`](../LLMPro/Features/Training/TrainingConfigView.swift),
+[`SelfImproveView.swift`](../LLMPro/Features/SelfImprove/SelfImproveView.swift),
+[`ExportWizardView.swift`](../LLMPro/Features/Export/ExportWizardView.swift),
+[`TrainingService.swift`](../LLMPro/Services/TrainingService.swift).
 
 ---
 
@@ -149,7 +149,7 @@ user clicks Download (the ⬇ icon at bottom of detail pane)
     5. ModelRegistry.shared.scan() is triggered → local list refreshes
 
 Disk layout after download:
-  ~/Library/Application Support/MLXStudio/hf/models--owner--repo/
+  ~/Library/Application Support/LLMPro/hf/models--owner--repo/
     snapshots/<rev>/        ← symlinks
       config.json
       tokenizer.json
@@ -164,12 +164,12 @@ SECOND copy under hf/hub/models--owner--repo/ (standard hub layout).
 ModelRegistry.scan() walks both.
 ```
 
-**Files involved**: [`ModelsBrowserView.swift`](../MLXStudio/Features/Models/ModelsBrowserView.swift),
-[`ModelDetailView.swift`](../MLXStudio/Features/Models/ModelDetailView.swift),
-[`HuggingFaceClient.swift`](../MLXStudio/Services/HuggingFaceClient.swift),
-[`DownloadService.swift`](../MLXStudio/Services/DownloadService.swift),
-[`ModelRegistry.swift`](../MLXStudio/Services/ModelRegistry.swift),
-[`hf_download.py`](../MLXStudio/Resources/helpers/hf_download.py).
+**Files involved**: [`ModelsBrowserView.swift`](../LLMPro/Features/Models/ModelsBrowserView.swift),
+[`ModelDetailView.swift`](../LLMPro/Features/Models/ModelDetailView.swift),
+[`HuggingFaceClient.swift`](../LLMPro/Services/HuggingFaceClient.swift),
+[`DownloadService.swift`](../LLMPro/Services/DownloadService.swift),
+[`ModelRegistry.swift`](../LLMPro/Services/ModelRegistry.swift),
+[`hf_download.py`](../LLMPro/Resources/helpers/hf_download.py).
 
 ---
 
@@ -195,10 +195,10 @@ DatasetsView.onChange(of: prep.history.count) { registerCompletedPreps() }
     creates DatasetRecord(id: entry.resultDatasetID!, ...) → modelContext.insert
 ```
 
-**Files involved**: [`DatasetsView.swift`](../MLXStudio/Features/Datasets/DatasetsView.swift),
-[`DatasetPrepService.swift`](../MLXStudio/Services/DatasetPrepService.swift),
-[`CodingDatasetCatalog.swift`](../MLXStudio/Services/CodingDatasetCatalog.swift),
-[`prepare_coding_dataset.py`](../MLXStudio/Resources/helpers/prepare_coding_dataset.py).
+**Files involved**: [`DatasetsView.swift`](../LLMPro/Features/Datasets/DatasetsView.swift),
+[`DatasetPrepService.swift`](../LLMPro/Services/DatasetPrepService.swift),
+[`CodingDatasetCatalog.swift`](../LLMPro/Services/CodingDatasetCatalog.swift),
+[`prepare_coding_dataset.py`](../LLMPro/Resources/helpers/prepare_coding_dataset.py).
 
 ---
 
@@ -235,10 +235,10 @@ user clicks "Download & Prepare"
   → dismiss() the sheet; DatasetsView's onChange registers the new dataset
 ```
 
-**Files involved**: [`HuggingFaceDatasetSearchView.swift`](../MLXStudio/Features/Datasets/HuggingFaceDatasetSearchView.swift),
-[`HuggingFaceClient.swift`](../MLXStudio/Services/HuggingFaceClient.swift),
-[`DatasetPrepService.swift`](../MLXStudio/Services/DatasetPrepService.swift),
-[`download_hf_dataset.py`](../MLXStudio/Resources/helpers/download_hf_dataset.py).
+**Files involved**: [`HuggingFaceDatasetSearchView.swift`](../LLMPro/Features/Datasets/HuggingFaceDatasetSearchView.swift),
+[`HuggingFaceClient.swift`](../LLMPro/Services/HuggingFaceClient.swift),
+[`DatasetPrepService.swift`](../LLMPro/Services/DatasetPrepService.swift),
+[`download_hf_dataset.py`](../LLMPro/Resources/helpers/download_hf_dataset.py).
 
 ---
 
@@ -282,10 +282,10 @@ Delete dataset: confirmDeleteDataset alert → deleteDataset()
   → FileManager.removeItem(at: dir) → modelContext.delete(ds) → save() → dismiss()
 ```
 
-**Files involved**: [`DatasetsView.swift`](../MLXStudio/Features/Datasets/DatasetsView.swift),
-[`DatasetDetailView.swift`](../MLXStudio/Features/Datasets/DatasetDetailView.swift),
-[`DatasetRowEditorView.swift`](../MLXStudio/Features/Datasets/DatasetRowEditorView.swift),
-[`DatasetEditorService.swift`](../MLXStudio/Services/DatasetEditorService.swift).
+**Files involved**: [`DatasetsView.swift`](../LLMPro/Features/Datasets/DatasetsView.swift),
+[`DatasetDetailView.swift`](../LLMPro/Features/Datasets/DatasetDetailView.swift),
+[`DatasetRowEditorView.swift`](../LLMPro/Features/Datasets/DatasetRowEditorView.swift),
+[`DatasetEditorService.swift`](../LLMPro/Services/DatasetEditorService.swift).
 
 ---
 
@@ -386,16 +386,16 @@ mlx-lm `--resume-adapter-file` so training continues from those weights. Reusing
 exact config keeps the LoRA architecture resume-compatible.
 
 **Files involved**:
-[`TrainingConfigView.swift`](../MLXStudio/Features/Training/TrainingConfigView.swift),
-[`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift),
-[`AutoTuner.swift`](../MLXStudio/Services/AutoTuner.swift),
-[`JobRegistry.swift`](../MLXStudio/Services/JobRegistry.swift),
-[`LogStreamParser.swift`](../MLXStudio/Core/LogStreamParser.swift),
-[`TrainingMonitorView.swift`](../MLXStudio/Features/Monitor/TrainingMonitorView.swift),
-[`TrainingNarrator.swift`](../MLXStudio/Services/TrainingNarrator.swift),
-[`SystemMetrics.swift`](../MLXStudio/Services/SystemMetrics.swift),
-[`ProcessRunner.swift`](../MLXStudio/Core/ProcessRunner.swift),
-[`TrainingJob.swift`](../MLXStudio/Models/TrainingJob.swift).
+[`TrainingConfigView.swift`](../LLMPro/Features/Training/TrainingConfigView.swift),
+[`TrainingService.swift`](../LLMPro/Services/TrainingService.swift),
+[`AutoTuner.swift`](../LLMPro/Services/AutoTuner.swift),
+[`JobRegistry.swift`](../LLMPro/Services/JobRegistry.swift),
+[`LogStreamParser.swift`](../LLMPro/Core/LogStreamParser.swift),
+[`TrainingMonitorView.swift`](../LLMPro/Features/Monitor/TrainingMonitorView.swift),
+[`TrainingNarrator.swift`](../LLMPro/Services/TrainingNarrator.swift),
+[`SystemMetrics.swift`](../LLMPro/Services/SystemMetrics.swift),
+[`ProcessRunner.swift`](../LLMPro/Core/ProcessRunner.swift),
+[`TrainingJob.swift`](../LLMPro/Models/TrainingJob.swift).
 
 ---
 
@@ -440,10 +440,10 @@ Loop decision OUT (the DECISION BAR, shown once an adapter is loaded — the
   "Save & Use"  → .switchSidebar(.export)                  # → Save & Use (§7)
 ```
 
-**Files involved**: [`ArenaView.swift`](../MLXStudio/Features/Chat/ArenaView.swift),
-[`ChatView.swift`](../MLXStudio/Features/Chat/ChatView.swift),
-[`ChatModels.swift`](../MLXStudio/Features/Chat/ChatModels.swift),
-[`InferenceService.swift`](../MLXStudio/Services/InferenceService.swift).
+**Files involved**: [`ArenaView.swift`](../LLMPro/Features/Chat/ArenaView.swift),
+[`ChatView.swift`](../LLMPro/Features/Chat/ChatView.swift),
+[`ChatModels.swift`](../LLMPro/Features/Chat/ChatModels.swift),
+[`InferenceService.swift`](../LLMPro/Services/InferenceService.swift).
 
 ---
 
@@ -484,8 +484,8 @@ user clicks "Run export" → run(for: job)
   a monospace panel.
 ```
 
-**Files involved**: [`ExportWizardView.swift`](../MLXStudio/Features/Export/ExportWizardView.swift),
-[`FuseService.swift`](../MLXStudio/Services/FuseService.swift).
+**Files involved**: [`ExportWizardView.swift`](../LLMPro/Features/Export/ExportWizardView.swift),
+[`FuseService.swift`](../LLMPro/Services/FuseService.swift).
 
 ---
 
@@ -539,11 +539,11 @@ ModelModifyView:
     ModelRegistry.shared.scan() → new model appears in local list
 ```
 
-**Files involved**: [`ModelsBrowserView.swift`](../MLXStudio/Features/Models/ModelsBrowserView.swift),
-[`ModelModifyView.swift`](../MLXStudio/Features/Models/ModelModifyView.swift),
-[`ModelModifyService.swift`](../MLXStudio/Services/ModelModifyService.swift),
-[`strip_vision.py`](../MLXStudio/Resources/helpers/strip_vision.py),
-[`abliterate.py`](../MLXStudio/Resources/helpers/abliterate.py).
+**Files involved**: [`ModelsBrowserView.swift`](../LLMPro/Features/Models/ModelsBrowserView.swift),
+[`ModelModifyView.swift`](../LLMPro/Features/Models/ModelModifyView.swift),
+[`ModelModifyService.swift`](../LLMPro/Services/ModelModifyService.swift),
+[`strip_vision.py`](../LLMPro/Resources/helpers/strip_vision.py),
+[`abliterate.py`](../LLMPro/Resources/helpers/abliterate.py).
 
 ---
 
@@ -567,16 +567,16 @@ user confirms → confirmDelete(model:)
   → ModelRegistry rescan → list updates
 ```
 
-**Files involved**: [`ModelsBrowserView.swift`](../MLXStudio/Features/Models/ModelsBrowserView.swift),
-[`ModelRegistry.swift`](../MLXStudio/Services/ModelRegistry.swift),
-[`JobRegistry.swift`](../MLXStudio/Services/JobRegistry.swift) (for `isModelInUse`).
+**Files involved**: [`ModelsBrowserView.swift`](../LLMPro/Features/Models/ModelsBrowserView.swift),
+[`ModelRegistry.swift`](../LLMPro/Services/ModelRegistry.swift),
+[`JobRegistry.swift`](../LLMPro/Services/JobRegistry.swift) (for `isModelInUse`).
 
 ---
 
 ## 10. Crash recovery
 
 ```
-On launch (MLXStudioApp.task):
+On launch (LLMProApp.task):
   JobRegistry.shared.recoverOrphans()
     scan PathResolver.adaptersDir/*/job.json
     for each sidecar:
@@ -591,10 +591,10 @@ On launch (MLXStudioApp.task):
     spawns `python -m mlx_lm lora -c config.yaml --resume-adapter-file <latest.safetensors>`
 ```
 
-**Files involved**: [`MLXStudioApp.swift`](../MLXStudio/App/MLXStudioApp.swift),
-[`JobRegistry.swift`](../MLXStudio/Services/JobRegistry.swift),
-[`TrainingJob.swift`](../MLXStudio/Models/TrainingJob.swift),
-[`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift).
+**Files involved**: [`LLMProApp.swift`](../LLMPro/App/LLMProApp.swift),
+[`JobRegistry.swift`](../LLMPro/Services/JobRegistry.swift),
+[`TrainingJob.swift`](../LLMPro/Models/TrainingJob.swift),
+[`TrainingService.swift`](../LLMPro/Services/TrainingService.swift).
 
 ---
 
@@ -676,25 +676,25 @@ UI side effects on each event:
 - `completed`: 🎓 "Done — see Try it out to chat with the improved model."
 
 The final adapter (the highest-numbered round) lives at
-`~/Library/Application Support/MLXStudio/adapters/<round-job-uuid>/adapters.safetensors`
+`~/Library/Application Support/LLMPro/adapters/<round-job-uuid>/adapters.safetensors`
 and can be used directly from the Arena (Try it out) and Save & Use tabs. Each
 completed run in the History list also carries a **"Use this fine-tune" menu** —
 Try it out / Use in Code (both post a `ModelHandoff` of the run's model + final
 adapter, the same hand-off a Teach job uses) / Reveal in Finder / Copy adapter path
 — so a Practice result re-enters the outer loop (§0b) rather than being siloed. And
-because [`ExportWizardView`](../MLXStudio/Features/Export/ExportWizardView.swift)'s
+because [`ExportWizardView`](../LLMPro/Features/Export/ExportWizardView.swift)'s
 `ExportSource` wraps a `SelfImproveRun` as well as a `TrainingJob`, Practice adapters
 are exportable through Save & Use (§7) too.
 
 **Files involved**:
-[`SelfImproveView.swift`](../MLXStudio/Features/SelfImprove/SelfImproveView.swift),
-[`SelfImproveService.swift`](../MLXStudio/Services/SelfImproveService.swift),
-[`SelfImproveRun.swift`](../MLXStudio/Models/SelfImproveRun.swift),
-[`humaneval_pull.py`](../MLXStudio/Resources/helpers/humaneval_pull.py),
-[`self_improve_round.py`](../MLXStudio/Resources/helpers/self_improve_round.py),
-[`eval_pass_rate.py`](../MLXStudio/Resources/helpers/eval_pass_rate.py),
-[`AutoTuner.swift`](../MLXStudio/Services/AutoTuner.swift),
-[`LogStreamParser.swift`](../MLXStudio/Core/LogStreamParser.swift).
+[`SelfImproveView.swift`](../LLMPro/Features/SelfImprove/SelfImproveView.swift),
+[`SelfImproveService.swift`](../LLMPro/Services/SelfImproveService.swift),
+[`SelfImproveRun.swift`](../LLMPro/Models/SelfImproveRun.swift),
+[`humaneval_pull.py`](../LLMPro/Resources/helpers/humaneval_pull.py),
+[`self_improve_round.py`](../LLMPro/Resources/helpers/self_improve_round.py),
+[`eval_pass_rate.py`](../LLMPro/Resources/helpers/eval_pass_rate.py),
+[`AutoTuner.swift`](../LLMPro/Services/AutoTuner.swift),
+[`LogStreamParser.swift`](../LLMPro/Core/LogStreamParser.swift).
 
 ---
 
@@ -717,8 +717,8 @@ NSApplication "Quit" → AppDelegate.applicationShouldTerminate(_:)
 window does NOT trigger the above — training continues in the background and the
 app stays in the Dock.
 
-**Files involved**: [`AppDelegate.swift`](../MLXStudio/App/AppDelegate.swift),
-[`JobRegistry.swift`](../MLXStudio/Services/JobRegistry.swift).
+**Files involved**: [`AppDelegate.swift`](../LLMPro/App/AppDelegate.swift),
+[`JobRegistry.swift`](../LLMPro/Services/JobRegistry.swift).
 
 ---
 
@@ -729,19 +729,19 @@ The Code tab runs a **fixed five-role agent team** over the user's local
 which delegates to the Planner / Researcher / Coder / UI agents. The Researcher does
 **real web research**. **One shared `mlx_lm` model serves all five roles** (one
 server daemon). The builders (Coder / UI) read/edit files and run commands inside a
-user-chosen project folder. (See [`AgentRoles.swift`](../MLXStudio/Services/AgentRoles.swift)
+user-chosen project folder. (See [`AgentRoles.swift`](../LLMPro/Services/AgentRoles.swift)
 for the role definitions and [`CONTRACTS.md#the-orchestrator-team--delegation-tools`](CONTRACTS.md#the-orchestrator-team--delegation-tools)
 for the tool/delegation graph.)
 
 The tab is also a **3-pane IDE** (toggleable from the header sidebar button):
-[`FileExplorerView`](../MLXStudio/Features/Code/FileExplorerView.swift) (left) lists
+[`FileExplorerView`](../LLMPro/Features/Code/FileExplorerView.swift) (left) lists
 the project tree; selecting a file opens it in
-[`CodeEditorView`](../MLXStudio/Features/Code/CodeEditorView.swift) (center) as a
+[`CodeEditorView`](../LLMPro/Features/Code/CodeEditorView.swift) (center) as a
 syntax-highlighted, editable `NSTextView` with Save (⌘S). The explorer
 auto-refreshes on every `agent.transcript.count` change, and the chat transcript
 (right) renders **role-labeled, depth-indented** bubbles (emoji + role name in the
 role's tint) plus tool diffs / `read_file` output syntax-highlighted via
-[`SyntaxHighlighter`](../MLXStudio/Core/SyntaxHighlighter.swift).
+[`SyntaxHighlighter`](../LLMPro/Core/SyntaxHighlighter.swift).
 
 ```
 CodeView:
@@ -809,18 +809,18 @@ approval/question. The server keeps running until the user stops/restarts.
 ```
 
 **Files involved**:
-[`CodeView.swift`](../MLXStudio/Features/Code/CodeView.swift),
-[`AgentRoles.swift`](../MLXStudio/Services/AgentRoles.swift),
-[`WebSearch.swift`](../MLXStudio/Services/WebSearch.swift),
-[`CodingAgentService.swift`](../MLXStudio/Services/CodingAgentService.swift),
-[`AgentTools.swift`](../MLXStudio/Services/AgentTools.swift),
-[`MLXServerService.swift`](../MLXStudio/Services/MLXServerService.swift),
-[`OpenAIChatClient.swift`](../MLXStudio/Services/OpenAIChatClient.swift),
-[`FileExplorerView.swift`](../MLXStudio/Features/Code/FileExplorerView.swift),
-[`CodeEditorView.swift`](../MLXStudio/Features/Code/CodeEditorView.swift),
-[`SyntaxHighlighter.swift`](../MLXStudio/Core/SyntaxHighlighter.swift),
-[`ModelRegistry.swift`](../MLXStudio/Services/ModelRegistry.swift),
-[`RootView.swift`](../MLXStudio/App/RootView.swift).
+[`CodeView.swift`](../LLMPro/Features/Code/CodeView.swift),
+[`AgentRoles.swift`](../LLMPro/Services/AgentRoles.swift),
+[`WebSearch.swift`](../LLMPro/Services/WebSearch.swift),
+[`CodingAgentService.swift`](../LLMPro/Services/CodingAgentService.swift),
+[`AgentTools.swift`](../LLMPro/Services/AgentTools.swift),
+[`MLXServerService.swift`](../LLMPro/Services/MLXServerService.swift),
+[`OpenAIChatClient.swift`](../LLMPro/Services/OpenAIChatClient.swift),
+[`FileExplorerView.swift`](../LLMPro/Features/Code/FileExplorerView.swift),
+[`CodeEditorView.swift`](../LLMPro/Features/Code/CodeEditorView.swift),
+[`SyntaxHighlighter.swift`](../LLMPro/Core/SyntaxHighlighter.swift),
+[`ModelRegistry.swift`](../LLMPro/Services/ModelRegistry.swift),
+[`RootView.swift`](../LLMPro/App/RootView.swift).
 
 ---
 
@@ -903,11 +903,11 @@ ModelInspectorView:
 ```
 
 **Files involved**:
-[`ModelInspectorView.swift`](../MLXStudio/Features/Inspect/ModelInspectorView.swift),
-[`WeightsInspectorView.swift`](../MLXStudio/Features/Inspect/WeightsInspectorView.swift),
-[`AttentionInspectorView.swift`](../MLXStudio/Features/Inspect/AttentionInspectorView.swift),
-[`CoTInspectorView.swift`](../MLXStudio/Features/Inspect/CoTInspectorView.swift),
-[`SafetensorsHeader.swift`](../MLXStudio/Core/SafetensorsHeader.swift),
-[`WeightsInspectService.swift`](../MLXStudio/Services/WeightsInspectService.swift),
-[`AttentionInspectService.swift`](../MLXStudio/Services/AttentionInspectService.swift),
-[`inspect_attention.py`](../MLXStudio/Resources/helpers/inspect_attention.py).
+[`ModelInspectorView.swift`](../LLMPro/Features/Inspect/ModelInspectorView.swift),
+[`WeightsInspectorView.swift`](../LLMPro/Features/Inspect/WeightsInspectorView.swift),
+[`AttentionInspectorView.swift`](../LLMPro/Features/Inspect/AttentionInspectorView.swift),
+[`CoTInspectorView.swift`](../LLMPro/Features/Inspect/CoTInspectorView.swift),
+[`SafetensorsHeader.swift`](../LLMPro/Core/SafetensorsHeader.swift),
+[`WeightsInspectService.swift`](../LLMPro/Services/WeightsInspectService.swift),
+[`AttentionInspectService.swift`](../LLMPro/Services/AttentionInspectService.swift),
+[`inspect_attention.py`](../LLMPro/Resources/helpers/inspect_attention.py).

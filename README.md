@@ -1,4 +1,4 @@
-# MLX Studio
+# LLMPro
 
 A native macOS app for fine-tuning local LLMs on Apple Silicon. The Mac equivalent
 of [Unsloth Studio](https://github.com/unslothai/unsloth), built on Apple's
@@ -6,7 +6,7 @@ of [Unsloth Studio](https://github.com/unslothai/unsloth), built on Apple's
 
 **Goal**: take a general-purpose LLM (Llama 3.2, Qwen 2.5 Instruct, Mistral, Gemma)
 and teach it to code via LoRA fine-tuning, then run it locally via Ollama or LM
-Studio. Most popular open models are general assistants out of the box — MLX Studio
+Studio. Most popular open models are general assistants out of the box — LLMPro
 specializes them into coding assistants you actually use.
 
 ---
@@ -47,11 +47,11 @@ brew install xcodegen
 
 # Generate + build
 xcodegen generate
-xcodebuild -project MLXStudio.xcodeproj -scheme MLXStudio \
+xcodebuild -project LLMPro.xcodeproj -scheme LLMPro \
            -configuration Debug -destination 'platform=macOS' build
 
 # Run
-open ~/Library/Developer/Xcode/DerivedData/MLXStudio-*/Build/Products/Debug/MLXStudio.app
+open ~/Library/Developer/Xcode/DerivedData/LLMPro-*/Build/Products/Debug/LLMPro.app
 ```
 
 On first launch the app walks you through a 5-step wizard:
@@ -68,7 +68,7 @@ After that, the typical workflow:
 2. **Lessons** → pick a curated catalog dataset (CodeAlpaca for fast, Magicoder
    for harder) OR search HuggingFace for any other dataset
 3. **Teach** → pick model + dataset + duration (Quick / Standard / Thorough);
-   MLX Studio auto-picks every hyperparameter
+   LLMPro auto-picks every hyperparameter
 4. **Progress** → watch the training with a friendly 5-star learning rating and
    ETA; technical charts are tucked behind a disclosure
 5. **Try it out** → chat with your fine-tuned model in the Arena view
@@ -122,7 +122,7 @@ For the full annotated layout see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 ├── docs/                              ← all the deep-dive documentation
 ├── project.yml                        ← XcodeGen project spec
 ├── tools/make_icon.py                 ← PIL-based icon generator
-├── MLXStudio/
+├── LLMPro/
 │   ├── App/                           ← SwiftUI lifecycle
 │   ├── Core/                          ← ProcessRunner, PathResolver, LogStreamParser
 │   ├── Models/                        ← SwiftData @Model types
@@ -141,7 +141,7 @@ For the full annotated layout see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 │       ├── helpers/                   ← Python helper scripts (JSON-event protocol)
 │       ├── recipes/                   ← Coding fine-tune recipe presets
 │       └── Assets.xcassets/AppIcon.appiconset/
-└── Tests/MLXStudioTests/              ← empty for now — see STATE.md
+└── Tests/LLMProTests/              ← empty for now — see STATE.md
 ```
 
 ---

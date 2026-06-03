@@ -29,7 +29,7 @@ The roster (full descriptions in each file's frontmatter):
 
 | Subagent | Delegate when the task is… | Relevance here |
 |---|---|---|
-| [`Builder-Swift`](.claude/agents/Builder-Swift.md) | `.swift`, `project.yml`, entitlements, model/service/concurrency code | **Primary builder** — most of `MLXStudio/` |
+| [`Builder-Swift`](.claude/agents/Builder-Swift.md) | `.swift`, `project.yml`, entitlements, model/service/concurrency code | **Primary builder** — most of `LLMPro/` |
 | [`Builder-SwiftUI`](.claude/agents/Builder-SwiftUI.md) | SwiftUI view-layer: `View`/`Scene`/previews/navigation/`@Observable` view models | **Primary builder** — everything in `Features/` |
 | [`Builder-Python`](.claude/agents/Builder-Python.md) | `.py` — the `Resources/helpers/` scripts and `tools/` | The mlx-lm/HF/weight-surgery helpers |
 | [`Builder-Text`](.claude/agents/Builder-Text.md) | `.md`/`.txt` docs — `docs/`, this file, README, INSTALL | **The doc-maintenance contract below runs through here** |
@@ -60,7 +60,7 @@ code, walk this table and update what applies:
 
 | If you did this… | You must update this doc |
 |---|---|
-| Added / renamed / deleted a file in `MLXStudio/` | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the module tables |
+| Added / renamed / deleted a file in `LLMPro/` | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the module tables |
 | Added a new user-facing flow (button, sheet, sidebar tab) | [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) — add or amend the trace |
 | Changed an mlx-lm CLI flag, HF API call, helper JSON event, file-path convention, SwiftData field, or Notification.Name | [`docs/CONTRACTS.md`](docs/CONTRACTS.md) |
 | Made a design decision worth remembering — or reversed one | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) |
@@ -86,7 +86,7 @@ breaking a test would have if we had tests.
 
 ## What this project is
 
-**MLX Studio** is a native macOS SwiftUI app that puts a polished, no-code UI on top of
+**LLMPro** is a native macOS SwiftUI app that puts a polished, no-code UI on top of
 Apple's [`mlx-lm`](https://github.com/ml-explore/mlx-lm) — the goal is to let a user
 who knows nothing about LLM training:
 
@@ -120,9 +120,9 @@ fine-tuning its **LoRA adapter** — travels through:
                           └──── ⑤ if it's not good enough ──────┘  (retrain back-edge)
 ```
 
-The artifact is carried two ways: a [`TrainingJob`](MLXStudio/Models/TrainingJob.swift)
+The artifact is carried two ways: a [`TrainingJob`](LLMPro/Models/TrainingJob.swift)
 SwiftData record (`adapterURL = PathResolver.adapterDir(for: jobID)`), and a
-[`ModelHandoff`](MLXStudio/Core/LoopHandoff.swift) `{model, adapterPath?}` posted as a
+[`ModelHandoff`](LLMPro/Core/LoopHandoff.swift) `{model, adapterPath?}` posted as a
 cross-tab `Notification.Name` `object` to pre-fill the next tab. **Practice** is the
 same loop automated; **Save & Use** is the off-loop exit. Hand-offs are user-driven
 CTAs — completion never auto-switches tabs.
@@ -185,7 +185,7 @@ it's the doc that explains *why* the app is shaped this way.
         python eval_pass_rate.py         (Practice eval: pass@1 with optional adapter)
 ```
 
-Disk layout under `~/Library/Application Support/MLXStudio/`:
+Disk layout under `~/Library/Application Support/LLMPro/`:
 ```
 runtime/.venv/          uv-managed Python 3.11 venv with mlx-lm installed
 runtime/helpers/        copy of helper scripts from app bundle
@@ -216,7 +216,7 @@ previously verified behaviour.
 
 2. **Helpers are copied out of the bundle on every launch** by
    `PythonRuntime.installHelpers()`. The copy lives in
-   `~/Library/Application Support/MLXStudio/runtime/helpers/`. The subprocess
+   `~/Library/Application Support/LLMPro/runtime/helpers/`. The subprocess
    always invokes `<helpers-dir>/<name>.py`, never the in-bundle path. If you add
    a new helper, add its name to the `installHelpers()` list AND to the
    `pip install …` line in `PythonRuntime.bootstrap()` if it needs a new dep.
@@ -249,7 +249,7 @@ previously verified behaviour.
    JIT. The entitlements (`com.apple.security.cs.allow-jit`,
    `allow-unsigned-executable-memory`, `disable-library-validation`,
    `allow-dyld-environment-variables`) are required for the app to launch when
-   spawning subprocesses. They're in [`MLXStudio.entitlements`](MLXStudio/MLXStudio.entitlements).
+   spawning subprocesses. They're in [`LLMPro.entitlements`](LLMPro/LLMPro.entitlements).
 
 9. **SwiftData models are @MainActor by default.** Services that read/write them
    are `@MainActor @Observable final class`. Long-running work happens via
@@ -266,8 +266,8 @@ previously verified behaviour.
 ## How to navigate the codebase
 
 ```
-MLXStudio/
-├── App/          MLXStudioApp.swift (entry point), AppDelegate, RootView (sidebar shell)
+LLMPro/
+├── App/          LLMProApp.swift (entry point), AppDelegate, RootView (sidebar shell)
 ├── Core/         Low-level utilities: ProcessRunner, PathResolver, LogStreamParser, SyntaxHighlighter
 ├── Models/       SwiftData @Model types: TrainingJob, LocalModel, DatasetRecord, AppSettings, AgentProfile
 ├── Services/     The heart of the app — every business action lives in a service:
@@ -355,11 +355,11 @@ These are short here; the full set is in [`docs/CONVENTIONS.md`](docs/CONVENTION
   a SwiftData record should also drop a sidecar JSON in its output dir
   (`adapter/job.json`) so we can recover after a crash.
 - **Log at error chokepoints; read the logs after testing.** Errors go through
-  `Log.error/.fault` ([`Core/Log.swift`](MLXStudio/Core/Log.swift) → `os.Logger` +
-  `logs/mlxstudio.log` + a crash/signal backtrace breadcrumb). **A green UI is not a
+  `Log.error/.fault` ([`Core/Log.swift`](LLMPro/Core/Log.swift) → `os.Logger` +
+  `logs/llmpro.log` + a crash/signal backtrace breadcrumb). **A green UI is not a
   pass** — after any test (build-run, UI walkthrough, model run, stress sweep) read
   the log (`tail`/`grep ERROR\|FAULT` the file, or Settings → Logs) and check for a
-  new `~/Library/Logs/DiagnosticReports/MLXStudio-*.ips`; zero error lines + no new
+  new `~/Library/Logs/DiagnosticReports/LLMPro-*.ips`; zero error lines + no new
   `.ips` is the bar. See `CONVENTIONS.md` → "Always read the logs after testing"
   (this rule exists because a 13-tab "all PASS" sweep missed a real crash sitting in
   the `.ips`). Don't add a third-party logging dep.

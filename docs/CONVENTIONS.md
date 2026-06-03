@@ -93,7 +93,7 @@ were rejected because:
    (we'd lose mlx-lm progress lines).
 
 The sidecar approach: bundled `uv` binary (or system one), venv at
-`~/Library/Application Support/MLXStudio/runtime/.venv/`, helper scripts copied
+`~/Library/Application Support/LLMPro/runtime/.venv/`, helper scripts copied
 out of the bundle on every launch. Communication is one-way JSON-event lines on
 stdout. Simple and robust.
 
@@ -148,7 +148,7 @@ from `mx.device_info()` and re-pins `set_memory_limit` / `set_wired_limit` /
 slowdown instead of a crash. The limits are **soft**: a run that genuinely needs
 more is still allowed, so nothing that used to fit stops fitting. We can't raise
 the ceiling itself (that needs `sudo sysctl iogpu.wired_limit_mb`), so
-`set_wired_limit` is clamped to it. `MLXSTUDIO_NO_AUTOTUNE=1` opts out. See
+`set_wired_limit` is clamped to it. `LLMPRO_NO_AUTOTUNE=1` opts out. See
 [`CONTRACTS.md#3-helper-script-protocol`](CONTRACTS.md#3-helper-script-protocol).
 
 Corollary: `AutoTuner`'s hyperparameter table stays the conservative source of
@@ -207,7 +207,7 @@ private static func fetchJob(id: UUID, context: ModelContext) -> TrainingJob? {
 }
 ```
 
-This pattern appears in [`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift)
+This pattern appears in [`TrainingService.swift`](../LLMPro/Services/TrainingService.swift)
 and is the cleanest way to handle long-running background work that needs to
 mutate a SwiftData record. Use it.
 
@@ -238,7 +238,7 @@ breaks the spine.
 ### Cross-tab artifact hand-off goes through `ModelHandoff` + notifications
 
 When one stage hands a model (+adapter) to the next tab, carry it as a
-[`ModelHandoff`](../MLXStudio/Core/LoopHandoff.swift) `{model, adapterPath?}` posted
+[`ModelHandoff`](../LLMPro/Core/LoopHandoff.swift) `{model, adapterPath?}` posted
 as the `object` of a cross-tab `Notification.Name` — **not** a shared global, a
 singleton field, or asking the user to re-type a path. Receivers accept **either** a
 `ModelHandoff` **or** a bare `String` (model only) for backward compatibility with
@@ -254,9 +254,9 @@ Use"); the user clicks it. This protects the
 [window-close ≠ quit](#detached-subprocesses-for-long-running-work) ethos — yanking
 the user away when a 30-minute fine-tune finishes (they may be elsewhere on
 purpose) would fight it. The completion → next-stage edges
-([`TrainingMonitorView`](../MLXStudio/Features/Monitor/TrainingMonitorView.swift)
-card, [`ArenaView`](../MLXStudio/Features/Chat/ArenaView.swift) decision bar,
-[`SelfImproveView`](../MLXStudio/Features/SelfImprove/SelfImproveView.swift) "Use
+([`TrainingMonitorView`](../LLMPro/Features/Monitor/TrainingMonitorView.swift)
+card, [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift) decision bar,
+[`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift) "Use
 this fine-tune" menu) are all buttons, never `onChange`-driven navigation.
 
 ### Refine-from-adapter reuses the source config (resume-compatibility)
@@ -299,7 +299,7 @@ Every other hyperparameter (batch_size, iters, num_layers, learning_rate,
 grad_accumulation_steps, max_seq_length, gradient checkpointing, LoRA rank,
 LoRA scale, LoRA target keys, optimizer, **the warmup→cosine LR schedule, and
 whether to use DoRA**) is picked by
-[`AutoTuner.swift`](../MLXStudio/Services/AutoTuner.swift) based on
+[`AutoTuner.swift`](../LLMPro/Services/AutoTuner.swift) based on
 `(ModelSize, TrainingDuration)`. If you find yourself adding a fourth picker to
 the Teach view, stop and ask whether AutoTuner should pick it instead.
 
@@ -371,7 +371,7 @@ elsewhere, refactor it through PathResolver.
 
 ### Local-model paths must be resolved before being passed to mlx-lm
 
-Custom local models live at `~/Library/Application Support/MLXStudio/models/<name>/`.
+Custom local models live at `~/Library/Application Support/LLMPro/models/<name>/`.
 Their `DetectedModel.repoID` is just `<name>` (a folder name, no slash). mlx-lm
 interprets a bare string with no slash as a HuggingFace repo ID and bails.
 
@@ -446,7 +446,7 @@ Each round produces a real LoRA adapter that the user might want to chat with or
 
 The agent loops — one task can take a dozen model turns. Cold-loading a 27B model
 on every turn (what `InferenceService` does for Arena chat) would be unusable. So
-[`MLXServerService`](../MLXStudio/Services/MLXServerService.swift) runs
+[`MLXServerService`](../LLMPro/Services/MLXServerService.swift) runs
 `python -m mlx_lm server` as a **long-lived daemon**: the model loads once and is
 reused for every turn. This is the answer to STATE.md's long-open "should there be
 a model pinning / pre-load step?" design question — mlx-lm *does* have a server
@@ -502,12 +502,12 @@ server-status dot + plain-language tool cards lead; the technical surface
 ### The Code tab is a fixed five-role Orchestrator team (replaced the agent library)
 
 Per an **explicit user decision**, the Code tab's switchable single-agent library
-was replaced by a **fixed five-role team** ([`TeamRole`](../MLXStudio/Services/AgentRoles.swift):
+was replaced by a **fixed five-role team** ([`TeamRole`](../LLMPro/Services/AgentRoles.swift):
 orchestrator · planner · researcher · coder · ui). The user talks **only to the
 Orchestrator**, which delegates to the others. There is no agent picker and no saved
 profiles. The old single-agent *profile* plumbing
-([`AgentProfile`](../MLXStudio/Models/AgentProfile.swift),
-[`AgentTemplate`](../MLXStudio/Features/Code/AgentTemplate.swift)) is now **dead
+([`AgentProfile`](../LLMPro/Models/AgentProfile.swift),
+[`AgentTemplate`](../LLMPro/Features/Code/AgentTemplate.swift)) is now **dead
 code** — it still compiles but nothing references it (`AgentProfile` stays in the
 SwiftData schema only because the schema is additive-only); the old
 `AgentEditorView` was **deleted**. Don't reintroduce a
@@ -520,7 +520,7 @@ progressive disclosure + linking" above); they are NOT dead.
 
 The five roles are **defined by Markdown files**, not only hardcoded Swift. Each
 role has a bundled `Resources/agents/<role>.md` (YAML-ish frontmatter +
-system-prompt body) that [`AgentStore`](../MLXStudio/Services/AgentStore.swift)
+system-prompt body) that [`AgentStore`](../LLMPro/Services/AgentStore.swift)
 seeds into `PathResolver.agentsDir` **only if missing** — so a user (or an agent
 writing the file) can edit a role's character, tools, delegates, emoji/tint, or
 iteration cap, and the edit **survives launches** (unlike the Python helpers, which
@@ -532,7 +532,7 @@ field — so **the markdown is authoritative and the Swift values are the fallba
 (a missing file or absent field is harmless). The project folder, workspace
 overview, and tool-calling footer are still appended in code so they stay
 consistent across roles; the markdown body is just the role's "character". Editing
-is via [`AgentsManagerView`](../MLXStudio/Features/Code/AgentsManagerView.swift)
+is via [`AgentsManagerView`](../LLMPro/Features/Code/AgentsManagerView.swift)
 (Options → "Edit team agents…"), which Saves the file + reloads `AgentStore`, or
 Resets to the bundled default. This is **separate** from the dead
 `AgentProfile`/`SkillStore` library — don't conflate them. If you add a role field,
@@ -557,7 +557,7 @@ enforces the order regardless of how many `call_*` the Orchestrator emits in a t
 
 Delegation is modeled as a **tool**: `call_<role>(task)` runs the named role's loop
 to completion (in [`CodingAgentService.runDelegations` / `runDelegate`]
-(../MLXStudio/Services/CodingAgentService.swift)) and returns its final answer as the
+(../LLMPro/Services/CodingAgentService.swift)) and returns its final answer as the
 tool result. The callee gets a self-contained `task` and does **not** see the
 caller's conversation. Delegation is **depth-capped at 5**. `call_*`, `ask_user`,
 and `todo_write` are intercepted by the orchestration engine, not `ToolExecutor`.
@@ -566,7 +566,7 @@ scheduler.
 
 ### Real web research via DuckDuckGo (no API key)
 
-The Researcher gets real web tools ([`WebSearch`](../MLXStudio/Services/WebSearch.swift)):
+The Researcher gets real web tools ([`WebSearch`](../LLMPro/Services/WebSearch.swift)):
 `web_search` scrapes the **DuckDuckGo HTML endpoint** (no key, no account) and
 `fetch_url` downloads + strips a page to readable text. It's deliberately key-free
 and best-effort (degrades gracefully) to stay in the app's no-account, local-first
@@ -575,7 +575,7 @@ posture. Don't add a paid search API or require credentials.
 ### Agent Skills: progressive disclosure + linking
 
 **Agent Skills** are reusable `SKILL.md` instruction packages
-([`SkillStore`](../MLXStudio/Services/SkillStore.swift)), modeled on the OpenAI
+([`SkillStore`](../LLMPro/Services/SkillStore.swift)), modeled on the OpenAI
 Codex / Anthropic Agent Skills standard. They follow a **3-stage progressive
 disclosure** design — the reason the skill catalogue doesn't bloat every prompt:
 
@@ -615,13 +615,13 @@ consistent with the app's offline, no-account posture. Format contract:
 
 ### Skills and team agents are edited as raw markdown (smart substitution OFF)
 
-Both [`SkillsManagerView`](../MLXStudio/Features/Code/SkillsManagerView.swift) and
-[`AgentsManagerView`](../MLXStudio/Features/Code/AgentsManagerView.swift) edit the
+Both [`SkillsManagerView`](../LLMPro/Features/Code/SkillsManagerView.swift) and
+[`AgentsManagerView`](../LLMPro/Features/Code/AgentsManagerView.swift) edit the
 **actual `SKILL.md` / `<role>.md` text**, not a form — a list on the left + a
 monospace editor on the right + toolbar **＋ New / − Delete / Duplicate** + Reveal
 and Save. Two decisions make this work reliably:
 
-- **Custom [`MarkdownEditor`](../MLXStudio/Features/Code/MarkdownEditor.swift), not
+- **Custom [`MarkdownEditor`](../LLMPro/Features/Code/MarkdownEditor.swift), not
   SwiftUI `TextEditor`.** `TextEditor` inherited macOS smart substitution, so typing
   `---` (the frontmatter fence) became `—` (em-dash, U+2014) and silently broke YAML
   parsing — a file saved through the old editor started with U+2014 and parsed to
@@ -663,7 +663,7 @@ leniently — see [`CONTRACTS.md`](CONTRACTS.md#9-local-openai-compatible-chat-a
 
 ### Why a native, regex-based syntax highlighter (not Monaco / CodeMirror / a WebView)
 
-[`SyntaxHighlighter`](../MLXStudio/Core/SyntaxHighlighter.swift) is a small,
+[`SyntaxHighlighter`](../LLMPro/Core/SyntaxHighlighter.swift) is a small,
 dependency-free highlighter that produces `AttributedString` (for SwiftUI `Text`)
 and `NSAttributedString` (for the editor's `NSTextView`). We deliberately did **not**
 embed Monaco / CodeMirror in a `WKWebView`: that would reintroduce a JavaScript
@@ -676,8 +676,8 @@ extend the regex rules — don't reach for a web engine.
 ### Why the Code tab is a 3-pane IDE (toggleable)
 
 The Code tab is **file explorer | editable highlighted editor | agent chat**
-([`FileExplorerView`](../MLXStudio/Features/Code/FileExplorerView.swift) /
-[`CodeEditorView`](../MLXStudio/Features/Code/CodeEditorView.swift) /
+([`FileExplorerView`](../LLMPro/Features/Code/FileExplorerView.swift) /
+[`CodeEditorView`](../LLMPro/Features/Code/CodeEditorView.swift) /
 `chatColumn`), so the user can watch and hand-edit the files the agent touches
 without leaving the app. The panes are toggleable from a header sidebar button
 (`@AppStorage("codeShowWorkspacePanes")`, default on) and collapse to the
@@ -730,7 +730,7 @@ cheap; don't regress them:
 
 ### Agent templates: one-click specialized programming agents
 
-The New-agent flow offers [`AgentTemplate.all`](../MLXStudio/Features/Code/AgentTemplate.swift)
+The New-agent flow offers [`AgentTemplate.all`](../LLMPro/Features/Code/AgentTemplate.swift)
 — 8 presets (frontend / backend / tests / refactor / debug / review / docs +
 general) that prefill the role instructions and the auto-approve toggles for a
 given kind of work (test/refactor/debug default `autoRunCommands` on). Templates
@@ -748,7 +748,7 @@ A short list of "no" decisions so you don't waste time re-evaluating:
 - **Tauri / Electron**: see "Why SwiftUI" above.
 - **Logging framework (swift-log / CocoaLumberjack, etc.)**: still no third-party
   dep — but the "plain `print` is enough" stance was **reversed (2026-05-31)** in
-  favour of a tiny first-party [`Core/Log.swift`](../MLXStudio/Core/Log.swift)
+  favour of a tiny first-party [`Core/Log.swift`](../LLMPro/Core/Log.swift)
   (`os.Logger` + rotating file + crash/signal breadcrumb). **Use `Log.*` at error
   chokepoints; do NOT add a third-party logging library.** See "Always read the logs
   after testing" under Build hygiene.
@@ -793,7 +793,7 @@ arguments: ["-m", "mlx_lm", "lora", "-c", configURL.path]
 - Services: `<Capability>Service` (`TrainingService`, `InferenceService`).
 - View files: `<Section>View.swift` for tab roots, `<Section><Form>View.swift`
   for sheets (`DatasetRowEditorView`, `HuggingFaceDatasetSearchView`).
-- Notification.Name: `MLXStudio.<verbAction>` (`MLXStudio.switchToMonitor`).
+- Notification.Name: `LLMPro.<verbAction>` (`LLMPro.switchToMonitor`).
 - Filesystem dirs: lowercase plurals (`adapters/`, `datasets/`, `models/`).
 - SwiftData @Model classes: singular (`TrainingJob`, `DatasetRecord`).
 
@@ -836,24 +836,24 @@ We compile with Swift 6. The compiler will reject:
 
 **A green UI is not a pass. After any test — a build-and-run, a UI walkthrough, a
 live model run, a stress sweep — READ THE LOG before you call it good.** The app
-writes to [`Core/Log.swift`](../MLXStudio/Core/Log.swift)'s file sink at
-`~/Library/Application Support/MLXStudio/logs/mlxstudio.log`; check it three ways
+writes to [`Core/Log.swift`](../LLMPro/Core/Log.swift)'s file sink at
+`~/Library/Application Support/LLMPro/logs/llmpro.log`; check it three ways
 (any one is fine, the file is the most reliable):
 
 ```bash
 # 1. Tail the persistent file (survives crashes; what to grep)
-tail -50 ~/Library/Application\ Support/MLXStudio/logs/mlxstudio.log
-grep -nE 'ERROR|FAULT|CRASH' ~/Library/Application\ Support/MLXStudio/logs/mlxstudio.log
+tail -50 ~/Library/Application\ Support/LLMPro/logs/llmpro.log
+grep -nE 'ERROR|FAULT|CRASH' ~/Library/Application\ Support/LLMPro/logs/llmpro.log
 # 2. Live unified-log stream while reproducing
-log stream --predicate 'subsystem == "com.josh.mlxstudio.MLXStudio"' --level debug
+log stream --predicate 'subsystem == "com.josh.llmpro.LLMPro"' --level debug
 # 3. In-app: Settings → Logs (live tail + Reveal + Copy)
 ```
 
-Also glance at `~/Library/Logs/DiagnosticReports/MLXStudio-*.ips` for any OS crash
+Also glance at `~/Library/Logs/DiagnosticReports/LLMPro-*.ips` for any OS crash
 report newer than your test:
 
 ```bash
-find ~/Library/Logs/DiagnosticReports -name 'MLXStudio*' -mmin -30
+find ~/Library/Logs/DiagnosticReports -name 'LLMPro*' -mmin -30
 ```
 
 **Why this is a rule, not a nicety:** the 2026-05-31 stress test reported every one

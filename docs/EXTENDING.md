@@ -1,4 +1,4 @@
-# Extending MLX Studio
+# Extending LLMPro
 
 > 📝 **Maintainers**: when you add a new kind of capability that future agents
 > are likely to extend (a new helper, a new sidebar tab, a new model-modify
@@ -22,7 +22,7 @@ The shortest recipe in this doc — proves the catalog/helper pattern.
 1. **Pick a HuggingFace dataset**. Note its repo ID and its row schema. Decide
    how rows map to `{user, assistant}` chat messages.
 
-2. **Add a splitter to [`prepare_coding_dataset.py`](../MLXStudio/Resources/helpers/prepare_coding_dataset.py)**:
+2. **Add a splitter to [`prepare_coding_dataset.py`](../LLMPro/Resources/helpers/prepare_coding_dataset.py)**:
 
    ```python
    def split_<your_preset>(row: dict) -> list[dict] | None:
@@ -44,7 +44,7 @@ The shortest recipe in this doc — proves the catalog/helper pattern.
    ```
 
 4. **Add metadata to the Swift catalog**
-   ([`CodingDatasetCatalog.swift`](../MLXStudio/Services/CodingDatasetCatalog.swift)):
+   ([`CodingDatasetCatalog.swift`](../LLMPro/Services/CodingDatasetCatalog.swift)):
 
    ```swift
    .init(
@@ -59,7 +59,7 @@ The shortest recipe in this doc — proves the catalog/helper pattern.
    ```
 
 5. **No UI changes required.** The new card appears in
-   [`DatasetsView`](../MLXStudio/Features/Datasets/DatasetsView.swift) automatically.
+   [`DatasetsView`](../LLMPro/Features/Datasets/DatasetsView.swift) automatically.
 
 6. **Verify** by clicking *Prepare* once. Open the resulting
    `<datasets-dir>/<uuid>/train.jsonl` and confirm the chat schema is correct.
@@ -72,7 +72,7 @@ If you need a Python capability that doesn't exist (e.g. quantize-to-3bit,
 distill, run an eval harness):
 
 1. **Write the helper** in
-   [`MLXStudio/Resources/helpers/<name>.py`](../MLXStudio/Resources/helpers/).
+   [`LLMPro/Resources/helpers/<name>.py`](../LLMPro/Resources/helpers/).
    Follow the [JSON-event protocol](CONTRACTS.md#3-helper-script-protocol):
 
    ```python
@@ -93,7 +93,7 @@ distill, run an eval harness):
    ```
 
 2. **Add the name to the install list** in
-   [`PythonRuntime.installHelpers()`](../MLXStudio/Services/PythonRuntime.swift):
+   [`PythonRuntime.installHelpers()`](../LLMPro/Services/PythonRuntime.swift):
 
    ```swift
    for name in ["hf_download", "prepare_coding_dataset", "download_hf_dataset",
@@ -105,7 +105,7 @@ distill, run an eval harness):
    `uv pip install` them by hand once into the existing venv.
 
 4. **Write a Swift service** that wraps it
-   ([`MLXStudio/Services/<Capability>Service.swift`](../MLXStudio/Services/)):
+   ([`LLMPro/Services/<Capability>Service.swift`](../LLMPro/Services/)):
 
    ```swift
    import Foundation
@@ -164,7 +164,7 @@ If a new mlx-lm flag becomes important and you want users to be able to set it
 (or have AutoTuner pick it):
 
 1. **Add the field to `TrainingConfig`** in
-   [`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift):
+   [`TrainingService.swift`](../LLMPro/Services/TrainingService.swift):
    
    ```swift
    struct TrainingConfig {
@@ -176,12 +176,12 @@ If a new mlx-lm flag becomes important and you want users to be able to set it
    Update `TrainingConfig.default` and `renderYAML()`.
 
 2. **Auto-tuned?** Add it to `AutoTunedConfig` and the `tune()` body in
-   [`AutoTuner.swift`](../MLXStudio/Services/AutoTuner.swift). Pick a value per
+   [`AutoTuner.swift`](../LLMPro/Services/AutoTuner.swift). Pick a value per
    size bucket. Update `renderYAML(...)` to write it.
 
 3. **Power-user knob?** Add a `Stepper` or `TextField` to the **Advanced
    settings** disclosure in
-   [`TrainingConfigView.swift`](../MLXStudio/Features/Training/TrainingConfigView.swift).
+   [`TrainingConfigView.swift`](../LLMPro/Features/Training/TrainingConfigView.swift).
    **Do not add it to the primary 3-card UI** — see
    [`CONVENTIONS.md#autotuner-picks-hyperparameters`](CONVENTIONS.md#autotuner-picks-hyperparameters).
 
@@ -196,7 +196,7 @@ If a HuggingFace dataset uses a shape you haven't seen (e.g. `prompt + chosen +
 rejected` for DPO data):
 
 1. **Add detection** to `detect_schema()` in
-   [`download_hf_dataset.py`](../MLXStudio/Resources/helpers/download_hf_dataset.py):
+   [`download_hf_dataset.py`](../LLMPro/Resources/helpers/download_hf_dataset.py):
 
    ```python
    def _looks_dpo(row: dict) -> bool:
@@ -220,11 +220,11 @@ rejected` for DPO data):
    ```
 
 3. **Update the Swift schema picker** in
-   [`HuggingFaceDatasetSearchView.swift`](../MLXStudio/Features/Datasets/HuggingFaceDatasetSearchView.swift)
+   [`HuggingFaceDatasetSearchView.swift`](../LLMPro/Features/Datasets/HuggingFaceDatasetSearchView.swift)
    `SchemaChoice` enum + `columnMappingFields(for:)` — so users can manually
    override if auto-detection misses.
 
-4. **Update [`DatasetEditorService.parseRow`](../MLXStudio/Services/DatasetEditorService.swift)**
+4. **Update [`DatasetEditorService.parseRow`](../LLMPro/Services/DatasetEditorService.swift)**
    to handle the new shape too. The dataset editor always works in chat shape;
    `parseRow` is what auto-promotes legacy rows. The promotion logic mirrors the
    Python normaliser — keep them in sync.
@@ -236,7 +236,7 @@ rejected` for DPO data):
 Don't do this lightly — we have a dozen already. But the recipe:
 
 1. **Add a case** to
-   [`SidebarSection`](../MLXStudio/App/RootView.swift) with title + SF Symbol.
+   [`SidebarSection`](../LLMPro/App/RootView.swift) with title + SF Symbol.
 
 2. **Add the case** to the `detail` switch in `RootView.swift`:
 
@@ -244,7 +244,7 @@ Don't do this lightly — we have a dozen already. But the recipe:
    case .yourtab: YourTabView()
    ```
 
-3. **Create the view** at `MLXStudio/Features/<YourTab>/<YourTab>View.swift`.
+3. **Create the view** at `LLMPro/Features/<YourTab>/<YourTab>View.swift`.
    Follow the per-tab template (NavigationStack root, services in
    `@Environment` / `@State`, no business logic in the view).
 
@@ -260,7 +260,7 @@ If a button in tab A should jump to tab B:
 
    ```swift
    extension Notification.Name {
-       static let openYourTabWithContext = Notification.Name("MLXStudio.openYourTabWithContext")
+       static let openYourTabWithContext = Notification.Name("LLMPro.openYourTabWithContext")
    }
    ```
 
@@ -272,7 +272,7 @@ If a button in tab A should jump to tab B:
    }
    ```
 
-3. **Receive it** in [`RootView.swift`](../MLXStudio/App/RootView.swift)'s
+3. **Receive it** in [`RootView.swift`](../LLMPro/App/RootView.swift)'s
    `sidebar` view modifier chain:
 
    ```swift
@@ -303,13 +303,13 @@ If you want to add e.g. "Quantize this model to 4-bit":
 
 1. **Write the helper** (see "Add a new helper script" recipe above).
 
-2. **Extend [`ModelModifyService.swift`](../MLXStudio/Services/ModelModifyService.swift)**:
+2. **Extend [`ModelModifyService.swift`](../LLMPro/Services/ModelModifyService.swift)**:
    - Add a new `ModificationStage` case
    - Add a new boolean param to `run(input:outputName:stripVision:abliterate:)`
    - Add a new private `runYourThing(python:, src:, dst:)` async method
    - Update the chain logic in `run(...)` to handle the new flag
 
-3. **Extend [`ModelModifyView.swift`](../MLXStudio/Features/Models/ModelModifyView.swift)**:
+3. **Extend [`ModelModifyView.swift`](../LLMPro/Features/Models/ModelModifyView.swift)**:
    - Add a `@State private var doYourThing: Bool`
    - Add a `Toggle` in the options form with a clear blurb
    - Update `regenerateName()` to append a suffix when the new flag is set
@@ -327,7 +327,7 @@ If you want to add e.g. "Quantize this model to 4-bit":
 If you fine-tune a model whose chat template we don't ship:
 
 1. **Add a case** to `OllamaChatTemplate` in
-   [`FuseService.swift`](../MLXStudio/Services/FuseService.swift):
+   [`FuseService.swift`](../LLMPro/Services/FuseService.swift):
 
    ```swift
    case yourArch
@@ -358,7 +358,7 @@ If you fine-tune a model whose chat template we don't ship:
 
 The Practice loop ships with two seed datasets (HumanEval and MBPP). To add a third:
 
-1. **Add an adapter in [`humaneval_pull.py`](../MLXStudio/Resources/helpers/humaneval_pull.py)**: write an `adapt_<name>(row: dict) -> dict | None` that turns a source HF row into the normalized shape:
+1. **Add an adapter in [`humaneval_pull.py`](../LLMPro/Resources/helpers/humaneval_pull.py)**: write an `adapt_<name>(row: dict) -> dict | None` that turns a source HF row into the normalized shape:
    ```python
    {"task_id": str, "prompt": str, "tests": str, "entry_point": str,
     "canonical_solution": str, "messages": [{"role":..., "content":...}, ...]}
@@ -371,7 +371,7 @@ The Practice loop ships with two seed datasets (HumanEval and MBPP). To add a th
    ```
    The tuple is `(hf_repo, split, adapter)`. Add a special-case in `iter_rows` if the repo needs `load_dataset(name, config_id, split=...)` rather than the plain `(name, split=...)` form.
 
-3. **Add a case to [`SelfImproveSeed`](../MLXStudio/Models/SelfImproveRun.swift)**:
+3. **Add a case to [`SelfImproveSeed`](../LLMPro/Models/SelfImproveRun.swift)**:
    ```swift
    case bigcodebench = "bigcodebench"
    ```
@@ -383,7 +383,7 @@ That's it — `SelfImproveView`'s picker uses `SelfImproveSeed.allCases`, so the
 
 ## Swap or augment the judge
 
-The default judge in [`self_improve_round.py`](../MLXStudio/Resources/helpers/self_improve_round.py) is code-execution against the row's `tests` field (`run_one_test()`). To plug in a different judge — say, a larger MLX model scoring outputs against a rubric — replace the body of `run_one_test()` only. Keep the same `(passed: bool, reason: str)` return shape so the calling site doesn't change.
+The default judge in [`self_improve_round.py`](../LLMPro/Resources/helpers/self_improve_round.py) is code-execution against the row's `tests` field (`run_one_test()`). To plug in a different judge — say, a larger MLX model scoring outputs against a rubric — replace the body of `run_one_test()` only. Keep the same `(passed: bool, reason: str)` return shape so the calling site doesn't change.
 
 Two patterns we'd accept:
 
@@ -399,7 +399,7 @@ Don't change the protocol unless you've also updated `SelfImproveService.handleR
 To give the coding agent a new capability (say `move_file`):
 
 1. **Add a case to `AgentToolName`** in
-   [`AgentTools.swift`](../MLXStudio/Services/AgentTools.swift) and set its
+   [`AgentTools.swift`](../LLMPro/Services/AgentTools.swift) and set its
    `isReadOnly` flag. Read-only tools auto-run; **any non-read-only tool is
    automatically approval-gated** by `CodingAgentService` — no extra wiring.
 
@@ -417,7 +417,7 @@ To give the coding agent a new capability (say `move_file`):
    (the prompt lists every tool + the `<tool_call>` fallback format) so models on
    the text-fallback path know it exists.
 
-5. **Give it UI in [`CodeView.swift`](../MLXStudio/Features/Code/CodeView.swift)**:
+5. **Give it UI in [`CodeView.swift`](../LLMPro/Features/Code/CodeView.swift)**:
    add an SF Symbol for the tool in `ToolCardView` and a friendly `title` case in
    `AgentToolCallView.title`.
 
@@ -433,13 +433,13 @@ defined by **editable Markdown files** — no rebuild needed to change a role's
 character, tools, delegates, emoji/tint, or iteration cap.
 
 1. **The easy path — edit in the app.** Code tab → **Options** (gear) → **"Edit
-   team agents…"** opens [`AgentsManagerView`](../MLXStudio/Features/Code/AgentsManagerView.swift).
+   team agents…"** opens [`AgentsManagerView`](../LLMPro/Features/Code/AgentsManagerView.swift).
    Pick a role, edit its raw markdown, **Save** (writes the file + reloads
-   [`AgentStore`](../MLXStudio/Services/AgentStore.swift), so the **next run** obeys
+   [`AgentStore`](../LLMPro/Services/AgentStore.swift), so the **next run** obeys
    the edit). **Reset to default** re-copies the bundled version; **Show in Finder**
    reveals the file.
 
-2. **By hand** — edit `~/Library/Application Support/MLXStudio/agents/<role>.md`
+2. **By hand** — edit `~/Library/Application Support/LLMPro/agents/<role>.md`
    directly (it persists; `AgentStore` only seeds it from the bundle when missing).
    The format is YAML-ish frontmatter + a system-prompt body:
 
@@ -468,10 +468,10 @@ character, tools, delegates, emoji/tint, or iteration cap.
      overview, and tool-calling footer are appended in code, so don't restate them.
 
    Any field you omit falls back to the role's compiled-in default
-   ([`AgentRoles.swift`](../MLXStudio/Services/AgentRoles.swift) `defaultX`), and an
+   ([`AgentRoles.swift`](../LLMPro/Services/AgentRoles.swift) `defaultX`), and an
    unparseable file falls back entirely — the markdown is authoritative, the Swift
    values are the safety net. To **edit the shipped default** (so a fresh install
-   gets it), change the bundled `MLXStudio/Resources/agents/<role>.md` and
+   gets it), change the bundled `LLMPro/Resources/agents/<role>.md` and
    `xcodegen generate` — but note existing users keep their on-disk copy until they
    Reset. The five role ids are fixed; this recipe edits the existing roles, it does
    not add a sixth (the team is fixed by design — see
@@ -492,21 +492,21 @@ via its `skills:` frontmatter (see Linking below). Two ways to add one:
 1. **From the UI (raw markdown).** Code tab → **Options** (gear) → make sure the
    **"Skills: load instruction packs on demand"** toggle (`AgentSettings.useSkills`,
    default on) is on → **"Manage skills (N)…"** opens
-   [`SkillsManagerView`](../MLXStudio/Features/Code/SkillsManagerView.swift) — a
+   [`SkillsManagerView`](../LLMPro/Features/Code/SkillsManagerView.swift) — a
    raw-`SKILL.md` editor (skill list + monospace markdown editor) mirroring
    `AgentsManagerView`. Click **＋ New** and the skill is **created immediately**
    with a placeholder name; **rename it by editing the `name:` line** in the raw
    markdown (the folder id stays stable). Edit the actual `SKILL.md` text, then
    Save; **Duplicate** and **Delete** (which scrubs the id from other skills' links)
    are on the toolbar. The editor is a custom
-   [`MarkdownEditor`](../MLXStudio/Features/Code/MarkdownEditor.swift) with smart
+   [`MarkdownEditor`](../LLMPro/Features/Code/MarkdownEditor.swift) with smart
    substitution **disabled**, so typing `---` stays `---` (SwiftUI `TextEditor`
-   turned it into an em-dash and broke YAML). [`SkillStore`](../MLXStudio/Services/SkillStore.swift)
+   turned it into an em-dash and broke YAML). [`SkillStore`](../LLMPro/Services/SkillStore.swift)
    writes `skills/<slug-id>/SKILL.md`. The skill is available on the next run —
    nothing else to enable.
 
-2. **By hand-authoring** under `~/Library/Application Support/MLXStudio/skills/`
-   ([`PathResolver.skillsDir`](../MLXStudio/Core/PathResolver.swift)). Make a folder
+2. **By hand-authoring** under `~/Library/Application Support/LLMPro/skills/`
+   ([`PathResolver.skillsDir`](../LLMPro/Core/PathResolver.swift)). Make a folder
    and drop a `SKILL.md` in it:
 
    ```
@@ -551,12 +551,12 @@ flag so deleting them doesn't bring them back.)
 
 ## Add a field to an agent
 
-To give [`AgentProfile`](../MLXStudio/Models/AgentProfile.swift) a new setting
+To give [`AgentProfile`](../LLMPro/Models/AgentProfile.swift) a new setting
 (say a per-agent `topP`):
 
 1. **Add the stored property** to `AgentProfile` with a default (additive only —
    see "Migrate SwiftData schema" below). The entity is already registered in
-   `MLXStudioApp`'s `modelContainer(for:)` list, so no container change is needed.
+   `LLMProApp`'s `modelContainer(for:)` list, so no container change is needed.
 
 2. **If it's a runtime setting** the loop consumes, thread it through the
    `agentSettings` computed bridge → `CodingAgentService.AgentSettings` →
@@ -585,7 +585,7 @@ There's no SwiftData migration strategy in place. Until there is:
 - **Renaming or removing a field** will fail to load existing user data. The
   user's `default.store` lives in
   `~/Library/Containers/<bundle-id>/Data/Library/Application Support/...` (or
-  `~/Library/Application Support/MLXStudio/` for unsandboxed builds). You'll
+  `~/Library/Application Support/LLMPro/` for unsandboxed builds). You'll
   need to either nuke the store or implement a `Schema` migration plan.
 
 If you must do a breaking change, document it in [`STATE.md`](STATE.md) under
