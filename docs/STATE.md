@@ -1850,3 +1850,27 @@ identity first.
 - **README.md**: Contributing section now points at the team + Main.
 - `.claude/settings.local.json` stays gitignored; the agent definitions ARE
   tracked so they ship with the repo.
+
+### Session 2026-06-03 (cont.) — Corrected the subagent framing (Main is not the entry point)
+
+Verified against Claude Code docs (claude-code-guide) how project subagents
+actually behave, and fixed CLAUDE.md/README which had overstated it:
+- ✅ Confirmed: a cloned repo's `.claude/agents/*.md` ARE auto-discovered by a
+  Claude Code session in the project — no opt-in/trust prompt. (All 8 files are
+  committed and not gitignored; only `settings.local.json` is ignored.)
+- ❌ Corrected misconception: a file named `Main.md` CANNOT be the top-level
+  agent. Everything in `.claude/agents/` is a *subagent* the built-in session
+  spawns; the running session is always the orchestrator + sole user-facing agent.
+  Also, on stock Claude Code delegation is one level deep (a subagent generally
+  can't spawn further subagents), so `Main.md`'s nested-dispatch design isn't
+  guaranteed off this harness.
+- **CLAUDE.md**: retitled the section "🤖 Specialist subagents live in
+  `.claude/agents/`"; reframed it as "you (the session) are the orchestrator;
+  delegate file-type work to the matching specialist"; demoted `Main.md` to an
+  orchestration *playbook* (guidance the session follows), not a dispatchable
+  role; kept all 8 links + the per-builder routing table; kept the
+  rules-travel-in-the-dispatch-prompt note.
+- **README.md**: Contributing now describes specialists + auto-discovery instead
+  of "start with Main, the orchestrator"; anchor updated + verified.
+- Left the 8 agent .md files themselves unchanged (Main.md is still useful as a
+  written orchestration playbook).
