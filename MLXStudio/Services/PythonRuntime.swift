@@ -1,0 +1,220 @@
+import Foundation
+import SwiftUI
+
+@MainActor
+@Observable
+final class PythonRuntime {
+    static let shared = PythonRuntime()
+
+    enum Phase: Equatable {
+        case uninitialized
+        case checkingUV
+        case creatingVenv
+        case installingMLXLM(String)
+        case ready
+        case failed(String)
+    }
+
+    private(set) var phase: Phase = .uninitialized {
+        didSet {
+            if case .failed(let msg) = phase { Log.error("Python runtime failed: \(msg)", .python) }
+        }
+    }
+    private(set) var logTail: [String] = []
+
+    var pythonURL: URL? { phase == .ready ? PathResolver.venvPython : nil }
+    var isReady: Bool { phase == .ready }
+
+    var statusLine: String {
+        switch phase {
+        case .uninitialized:           "Runtime: not started"
+        case .checkingUV:              "Runtime: preparing uv"
+        case .creatingVenv:            "Runtime: creating venv"
+        case .installingMLXLM(let s):  "Runtime: \(s)"
+        case .ready:                   "Runtime: ready"
+        case .failed(let s):           "Runtime error: \(s)"
+        }
+    }
+
+    var statusColor: Color {
+        switch phase {
+        case .ready:           .green
+        case .failed:          .red
+        case .uninitialized:   .gray
+        default:               .orange
+        }
+    }
+
+    private init() {}
+
+    func bootstrapIfNeeded() async {
+        if isReady { return }
+        if FileManager.default.fileExists(atPath: PathResolver.venvPython.path) {
+            if await verifyMLXLM() {
+                // Always refresh helper scripts — edits in the app bundle should propagate
+                // without forcing a fresh venv reinstall.
+                try? installHelpers()
+                phase = .ready
+                return
+            }
+        }
+        await bootstrap()
+    }
+
+    func bootstrap() async {
+        do {
+            phase = .checkingUV
+            let uv = try await resolveUV()
+
+            phase = .creatingVenv
+            try await runUV(uv, ["venv", PathResolver.venvDir.path, "--python", "3.11"])
+
+            phase = .installingMLXLM("Installing mlx-lm + datasets (this can take a few minutes)")
+            try await runUV(uv, [
+                "pip", "install",
+                "--python", PathResolver.venvPython.path,
+                "mlx-lm", "huggingface_hub", "datasets", "safetensors", "sentencepiece", "protobuf"
+            ])
+
+            // mergekit powers the Fusion tab. It pulls in torch + transformers
+            // + accelerate, so the install is large (~3 GB) — but only on first
+            // bootstrap. Subsequent launches skip pip entirely if `import
+            // mlx_lm` works (see bootstrapIfNeeded). Failure here is non-fatal
+            // for the rest of the app — mlx-lm is what actually unblocks Ready;
+            // fusion will surface "mergekit not installed" if someone tries it
+            // before this finishes.
+            phase = .installingMLXLM("Installing mergekit (powers Fusion — ~3 GB, one-time)")
+            do {
+                try await runUV(uv, [
+                    "pip", "install",
+                    "--python", PathResolver.venvPython.path,
+                    "mergekit"
+                ])
+            } catch {
+                appendLog("mergekit install failed: \(error.localizedDescription) — Fusion tab will be disabled until next launch.")
+            }
+
+            // Install hf_download helper script.
+            try installHelpers()
+
+            if await verifyMLXLM() {
+                phase = .ready
+            } else {
+                phase = .failed("mlx-lm installed but `import mlx_lm` failed.")
+            }
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Find a usable `uv` binary: prefer the bundled one, fall back to `$PATH`, fall back to `~/.local/bin/uv`.
+    private func resolveUV() async throws -> URL {
+        if let bundled = Bundle.main.url(forResource: "uv-aarch64-apple-darwin", withExtension: nil) {
+            let dest = PathResolver.uvBinary
+            if !FileManager.default.fileExists(atPath: dest.path) {
+                try? FileManager.default.removeItem(at: dest)
+                try FileManager.default.copyItem(at: bundled, to: dest)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
+            }
+            return dest
+        }
+        if FileManager.default.fileExists(atPath: PathResolver.uvBinary.path) {
+            return PathResolver.uvBinary
+        }
+        for candidate in ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", "\(NSHomeDirectory())/.local/bin/uv"] {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return URL(fileURLWithPath: candidate)
+            }
+        }
+        throw RuntimeError.uvNotFound
+    }
+
+    private func runUV(_ uv: URL, _ args: [String]) async throws {
+        appendLog("$ \(uv.lastPathComponent) \(args.joined(separator: " "))")
+        try await ProcessRunner.runCapturing(
+            executable: uv,
+            arguments: args,
+            environment: ["VIRTUAL_ENV": PathResolver.venvDir.path],
+            onStdout: { [weak self] line in Task { @MainActor in self?.appendLog(line) } },
+            onStderr: { [weak self] line in Task { @MainActor in self?.appendLog(line) } }
+        )
+    }
+
+    private func verifyMLXLM() async -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: PathResolver.venvPython.path) else { return false }
+        do {
+            try await ProcessRunner.runCapturing(
+                executable: PathResolver.venvPython,
+                arguments: ["-c", "import mlx_lm; print(mlx_lm.__version__)"]
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Returns true if `mergekit` is importable in the venv. Cheap (~50 ms).
+    func mergekitInstalled() async -> Bool {
+        guard let python = pythonURL else { return false }
+        do {
+            try await ProcessRunner.runCapturing(
+                executable: python,
+                arguments: ["-c", "import mergekit"]
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Install mergekit on-demand. The first-launch bootstrap already does
+    /// this, but users whose venv was created before the fusion feature
+    /// shipped need a way to install it without nuking the whole runtime.
+    /// Called by FusionService before the first merge attempt.
+    func installMergekit(progress: @escaping @MainActor (String) -> Void) async -> Bool {
+        do {
+            let uv = try await resolveUV()
+            await MainActor.run { progress("Installing mergekit (~3 GB, one-time)…") }
+            try await runUV(uv, [
+                "pip", "install",
+                "--python", PathResolver.venvPython.path,
+                "mergekit"
+            ])
+            return true
+        } catch {
+            await MainActor.run { progress("Install failed: \(error.localizedDescription)") }
+            return false
+        }
+    }
+
+    private func installHelpers() throws {
+        let destDir = PathResolver.helpersDir
+        for name in ["hf_download", "prepare_coding_dataset", "download_hf_dataset", "strip_vision", "abliterate",
+                     "humaneval_pull", "self_improve_round", "eval_pass_rate",
+                     "merge_models", "add_expert", "manage_experts",
+                     "mem_probe", "model_memory", "profile_experts", "mlx_run",
+                     "inspect_attention"] {
+            guard let resourceURL = Bundle.main.url(forResource: name, withExtension: "py", subdirectory: "helpers")
+                                  ?? Bundle.main.url(forResource: name, withExtension: "py")
+            else { continue }
+            let dest = destDir.appendingPathComponent("\(name).py")
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.copyItem(at: resourceURL, to: dest)
+        }
+    }
+
+    private func appendLog(_ line: String) {
+        logTail.append(line)
+        if logTail.count > 500 { logTail.removeFirst(logTail.count - 500) }
+    }
+
+    enum RuntimeError: LocalizedError {
+        case uvNotFound
+        var errorDescription: String? {
+            switch self {
+            case .uvNotFound:
+                return "Could not find `uv`. Install it from https://docs.astral.sh/uv/ or bundle a uv binary in Resources."
+            }
+        }
+    }
+}

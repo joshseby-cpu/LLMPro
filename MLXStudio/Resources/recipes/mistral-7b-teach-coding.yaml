@@ -1,0 +1,26 @@
+# Teach Mistral-7B-Instruct-v0.3 (general) to be a coding assistant.
+# Mistral responds particularly well to clean instruction-coding SFT.
+#
+# Expected outcome on M-series w/ 16 GB: ~3-8 tok/s training, ~80 min for 500 iters.
+model: "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
+train: true
+fine_tune_type: lora
+seed: 0
+batch_size: 1
+iters: 500
+learning_rate: 1.5e-5
+num_layers: 20
+grad_accumulation_steps: 4
+max_seq_length: 4096
+val_batches: 25
+steps_per_report: 10
+steps_per_eval: 75
+save_every: 100
+grad_checkpoint: true
+mask_prompt: true
+optimizer: adamw
+lora_parameters:
+  keys: ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj"]
+  rank: 16
+  scale: 32.0
+  dropout: 0.05
