@@ -1834,3 +1834,19 @@ the GitHub repo or push; did NOT change the bundle id. **Before pushing:** set t
 real name in `LICENSE`, create the GitHub repo, `git remote add origin … && git
 push -u origin main`. Optionally amend the initial commit's author to your own
 identity first.
+
+### Session 2026-06-03 — Project subagent team wired into CLAUDE.md
+
+- A subagent team was added under `.claude/agents/` (8 agents): **Main**
+  (orchestrator / sole user-facing agent), Planner, Researcher, and builders for
+  Swift, SwiftUI, Python, Text, TypeScript. `Main.md` defines the orchestration
+  loop + a compact-JSON inter-agent protocol.
+- **CLAUDE.md**: added a top-of-file "🤖 Work through the agent team — start with
+  `Main`" section (roster table mapped to THIS repo: Swift/SwiftUI/Python/Text are
+  the relevant builders; TypeScript noted as unused). Stressed that the team does
+  not exempt anyone from the load-bearing decisions or the doc-maintenance
+  contract, and that dispatch prompts must carry the relevant rules (subagents
+  don't inherit the conversation).
+- **README.md**: Contributing section now points at the team + Main.
+- `.claude/settings.local.json` stays gitignored; the agent definitions ARE
+  tracked so they ship with the repo.
