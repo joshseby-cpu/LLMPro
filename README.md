@@ -11,6 +11,14 @@ specializes them into coding assistants you actually use.
 
 ---
 
+> ### 🤖 100% written in Claude Code
+> Every line of this project was written by [Claude Code](https://www.anthropic.com/claude-code).
+> It works, but it has **not** been hand-audited line-by-line — **expect bugs**, and
+> treat it as experimental software. Review the code before running it on anything
+> you care about, and please [open an issue](../../issues) if something breaks.
+
+---
+
 > ### 🛠️ Just want to run it on your Mac?
 > Follow **[`INSTALL.md`](INSTALL.md)** — a step-by-step, beginner-friendly guide
 > that takes you from a fresh Mac to a running app (install prerequisites → build
