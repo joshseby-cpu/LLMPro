@@ -104,8 +104,8 @@ If you received a **link to a Git repository**, clone it:
 
 ```bash
 cd ~/Documents
-git clone <REPOSITORY-URL> MLXStudio
-cd MLXStudio
+git clone https://github.com/<your-username>/LLMPro.git
+cd LLMPro
 ```
 
 If you received the project as a **`.zip` folder**, unzip it, then in Terminal
@@ -113,7 +113,7 @@ If you received the project as a **`.zip` folder**, unzip it, then in Terminal
 drag the folder onto the Terminal window to fill in the path):
 
 ```bash
-cd ~/Downloads/MLXStudio       # adjust to wherever you put it
+cd ~/Downloads/LLMPro       # adjust to wherever you put it
 ```
 
 You're in the right folder if this command lists a file:
