@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the MLX Studio app icon at every size macOS needs.
+"""Generate the LLMPro app icon at every size macOS needs.
 
 Design: gradient indigo→purple squircle, centered graduation cap (mortarboard
 diamond + trapezoid base + button + gold tassel), small sparkle accents in the
 background. Ties to the app's "Teach" vocabulary.
 
-Writes PNGs into ../MLXStudio/Resources/Assets.xcassets/AppIcon.appiconset/
+Writes PNGs into ../LLMPro/Resources/Assets.xcassets/AppIcon.appiconset/
 plus a matching Contents.json.
 """
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "MLXStudio" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "LLMPro" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
 
 # macOS AppIcon size manifest: (filename, point-size, scale)
 MACOS_SIZES = [

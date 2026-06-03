@@ -17,7 +17,7 @@ scope.
 
 - ✅ **First-run wizard** — 5 steps including Python runtime bootstrap and
   starter coding-model selection.
-- ✅ **Python runtime** — uv venv at `~/Library/Application Support/MLXStudio/runtime/.venv/`,
+- ✅ **Python runtime** — uv venv at `~/Library/Application Support/LLMPro/runtime/.venv/`,
   mlx-lm 0.31.3 installed, helpers refreshed every launch.
 - ✅ **HuggingFace model search** — filterable by `mlx-community` org or "All".
 - ✅ **HuggingFace model download** — accurate progress bar via dir-size poller
@@ -142,7 +142,7 @@ written; just needs the UI wiring.
 
 ### `LocalModel` SwiftData @Model
 
-Defined in [`Models/LocalModel.swift`](../MLXStudio/Models/LocalModel.swift) but
+Defined in [`Models/LocalModel.swift`](../LLMPro/Models/LocalModel.swift) but
 not used at runtime — `ModelRegistry.DetectedModel` (the runtime equivalent)
 covers the current need. Either delete LocalModel or start using it for
 per-model preferences (favorite, alias, notes).
@@ -277,8 +277,8 @@ the "Agent Skills" bullet under the Code-tab working section and the newest
 Recent-session-log entry.
 
 The single-agent *profile* library it was originally part of —
-[`AgentProfile`](../MLXStudio/Models/AgentProfile.swift),
-[`AgentTemplate`](../MLXStudio/Features/Code/AgentTemplate.swift) — remains **dead
+[`AgentProfile`](../LLMPro/Models/AgentProfile.swift),
+[`AgentTemplate`](../LLMPro/Features/Code/AgentTemplate.swift) — remains **dead
 code** (compiles, unreferenced; `AgentProfile` stays in the SwiftData schema only).
 `AgentEditorView` was **deleted**. The old per-agent `AgentProfile.enabledSkillIDs`
 model is **superseded** — per-agent scoping now lives in the agent's `skills:`
@@ -387,7 +387,7 @@ back-and-forth on the first submission. Document any caveats here once done.
 
 ## Tests
 
-Currently there are **no tests**. The `Tests/MLXStudioTests/` target exists in
+Currently there are **no tests**. The `Tests/LLMProTests/` target exists in
 `project.yml` but the source folder is empty.
 
 First targets that would pay off:
@@ -415,8 +415,8 @@ for the full reasoning. Quick reference:
   conflicts with our subprocess + file model. Not doing this right now.
 - **Backwards-compatible SwiftData migrations** — additive-only for now.
 - **A logging framework** — ~~small app, plain `print` is fine~~ **REVERSED
-  2026-05-31**: added first-party [`Core/Log.swift`](../MLXStudio/Core/Log.swift)
-  (os.Logger + rotating file `logs/mlxstudio.log` + crash/signal breadcrumb), no
+  2026-05-31**: added first-party [`Core/Log.swift`](../LLMPro/Core/Log.swift)
+  (os.Logger + rotating file `logs/llmpro.log` + crash/signal breadcrumb), no
   third-party dep. See the Recent-session-log entry and CONVENTIONS.md.
 - **Telemetry / analytics** — privacy-first; user-runs-on-device app.
 
@@ -430,8 +430,8 @@ work that another agent might be looking for context on.
 - **New rule: always read the logs after testing (docs-only).** Added
   `### Always read the logs after testing` to CONVENTIONS.md → Build hygiene: a
   green UI is NOT a pass — after any test, `tail`/`grep ERROR|FAULT`
-  `logs/mlxstudio.log` (or Settings → Logs / `log stream`) AND check for a new
-  `DiagnosticReports/MLXStudio-*.ips`; zero error lines + no new `.ips` is the bar.
+  `logs/llmpro.log` (or Settings → Logs / `log stream`) AND check for a new
+  `DiagnosticReports/LLMPro-*.ips`; zero error lines + no new `.ips` is the bar.
   Rationale baked in: the 13-tab "all PASS" stress sweep missed a real
   `EXC_BAD_ACCESS` sitting in the `.ips`. Pointer added to CLAUDE.md's conventions
   list. Also finally landed the CONVENTIONS.md "rejected list" reversal of the
@@ -440,24 +440,24 @@ work that another agent might be looking for context on.
 - **Full app logging + crash breadcrumbs — shipped, BUILD-GREEN, UI-verified
   live.** Reversed the old "plain `print` is fine" stance (the May-27 crash had to
   be reconstructed from the OS `.ips` because we logged nothing). New first-party
-  [`Core/Log.swift`](../MLXStudio/Core/Log.swift) (`Log` enum, no third-party dep):
+  [`Core/Log.swift`](../LLMPro/Core/Log.swift) (`Log` enum, no third-party dep):
   every message fans out to **(a)** Apple unified logging (`os.Logger`, subsystem =
   bundle id, per-category — live in Console.app / `log stream`) **and (b)** a
-  persistent **rotating file** `logs/mlxstudio.log` (~5 MB → `.log.1`), with
+  persistent **rotating file** `logs/llmpro.log` (~5 MB → `.log.1`), with
   `Log.info/.notice/.error/.fault`, `#fileID:line` capture, and `.debug` gated to
   DEBUG builds. `Log.install()` (called from `AppDelegate.applicationWillFinishLaunching`,
   before the window) wires `NSSetUncaughtExceptionHandler` + fatal-signal handlers
   (SIGSEGV/SIGABRT/SIGBUS/…) that write a **`backtrace_symbols_fd` breadcrumb to our
   log file before re-raising** (signal handler is a context-free C function with
   pre-allocated buffers — async-signal-safe-ish), so the NEXT crash leaves a stack
-  trace in `mlxstudio.log`, not only the OS `.ips`. Wired at the real error
+  trace in `llmpro.log`, not only the OS `.ips`. Wired at the real error
   chokepoints: `ProcessRunner.spawn`/`runCapturing` (every subprocess spawn + nonzero
   exit), `PythonRuntime.phase` didSet (`.failed`), `MLXServerService.state` didSet
   (`.failed`/`.ready`), `OpenAIChatClient.complete` (HTTP errors),
   `JobRegistry.markFailed` (training), `SelfImproveService.fail` (Practice),
   `AttentionInspectService` (Inspect). UI: **Settings → Logs** tab (live tail +
   Refresh / Reveal-in-Finder / Copy); renamed the stale "View bootstrap log" button
-  to "Open logs folder". **Verified live**: `mlxstudio.log` is created at launch and
+  to "Open logs folder". **Verified live**: `llmpro.log` is created at launch and
   the in-app Logs tab shows real `[app]`/`[python]`/`[server]` entries (launch
   banner, subprocess spawns, server-ready). `xcodegen` + `xcodebuild` GREEN, 0
   errors, app healthy (0% CPU, no crash). Docs: CONVENTIONS.md "considered &
@@ -474,7 +474,7 @@ work that another agent might be looking for context on.
   1. **Inspect → Thinking ignored the model picker (UX dead-end).** Old behavior:
      selecting a model in the Inspect picker then opening Thinking just said "No
      model is loaded yet — go to the Code tab." Now
-     [`CoTInspectorView`](../MLXStudio/Features/Inspect/CoTInspectorView.swift) takes
+     [`CoTInspectorView`](../LLMPro/Features/Inspect/CoTInspectorView.swift) takes
      the selected `DetectedModel` and, when no server is running, shows **"Load
      <model> to watch it think"** with the size/time cost + an explicit **"Load this
      model for Thinking"** button (`MLXServerService.shared.start(model:adapterPath:)`
@@ -514,11 +514,11 @@ work that another agent might be looking for context on.
   look inside any local model three ways, designed Swift-first off a 3-agent
   research workflow grounded in the installed mlx-lm + the two cached models.
   1. **Weights — pure Swift, no model load, no Python.**
-     [`Core/SafetensorsHeader.swift`](../MLXStudio/Core/SafetensorsHeader.swift)
+     [`Core/SafetensorsHeader.swift`](../LLMPro/Core/SafetensorsHeader.swift)
      reads each shard's `8-byte LE u64 header-length + JSON` header (and
      `model.safetensors.index.json` for multi-shard) — touching <1 MB of a 55 GB
      model — to enumerate every tensor's name/dtype/shape/byteSize/paramCount.
-     [`Services/WeightsInspectService.swift`](../MLXStudio/Services/WeightsInspectService.swift)
+     [`Services/WeightsInspectService.swift`](../LLMPro/Services/WeightsInspectService.swift)
      builds a `ModelWeightsReport` off-main (param total, dtype histogram, per-layer
      groups, GQA/MoE/quant flags; config read prefers `text_config` for the
      multimodal wrappers, all-dims paramCount, U32-triplet quant detection).
@@ -530,29 +530,29 @@ work that another agent might be looking for context on.
      "Tied embeddings" badges; disclosure shows the per-layer Canvas bar chart + the
      1339-tensor table with the real U32/BF16 quant triplets.
   2. **Attention — one-forward Python+MLX sidecar.**
-     [`Resources/helpers/inspect_attention.py`](../MLXStudio/Resources/helpers/inspect_attention.py)
+     [`Resources/helpers/inspect_attention.py`](../LLMPro/Resources/helpers/inspect_attention.py)
      monkeypatches `mx.fast.scaled_dot_product_attention` (the single shared kernel
      all mainstream mlx-lm archs call), recomputes `softmax(QK^T)` with GQA head
      expansion, runs ONE forward over a ≤64-token prompt, emits mean-over-heads
      seq×seq matrices per layer as JSON, restores the kernel in a `finally`. Self-pins
-     memory (`MLXSTUDIO_MEM_LIMIT_GB`, default 108; bypasses `mlx_run.py`). Emits a
+     memory (`LLMPRO_MEM_LIMIT_GB`, default 108; bypasses `mlx_run.py`). Emits a
      clean `unsupported` event for shared-SDPA-bypassing archs (gemma3n/llama4/
      qwen3_next/mamba/rwkv). Driven by
-     [`Services/AttentionInspectService.swift`](../MLXStudio/Services/AttentionInspectService.swift)
+     [`Services/AttentionInspectService.swift`](../LLMPro/Services/AttentionInspectService.swift)
      → Canvas heatmap in `AttentionInspectorView`. **Capture math verified against
      real `mlx`** (synthetic GQA: head-expansion correct, softmax row-sums == 1.00000,
      shape (B,Hq,L,L) → PASS); py_compile clean; UI pane renders (prompt + Peek
      inside). NOT yet exercised: a full forward through a real 55 GB model
      (memory-prohibitive while the app holds ~17 GB).
   3. **Thinking — live, pure Swift, reuses the reasoning pipeline.**
-     [`Features/Inspect/CoTInspectorView.swift`](../MLXStudio/Features/Inspect/CoTInspectorView.swift)
+     [`Features/Inspect/CoTInspectorView.swift`](../LLMPro/Features/Inspect/CoTInspectorView.swift)
      streams the already-loaded `MLXServerService` model via `OpenAIChatClient.stream`
      with `chat_template_kwargs:{enable_thinking:true}`, routing `.reasoningDelta` →
      a 💭 Thinking disclosure and `.textDelta` → the Answer. **UI-verified**: shows
      the friendly "No model is loaded yet — open the Code tab…" hint when no server.
-  UI shell [`Features/Inspect/ModelInspectorView.swift`](../MLXStudio/Features/Inspect/ModelInspectorView.swift)
+  UI shell [`Features/Inspect/ModelInspectorView.swift`](../LLMPro/Features/Inspect/ModelInspectorView.swift)
   (model picker + Weights/Attention/Thinking segments); wired into
-  [`App/RootView.swift`](../MLXStudio/App/RootView.swift) (`SidebarSection.inspect`,
+  [`App/RootView.swift`](../LLMPro/App/RootView.swift) (`SidebarSection.inspect`,
   "Inspect", `scope` icon); `inspect_attention` registered in
   `PythonRuntime.installHelpers()`. **`xcodegen generate` + `xcodebuild` GREEN
   (Swift 6 strict-concurrency clean, 0 errors); all three panes verified live.**
@@ -602,7 +602,7 @@ work that another agent might be looking for context on.
      `AgentsManagerView` / `SkillsManagerView` flow; sections 13/14 verified intact.
   **Deferred (not done):** deleting dead `AgentTemplate.swift` / `AgentProfile.swift`
   would need a `project.yml` regen (`xcodegen generate`) + dropping `AgentProfile`
-  from the SwiftData schema array in `MLXStudioApp.swift` — left as a focused
+  from the SwiftData schema array in `LLMProApp.swift` — left as a focused
   follow-up so a docs/quality pass doesn't churn the schema. The bigger PROPOSE
   items (pass@k eval, tiered command allowlist, cumulative cross-round keepers,
   summarizing context compaction) await sign-off. **UI-verified live (computer-use,
@@ -664,7 +664,7 @@ work that another agent might be looking for context on.
   `SkillsManagerView` / `use_skill` code (left from the removed single-agent
   library, marked dead in earlier docs) and wired it into the live dynamic
   `TeamRole` team. A skill is a folder under
-  [`PathResolver.skillsDir`](../MLXStudio/Core/PathResolver.swift) (`skills/<id>/`)
+  [`PathResolver.skillsDir`](../LLMPro/Core/PathResolver.swift) (`skills/<id>/`)
   holding a `SKILL.md` (YAML frontmatter `name`/`description` + Markdown body) plus
   optional bundled files. **3-stage progressive disclosure**: (1) **discovery** —
   `CodingAgentService.systemMessage` appends only each skill's `name: description`
@@ -674,7 +674,7 @@ work that another agent might be looking for context on.
   instructions body + the skill's folder path (new `SkillContext.dirPath`); (3)
   **execution** — the agent follows them, optionally reading bundled files.
   **Seeding**: `SkillStore.installDefaultsAndScan()` runs at launch from
-  `MLXStudioApp`'s `.task` and, on the very first launch only (guarded by a
+  `LLMProApp`'s `.task` and, on the very first launch only (guarded by a
   `didSeedExampleSkills` `UserDefaults` flag so deletions don't reappear), seeds two
   instruction-only example skills (`conventional-commits`, `code-reviewer`). Skills
   are **team-global** (every role sees the catalogue, matching Codex/Anthropic's
@@ -705,19 +705,19 @@ work that another agent might be looking for context on.
 - **Team agents are now editable Markdown files + multi-choice `ask_user` — both
   verified live.** (1) **Markdown team agents.** The five Code-tab roles
   (orchestrator/planner/researcher/coder/ui) are now defined by
-  `MLXStudio/Resources/agents/<role>.md` (YAML-ish frontmatter — `id`/`name`/`emoji`/
+  `LLMPro/Resources/agents/<role>.md` (YAML-ish frontmatter — `id`/`name`/`emoji`/
   `tint`/`tools`/`delegates`/`maxIterations` — + a system-prompt body) instead of only
-  hardcoded Swift. New [`AgentStore`](../MLXStudio/Services/AgentStore.swift)
-  (`@MainActor @Observable`) `installAndLoad()`s at launch (from `MLXStudioApp`'s
+  hardcoded Swift. New [`AgentStore`](../LLMPro/Services/AgentStore.swift)
+  (`@MainActor @Observable`) `installAndLoad()`s at launch (from `LLMProApp`'s
   `.task`, before bootstrap): it copies each bundled file to `PathResolver.agentsDir`
   **only if missing** (so user edits persist across launches, unlike the Python helpers
   which overwrite every launch), parses each into an `AgentDefinition`, and publishes a
   `nonisolated(unsafe) static var overrides` snapshot.
-  [`TeamRole`](../MLXStudio/Services/AgentRoles.swift) now reads `displayName`/`emoji`/
+  [`TeamRole`](../LLMPro/Services/AgentRoles.swift) now reads `displayName`/`emoji`/
   `tint`/`baseTools`/`delegates`/`maxIterations`/header from `AgentStore.overrides`,
   falling back to compiled-in `defaultX` when a file/field is absent (markdown is
   authoritative; the project folder/overview/tool footer are still appended in code).
-  Edited in-app via [`AgentsManagerView`](../MLXStudio/Features/Code/AgentsManagerView.swift)
+  Edited in-app via [`AgentsManagerView`](../LLMPro/Features/Code/AgentsManagerView.swift)
   (Code → Options → "Edit team agents…"): Save (writes file + reloads `AgentStore`),
   Reset to default, Show in Finder. **SEPARATE from the dead `AgentProfile`/`SkillStore`
   library — not the same thing.** (2) **Multi-choice `ask_user`.** The `ask_user` tool
@@ -761,7 +761,7 @@ work that another agent might be looking for context on.
   **`enable_thinking`** switch (sets an empty thought channel → skip thinking), and
   **mlx-lm's server forwards `chat_template_kwargs`** from the request body (verified
   in `server.py`; its own `--help` shows `'{"enable_thinking":false}'`). Added
-  [`ChatCompletionRequest.chatTemplateKwargs`](../MLXStudio/Services/OpenAIChatClient.swift);
+  [`ChatCompletionRequest.chatTemplateKwargs`](../LLMPro/Services/OpenAIChatClient.swift);
   the agent now sends `{"enable_thinking": settings.letModelThink}` on **every** role
   request, with `letModelThink` defaulting to **false** (act directly). New Options
   toggle "Let the model think first (slower)". **VERIFIED live** against a loaded
@@ -784,12 +784,12 @@ work that another agent might be looking for context on.
   model** — the `mlx_lm server` streams its chain-of-thought in a **`reasoning`**
   delta field (verified: `delta: {"reasoning": "…"}`), and the final message's
   `content`/`tool_calls` stay null until it finishes thinking (it over-thinks past
-  1024+ tokens). [`OpenAIChatClient`](../MLXStudio/Services/OpenAIChatClient.swift)
+  1024+ tokens). [`OpenAIChatClient`](../LLMPro/Services/OpenAIChatClient.swift)
   only read `content`/`tool_calls`, so the Orchestrator received an empty message →
   the runRole loop treated it as a "final answer" → stopped with a blank bubble.
   Fixes: (1) parse `reasoning` deltas → new `ChatStreamEvent.reasoningDelta`,
   accumulated into `AgentBubble.reasoning` and shown as a dimmed collapsible
-  **"💭 Thinking"** block ([`CodeView.ReasoningView`](../MLXStudio/Features/Code/CodeView.swift));
+  **"💭 Thinking"** block ([`CodeView.ReasoningView`](../LLMPro/Features/Code/CodeView.swift));
   (2) a **no-output safeguard** in `runRole` — when a turn yields no visible answer
   and no tool call, it now posts a clear hint (raise **Max tokens**, or pick a
   coding model like **Qwen2.5-Coder**) instead of silently ending. Build green.
@@ -801,11 +801,11 @@ work that another agent might be looking for context on.
   chevron** — clicking the label row does nothing — so users couldn't open the
   Teach **Advanced fine-tuning options** (the reported bug), nor the Progress /
   Practice technical/advanced sections. Replaced the `DisclosureGroup`s in
-  [`TrainingConfigView`](../MLXStudio/Features/Training/TrainingConfigView.swift)
+  [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift)
   (Teach Advanced),
-  [`TrainingMonitorView`](../MLXStudio/Features/Monitor/TrainingMonitorView.swift)
+  [`TrainingMonitorView`](../LLMPro/Features/Monitor/TrainingMonitorView.swift)
   (Progress Technical details), and
-  [`SelfImproveView`](../MLXStudio/Features/SelfImprove/SelfImproveView.swift)
+  [`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift)
   (Practice Advanced + Technical details) with a **full-width tappable `Button`
   header** (`.contentShape(Rectangle())`) + conditional content, so the whole row
   toggles. Build green; verified in the UI — Teach Advanced and Progress Technical
@@ -819,9 +819,9 @@ work that another agent might be looking for context on.
   dead job is resurrected as running → `activeJob` non-nil → Teach's `canStart`
   gate and the "a lesson is already running. Watch the Monitor tab or stop it
   first." banner **block all new training**. Fixed
-  [`JobRegistry.isProcessAlive`](../MLXStudio/Services/JobRegistry.swift) to also
+  [`JobRegistry.isProcessAlive`](../LLMPro/Services/JobRegistry.swift) to also
   verify via `proc_pidpath` that the live PID is actually our venv python (path
-  contains `python` + `mlxstudio`); a recycled PID belonging to another binary is
+  contains `python` + `llmpro`); a recycled PID belonging to another binary is
   rejected, so the job recovers as `.orphaned` instead. Build green; verified in the
   UI — after relaunch the Teach banner is gone and **Start Teaching is enabled**
   (Qwen3.6-27B-bf16 + C#/.NET selected). Note: relaunching the app while a job is
@@ -838,7 +838,7 @@ work that another agent might be looking for context on.
   (1) **DoRA** (`fine_tune_type: dora`) — AutoTuner auto-selects it for the
   **Thorough** tier; (2) a **warmup→cosine-decay LR schedule** (`lr_schedule`)
   emitted on every run. Both flow through `AutoTunedConfig` (`useDoRA`,
-  `warmupSteps`) → [`AutoTuner`](../MLXStudio/Services/AutoTuner.swift) →
+  `warmupSteps`) → [`AutoTuner`](../LLMPro/Services/AutoTuner.swift) →
   `TrainingConfig.renderYAML`. Surfaced as a "Smart recipe ✨" line in Teach + an
   Advanced "Warm-up + cosine LR schedule" toggle (the DoRA/Full picker already
   existed). **Also fixed a latent YAML float bug**: PyYAML parses `2e-05` as a
@@ -859,12 +859,12 @@ work that another agent might be looking for context on.
   (M5 Max, 128 GB) and found MLX's stock memory + cache limits default to
   **~121.6 GB — above the ~107.5 GB Metal working-set ceiling** (wired limit was
   0), which is why big runs hard-crash with `kIOGPUCommandBufferCallbackError…`.
-  Rewrote [`mlx_run.py`](../MLXStudio/Resources/helpers/mlx_run.py) to read the
+  Rewrote [`mlx_run.py`](../LLMPro/Resources/helpers/mlx_run.py) to read the
   ceiling from `mx.device_info()` and re-pin `set_memory_limit` / `set_wired_limit`
   / `set_cache_limit` (cache = ceiling/2) on **every** run, and changed
-  [`MemoryService.wrap`](../MLXStudio/Services/MemoryService.swift) to **always**
+  [`MemoryService.wrap`](../LLMPro/Services/MemoryService.swift) to **always**
   route mlx_lm through the launcher (was: only when the Memory-tab budget was on).
-  Limits are soft (a genuinely-bigger run still proceeds); `MLXSTUDIO_NO_AUTOTUNE=1`
+  Limits are soft (a genuinely-bigger run still proceeds); `LLMPRO_NO_AUTOTUNE=1`
   opts out; the explicit budget still overrides. Verified: `_apply_limits` pins
   107.5/107.5/53.8 GB; the launcher still dispatches mlx_lm; and a **live 27B + LoRA
   generate through the launcher** ran clean (peak 54.0 GB, exit 0, coherent output).
@@ -878,7 +878,7 @@ work that another agent might be looking for context on.
   smoke pass: (a) whole-app `xcodebuild` **green**; (b) a multi-agent headless
   workflow checked all **15 Python helpers + the mlx-lm CLI surface + helper
   registration** → **16 PASS · 0 FAIL** after fixing the one WARN
-  ([`prepare_coding_dataset.py`](../MLXStudio/Resources/helpers/prepare_coding_dataset.py)
+  ([`prepare_coding_dataset.py`](../LLMPro/Resources/helpers/prepare_coding_dataset.py)
   leaked a raw traceback when the optional `max_rows` arg was non-integer — now
   emits a clean `{"event":"error"}` and returns 2); (c) a **live** `mlx_lm generate`
   loaded the cached Qwen3.6-27B-bf16 base **+ a fine-tuned LoRA adapter** from disk
@@ -902,24 +902,24 @@ work that another agent might be looking for context on.
   was physically complete in the backend but **broken at the UI seams** — the user
   had to copy adapter paths between tabs by hand, and the **Code tab literally
   couldn't load a fine-tuned adapter** (`startSession` passed `adapterPath: nil`).
-  Closed the gaps via a new [`ModelHandoff`](../MLXStudio/Core/LoopHandoff.swift)
+  Closed the gaps via a new [`ModelHandoff`](../LLMPro/Core/LoopHandoff.swift)
   `{model, adapterPath?}` payload (carried as a notification `object`; receivers
   accept it OR a bare `String`) + `.openCodeWithModel`, plus user-driven completion
   CTAs across Code / Progress / Try-it-out / Teach / Practice / Export:
-  (1) [`CodeView`](../MLXStudio/Features/Code/CodeView.swift) adapter Picker
+  (1) [`CodeView`](../LLMPro/Features/Code/CodeView.swift) adapter Picker
   (`@AppStorage("codeAdapterJobID")`) → `startSession(model:adapterPath:)` →
   `mlx_lm server --adapter-path`; (2)
-  [`TrainingMonitorView`](../MLXStudio/Features/Monitor/TrainingMonitorView.swift)
+  [`TrainingMonitorView`](../LLMPro/Features/Monitor/TrainingMonitorView.swift)
   completion CTA card; (3)
-  [`ArenaView`](../MLXStudio/Features/Chat/ArenaView.swift) accepts a `ModelHandoff`
+  [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift) accepts a `ModelHandoff`
   (model + adapter) + a "Train again / Use in Code / Save & Use" **decision bar**
   (the retrain back-edge); (4)
-  [`TrainingConfigView`](../MLXStudio/Features/Training/TrainingConfigView.swift)
+  [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift)
   "Continue a previous fine-tune?" picker → `launchRefine(from:)` reusing the source
   config + `TrainingService.start(…, resumeAdapterFile:)` (→ mlx-lm
   `--resume-adapter-file`); (5)
-  [`SelfImproveView`](../MLXStudio/Features/SelfImprove/SelfImproveView.swift) "Use
-  this fine-tune" menu + [`ExportWizardView`](../MLXStudio/Features/Export/ExportWizardView.swift)
+  [`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift) "Use
+  this fine-tune" menu + [`ExportWizardView`](../LLMPro/Features/Export/ExportWizardView.swift)
   `ExportSource` (TrainingJob OR completed SelfImproveRun) so Practice adapters are
   exportable. `RootView` now handles `.openCodeWithModel` (selects `.code`). **Fixes
   #1–#5, build green.** Design note: hand-offs are **user-driven CTAs**, not
@@ -937,18 +937,18 @@ work that another agent might be looking for context on.
   delegates sequentially (one request in flight) — for smaller models. Build green.
 
 - **Code tab became a multi-agent Orchestrator team.** Replaced the switchable
-  single-agent flow with a **fixed five-role team** ([`TeamRole`](../MLXStudio/Services/AgentRoles.swift):
+  single-agent flow with a **fixed five-role team** ([`TeamRole`](../LLMPro/Services/AgentRoles.swift):
   orchestrator 🧭 · planner 🗺️ · researcher 🔬 · coder 💻 · ui 🎨). The user talks
   only to the Orchestrator, which delegates via `call_<role>(task)` tools; >1 in a
   turn run concurrently; depth-capped at 5. New
-  [`WebSearch`](../MLXStudio/Services/WebSearch.swift) gives the Researcher real web
+  [`WebSearch`](../LLMPro/Services/WebSearch.swift) gives the Researcher real web
   tools (`web_search` / `fetch_url` over the DuckDuckGo HTML endpoint, no API key).
-  [`AgentTools`](../MLXStudio/Services/AgentTools.swift) gained `web_search` /
+  [`AgentTools`](../LLMPro/Services/AgentTools.swift) gained `web_search` /
   `fetch_url` / `ask_user` and a per-role `specs(for:)`.
-  [`CodingAgentService`](../MLXStudio/Services/CodingAgentService.swift) rewritten as
+  [`CodingAgentService`](../LLMPro/Services/CodingAgentService.swift) rewritten as
   the orchestration engine (`runRole` / `runDelegations` / `ask_user` pause /
   per-role loops; auto-approve now defaults ON; `maxIterations` is per-role).
-  [`CodeView`](../MLXStudio/Features/Code/CodeView.swift) drops the agent picker +
+  [`CodeView`](../LLMPro/Features/Code/CodeView.swift) drops the agent picker +
   manager menu for a single shared-**Model** picker + a role-labeled, depth-indented
   transcript + a question bar. One shared `mlx_lm` model serves all roles. **Build
   green + warning-clean; `WebSearch` verified against live DuckDuckGo (9 results
@@ -959,11 +959,11 @@ work that another agent might be looking for context on.
   `SkillStore`) is now **dead code** — compiles, unreferenced; `AgentProfile` stays
   in the SwiftData schema only.
 - **Enter-to-send + message attachments in the Code tab.** (1) Replaced the chat
-  `TextEditor` with [`ChatInputView`](../MLXStudio/Features/Code/ChatInputView.swift),
+  `TextEditor` with [`ChatInputView`](../LLMPro/Features/Code/ChatInputView.swift),
   an NSTextView-backed input where **plain Return sends** and **Shift+Return inserts a
   newline** (intercepts `insertNewline:` in `doCommandBy`, checking the shift modifier);
   the big Send button is replaced by a small ↑ arrow. (2) **Attachments**:
-  [`Attachment`](../MLXStudio/Features/Code/Attachment.swift) + a paperclip button
+  [`Attachment`](../LLMPro/Features/Code/Attachment.swift) + a paperclip button
   (NSOpenPanel) and drag-and-drop onto the input add files, shown as removable chips. On
   send, each is turned into text the local model can use — text/code/doc files inlined as
   fenced blocks; **images run through on-device OCR (macOS Vision)** with the recognized
@@ -974,16 +974,16 @@ work that another agent might be looking for context on.
   the bridge; a vision backend (mlx-vlm) is a separate effort. Build green + warning-clean;
   the new input bar (Return-to-send hint + paperclip) confirmed rendering in the app.
 - **Code tab expanded into a mini-IDE.** Added a native regex-based
-  [`SyntaxHighlighter`](../MLXStudio/Core/SyntaxHighlighter.swift) (AttributedString /
+  [`SyntaxHighlighter`](../LLMPro/Core/SyntaxHighlighter.swift) (AttributedString /
   NSAttributedString, ~18 languages, no WebView/JS),
-  [`FileExplorerView`](../MLXStudio/Features/Code/FileExplorerView.swift) (project
+  [`FileExplorerView`](../LLMPro/Features/Code/FileExplorerView.swift) (project
   tree, `OutlineGroup`, bumped on transcript change),
-  [`CodeEditorView`](../MLXStudio/Features/Code/CodeEditorView.swift) (editable
+  [`CodeEditorView`](../LLMPro/Features/Code/CodeEditorView.swift) (editable
   highlighted `NSTextView` + Save/Revert), restructured `CodeView` into a 3-pane
   `HSplitView` (explorer | editor | chat) toggleable from a header sidebar button,
   syntax-highlighted diffs + `read_file` output in the transcript (`DiffText` /
   `ToolCardView.cardLanguage`), and
-  [`AgentTemplate`](../MLXStudio/Features/Code/AgentTemplate.swift) — 8
+  [`AgentTemplate`](../LLMPro/Features/Code/AgentTemplate.swift) — 8
   specialized-agent presets in the New-agent flow's "Start from a template" menu.
   **Build green + warning-clean.** VERIFIED live in the app: the 3-pane layout
   renders, the file tree expands folders + lists files, opening `Program.cs` shows
@@ -1101,33 +1101,33 @@ work that another agent might be looking for context on.
   SKILL.md skills system, both managed from inside the tab. **One agent runs at a
   time** — this is the foundation; orchestration / sub-agents are explicitly
   deferred. Two new files:
-  [`AgentProfile.swift`](../MLXStudio/Models/AgentProfile.swift) (a SwiftData
+  [`AgentProfile.swift`](../LLMPro/Models/AgentProfile.swift) (a SwiftData
   `@Model`: name / emoji / detail / model / optional adapter job / instructions /
   the auto-approve + native-tools toggles / temperature / max-tokens /
   max-iterations / `enabledSkillIDs` / createdAt, with a computed `agentSettings`
-  bridge; added to `MLXStudioApp`'s `modelContainer`) and
-  [`SkillStore.swift`](../MLXStudio/Services/SkillStore.swift) (`@MainActor
+  bridge; added to `LLMProApp`'s `modelContainer`) and
+  [`SkillStore.swift`](../LLMPro/Services/SkillStore.swift) (`@MainActor
   @Observable` manager of SKILL.md packages under the new `PathResolver.skillsDir`
   — `scan` / `create` / `save` / `delete` / `importSkill` / `contexts(for:)`; the
   folder-name slug is a STABLE id so a rename rewrites only the frontmatter and
   agent references survive). Modified:
-  [`PathResolver`](../MLXStudio/Core/PathResolver.swift) gained `skillsDir`
-  (`~/Library/Application Support/MLXStudio/skills/`);
-  [`AgentTools`](../MLXStudio/Services/AgentTools.swift) gained a `use_skill` tool
+  [`PathResolver`](../LLMPro/Core/PathResolver.swift) gained `skillsDir`
+  (`~/Library/Application Support/LLMPro/skills/`);
+  [`AgentTools`](../LLMPro/Services/AgentTools.swift) gained a `use_skill` tool
   (read-only → auto-approved; `specs(includeUseSkill:)` advertises it only when the
   agent has skills; `ToolExecutor.skills` + a `useSkill` handler return the named
   skill's instructions) — **progressive disclosure** modeled on Anthropic Skills
   (the prompt lists only name+description until the model calls `use_skill`);
-  [`CodingAgentService`](../MLXStudio/Services/CodingAgentService.swift)'s
+  [`CodingAgentService`](../LLMPro/Services/CodingAgentService.swift)'s
   `startSession(...)` now takes agentName / instructions / skills / settings and
   the system prompt appends the role + an enabled-skills list. The Code tab
-  ([`CodeView`](../MLXStudio/Features/Code/CodeView.swift)) replaced the model +
+  ([`CodeView`](../LLMPro/Features/Code/CodeView.swift)) replaced the model +
   adapter pickers with an **agent picker** + a manager menu (`slider.horizontal.3`:
   New / Edit agent, Manage skills); `prepare()` seeds a default "General coder" on
   first run and restores `@AppStorage("codeSelectedAgent")`. Two new sheets:
-  [`AgentEditorView.swift`](../MLXStudio/Features/Code/AgentEditorView.swift)
+  [`AgentEditorView.swift`](../LLMPro/Features/Code/AgentEditorView.swift)
   (create/edit a profile) and
-  [`SkillsManagerView.swift`](../MLXStudio/Features/Code/SkillsManagerView.swift)
+  [`SkillsManagerView.swift`](../LLMPro/Features/Code/SkillsManagerView.swift)
   (list/create/edit/delete skills + a `SkillEditorView`). **No other new
   app-support dirs and no new Notification.Names**; `AgentProfile` is an additive
   entity. **Honest verification: compile-verified (BUILD SUCCEEDED), new files
@@ -1142,20 +1142,20 @@ work that another agent might be looking for context on.
   `chevron.left.forwardslash.chevron.right`) that drives an agent loop with the
   user's local, optionally fine-tuned MLX model. The model reads/edits files and
   runs commands inside a user-chosen project folder. Five new files:
-  [`MLXServerService.swift`](../MLXStudio/Services/MLXServerService.swift) (runs
+  [`MLXServerService.swift`](../LLMPro/Services/MLXServerService.swift) (runs
   `python -m mlx_lm server` as a long-lived daemon — resolve model path → free
   port → spawn → poll `/health` → 1-token warm-up → `.ready`; the model loads
   ONCE and is reused per turn, finally answering the long-open model-pinning
-  question), [`OpenAIChatClient.swift`](../MLXStudio/Services/OpenAIChatClient.swift)
+  question), [`OpenAIChatClient.swift`](../LLMPro/Services/OpenAIChatClient.swift)
   (minimal non-streaming `/v1/chat/completions` client),
-  [`AgentTools.swift`](../MLXStudio/Services/AgentTools.swift) (read_file/list_dir/
+  [`AgentTools.swift`](../LLMPro/Services/AgentTools.swift) (read_file/list_dir/
   grep/write_file/edit_file/run_command toolset + `ToolExecutor` with workspace
   sandbox + 16 KB truncation + native-tools `specs` + `<tool_call>` fallback
-  parser), [`CodingAgentService.swift`](../MLXStudio/Services/CodingAgentService.swift)
+  parser), [`CodingAgentService.swift`](../LLMPro/Services/CodingAgentService.swift)
   (the loop: native `tool_calls` → `role:"tool"` results, else fallback
   `<tool_call>` text → `<tool_result>` results fed back as one user message;
   per-tool approval gate — read-only auto, write/edit/run gated), and
-  [`CodeView.swift`](../MLXStudio/Features/Code/CodeView.swift) (folder/model/
+  [`CodeView.swift`](../LLMPro/Features/Code/CodeView.swift) (folder/model/
   adapter pickers, server-status dot, Options/Advanced/Server-log disclosures,
   tool cards, inline Allow/Deny bar). `RootView.SidebarSection` gained a `.code`
   case. **Dual tool-calling** (send native `tools` AND instruct/parse the
@@ -1190,7 +1190,7 @@ work that another agent might be looking for context on.
   4. **Memory budget** — optional cap (% of ceiling) applied to training +
      inference via the new `mlx_run.py` launcher, which calls `mx.set_memory_limit`
      before exec'ing the real mlx_lm module. `MemoryService.wrap()` prepends it +
-     sets `MLXSTUDIO_MEMORY_LIMIT_BYTES`; `TrainingService` and `InferenceService`
+     sets `LLMPRO_MEMORY_LIMIT_BYTES`; `TrainingService` and `InferenceService`
      route through it (no-op when the budget is off).
   - **Fixed a pre-existing `SystemMetrics` bug**: the RAM gauges read 0/0
     everywhere (Home, Progress) because the poller was started per-view in
@@ -1320,7 +1320,7 @@ work that another agent might be looking for context on.
   `<HOME>/.lmstudio/models/<publisher>/<name>/` layout — verified against
   `~/.lmstudio/.internal/bundled-models/` (which uses `nomic-ai/nomic-embed-
   text-v1.5-GGUF/<gguf>`) and `download-jobs-info.json`'s `rootDir` field
-  (still `/Users/josh/.lmstudio/models`). So the MLX-Studio Send-to-LM-Studio
+  (still `/Users/josh/.lmstudio/models`). So the LLMPro Send-to-LM-Studio
   path doesn't need code changes — the destination is unchanged.
   Restored the user's `Qwen3.6-27B-bf16-text` (27 GB) via the same
   `cp -cRL` clonefile trick. Free disk stayed at 1.5 TB throughout (APFS
@@ -1538,7 +1538,7 @@ work that another agent might be looking for context on.
   with publisher + name fields (auto-split from the HF repoID — e.g.
   `mlx-community/Qwen3.6-27B-bf16` → publisher=`mlx-community`,
   name=`Qwen3.6-27B-bf16`; bare folder names default to publisher
-  `MLXStudio`). Backend in `ModelRegistry.installInLMStudio` uses the same
+  `LLMPro`). Backend in `ModelRegistry.installInLMStudio` uses the same
   `/bin/cp -cRL` trick as duplicate — APFS CoW + symlink dereferencing —
   so the model lands at `~/.lmstudio/models/<publisher>/<name>/` ready to
   use, with **zero extra disk** on APFS. **Verified end-to-end through
@@ -1549,7 +1549,7 @@ work that another agent might be looking for context on.
   Companion: Save & Use's fused-safetensors target got an "Also install in
   LM Studio" checkbox + name field so a freshly fine-tuned adapter can be
   fused and dropped into LM Studio in one click — lands under
-  `~/.lmstudio/models/MLXStudio/<name>/`.
+  `~/.lmstudio/models/LLMPro/<name>/`.
 - **Duplicate model (APFS clonefile) + memory-pressure mitigations.** Two
   feature requests stacked into one pass:
   1. **Duplicate any local model into a new independent entry.** New blue
@@ -1714,12 +1714,12 @@ work that another agent might be looking for context on.
   Pipeline: pull HumanEval/MBPP → baseline pass@1 → for N rounds {
   `self_improve_round.py` generates K candidates per prompt and sandbox-tests
   them, `mlx_lm lora` trains on the passers, `eval_pass_rate.py` re-measures
-  pass@1 }. New files: [`SelfImproveRun.swift`](../MLXStudio/Models/SelfImproveRun.swift),
-  [`SelfImproveService.swift`](../MLXStudio/Services/SelfImproveService.swift),
-  [`SelfImproveView.swift`](../MLXStudio/Features/SelfImprove/SelfImproveView.swift),
-  and three helpers ([`humaneval_pull.py`](../MLXStudio/Resources/helpers/humaneval_pull.py),
-  [`self_improve_round.py`](../MLXStudio/Resources/helpers/self_improve_round.py),
-  [`eval_pass_rate.py`](../MLXStudio/Resources/helpers/eval_pass_rate.py)).
+  pass@1 }. New files: [`SelfImproveRun.swift`](../LLMPro/Models/SelfImproveRun.swift),
+  [`SelfImproveService.swift`](../LLMPro/Services/SelfImproveService.swift),
+  [`SelfImproveView.swift`](../LLMPro/Features/SelfImprove/SelfImproveView.swift),
+  and three helpers ([`humaneval_pull.py`](../LLMPro/Resources/helpers/humaneval_pull.py),
+  [`self_improve_round.py`](../LLMPro/Resources/helpers/self_improve_round.py),
+  [`eval_pass_rate.py`](../LLMPro/Resources/helpers/eval_pass_rate.py)).
   Sidebar wiring + SwiftData registration in place; helpers registered in
   `PythonRuntime.installHelpers`.
 - **Doc-maintenance contract added.** `CLAUDE.md` now opens with an unmissable
@@ -1779,7 +1779,7 @@ was either unchanged or broken. Four distinct bugs, all now fixed + verified.
    for experts *under* mlp; Gemma-4 keeps routed experts at
    `layer.experts.switch_glu.down_proj` → all routed-expert writes were missed.
 
-**Fixes (in `MLXStudio/Resources/helpers/abliterate.py`):**
+**Fixes (in `LLMPro/Resources/helpers/abliterate.py`):**
 - Dequantize quantized inputs in memory via `mlx_lm.utils.dequantize_model`, ablate
   in full precision, save fp16 (config quantization keys stripped). Re-Shrink to
   recompress (Modify pipeline stage 4).
@@ -1815,7 +1815,7 @@ Prepared the repo for public release on GitHub.com:
 - **Security/privacy sweep** (Explore agent, whole tree minus `.git`): NO secrets
   (no `hf_`/`sk-`/AWS/private keys), NO hardcoded `/Users/josh` in any source file
   (only in docs, which is expected/illustrative). Verdict: safe to publish.
-- Added **`.gitignore`** (macOS, Xcode incl. the generated `MLXStudio.xcodeproj/`,
+- Added **`.gitignore`** (macOS, Xcode incl. the generated `LLMPro.xcodeproj/`,
   SPM, Python `__pycache__`/`.venv`, `.claude/settings.local.json`, runtime weights).
 - Added **`LICENSE`** (MIT, copyright holder left as `<Your Name>` placeholder).
 - Added **`INSTALL.md`** earlier this session — beginner build/run guide; linked
@@ -1829,7 +1829,7 @@ Prepared the repo for public release on GitHub.com:
   git config untouched). 142 files, no ignored patterns leaked into the tree.
 
 **Decisions (user):** MIT license, name placeholder, KEEP bundle id
-`com.josh.mlxstudio`, init+commit. **Not done (intentionally):** did NOT create
+`com.josh.llmpro`, init+commit. **Not done (intentionally):** did NOT create
 the GitHub repo or push; did NOT change the bundle id. **Before pushing:** set the
 real name in `LICENSE`, create the GitHub repo, `git remote add origin … && git
 push -u origin main`. Optionally amend the initial commit's author to your own
@@ -1874,3 +1874,37 @@ actually behave, and fixed CLAUDE.md/README which had overstated it:
   of "start with Main, the orchestrator"; anchor updated + verified.
 - Left the 8 agent .md files themselves unchanged (Main.md is still useful as a
   written orchestration playbook).
+
+### Session 2026-06-03 (cont.) — Full project rename MLXStudio → LLMPro
+
+Rebranded the entire project from "MLX Studio"/MLXStudio to **LLMPro** (display
+name + code identity + repo), per user request "no more refs to mlx-studio".
+
+- **Content:** 724 case-sensitive replacements across 57 files (`MLX Studio`→
+  `LLMPro`, `MLXStudio`→`LLMPro`, `mlxstudio`→`llmpro`, `MLXSTUDIO`→`LLMPRO`,
+  `MLX-Studio`→`LLMPro`). Preserved neighbors: `mlx_lm`, `MLXServerService`,
+  `LM Studio`/`lmstudio`, bare `MLX` (the framework).
+- **Structure (git mv, history preserved):** `MLXStudio/` → `LLMPro/`;
+  `MLXStudioApp.swift` → `LLMProApp.swift` (struct `LLMProApp`);
+  `MLXStudio.entitlements` → `LLMPro.entitlements`; `Tests/MLXStudioTests` →
+  `Tests/LLMProTests`.
+- **Build identity:** bundle id `com.josh.mlxstudio` → `com.josh.llmpro`
+  (`com.josh.llmpro.LLMPro`); `project.yml` name/paths/scheme; `.gitignore`
+  (`LLMPro.xcodeproj/`); `Log.swift` subsystem fallback.
+- **Env-var contract (Swift↔Python):** `MLXSTUDIO_*` → `LLMPRO_*` on both sides
+  (`LLMPRO_MEMORY_LIMIT_BYTES`, `LLMPRO_CACHE_LIMIT_BYTES`, `LLMPRO_MEM_LIMIT_GB`,
+  `LLMPRO_NO_AUTOTUNE`). Verified 0 leftover `MLXSTUDIO_`.
+- **Data path + migration:** `PathResolver.appSupport` now points at
+  `Application Support/LLMPro`. Added `migrateLegacyAppSupportIfNeeded` — a
+  one-time same-volume `mv` of an existing `MLXStudio` dir to `LLMPro` on first
+  launch (no copy, no re-download of the model cache; idempotent; never clobbers).
+  The only intentional surviving "MLXStudio" strings are inside this migration.
+- **Verified:** `xcodegen generate` + `xcodebuild` → `** BUILD SUCCEEDED **`,
+  0 errors. Built bundle = `com.josh.llmpro.LLMPro`, display name LLMPro.
+  Migration logic unit-simulated across all 4 cases (first-launch move, idempotent
+  relaunch, fresh install, both-exist-don't-clobber) — all PASS; real 331 GB data
+  dir left untouched by the test. NOT yet launched in the GUI (the live migration
+  fires on the user's next real launch).
+
+**Note:** product is now "LLMPro" everywhere user-facing; the on-disk legacy dir
+migrates automatically. App still wraps mlx-lm (that name is unchanged).

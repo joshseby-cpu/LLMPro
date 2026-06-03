@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test for MLX Studio's coding agent.
+"""End-to-end smoke test for LLMPro's coding agent.
 
 Faithfully mirrors the Swift implementation:
   - MLXServerService: start `python -m mlx_lm server`, poll /health, warm up.

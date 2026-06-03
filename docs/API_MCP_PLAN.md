@@ -5,7 +5,7 @@
 > ships yet — it's recorded here so the work is ready to pick up. Don't read it as
 > describing current behaviour.
 
-> Working contract for adding **API serving** and **MCP support** to MLX Studio.
+> Working contract for adding **API serving** and **MCP support** to LLMPro.
 > Authored 2026-05-31. Each build phase reads this file so all pieces fit. Once
 > the feature lands, fold the durable parts into CONTRACTS.md / ARCHITECTURE.md /
 > WORKFLOWS.md / CONVENTIONS.md and delete this file.
@@ -19,7 +19,7 @@
 2. **MCP = both directions.**
    - **Client:** the Code-tab agent team can connect to external MCP servers and
      gain their tools alongside the built-in ones.
-   - **Server:** MLX Studio exposes its own MCP server so other MCP clients
+   - **Server:** LLMPro exposes its own MCP server so other MCP clients
      (Claude Desktop, IDEs) can use its local models.
 3. **Network policy = LOCAL-ONLY.** Only **stdio** MCP servers (local
    subprocesses) and **localhost-bound** HTTP. Agents stay **offline by default**
@@ -42,12 +42,12 @@
   (SwiftData) or a JSON string field. **Bind servers to `127.0.0.1` only.**
 - **Regenerate the Xcode project after adding files** (`xcodegen generate` via
   project.yml — see tools/ and docs/BUILDING.md) and confirm `** BUILD SUCCEEDED **`.
-- **Read the logs after testing** (`Log.*` → `mlxstudio.log`); a green build is
+- **Read the logs after testing** (`Log.*` → `llmpro.log`); a green build is
   not a pass on its own.
 
 ## AppSettings additions (single source of config)
 
-Add these stored properties to `MLXStudio/Models/AppSettings.swift` (defaults keep
+Add these stored properties to `LLMPro/Models/AppSettings.swift` (defaults keep
 everything OFF/offline):
 
 ```swift
@@ -59,7 +59,7 @@ var apiServerAdapterPath: String = ""      // optional LoRA adapter dir ("" = no
 
 // --- MCP client (agents use external stdio servers) ---
 var mcpServersJSON: String = "[]"          // [MCPServerConfig] encoded as JSON
-// --- MCP server (expose MLX Studio to other clients) ---
+// --- MCP server (expose LLMPro to other clients) ---
 var mcpExposeEnabled: Bool = false         // user has turned on the exposed server
 ```
 

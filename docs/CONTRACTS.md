@@ -16,11 +16,11 @@ quickly.
 
 The app shells out to `python -m mlx_lm <subcommand>` (NOT the deprecated
 `python -m mlx_lm.<subcommand>` form). Tested against **mlx-lm 0.31.3**, installed
-into the app's bundled venv at `~/Library/Application Support/MLXStudio/runtime/.venv/`.
+into the app's bundled venv at `~/Library/Application Support/LLMPro/runtime/.venv/`.
 
 ### `mlx_lm lora` — training
 
-Used by [`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift).
+Used by [`TrainingService.swift`](../LLMPro/Services/TrainingService.swift).
 
 Invocation:
 ```
@@ -28,8 +28,8 @@ python -m mlx_lm lora -c <config.yaml>
 python -m mlx_lm lora -c <config.yaml> --resume-adapter-file <latest.safetensors>
 ```
 
-Config-file keys we generate (see [`AutoTuner.swift`](../MLXStudio/Services/AutoTuner.swift)
-and `TrainingConfig.renderYAML()` in [`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift)):
+Config-file keys we generate (see [`AutoTuner.swift`](../LLMPro/Services/AutoTuner.swift)
+and `TrainingConfig.renderYAML()` in [`TrainingService.swift`](../LLMPro/Services/TrainingService.swift)):
 
 ```yaml
 model: "<HF-repo-id-or-absolute-path>"
@@ -94,7 +94,7 @@ Iter N: Saved adapter weights to <path> and <checkpoint-path>.
 Saved final weights to <path>.
 ```
 
-Regex in [`LogStreamParser.swift`](../MLXStudio/Core/LogStreamParser.swift):
+Regex in [`LogStreamParser.swift`](../LLMPro/Core/LogStreamParser.swift):
 
 ```regex
 # train:
@@ -110,7 +110,7 @@ Iter\s+(\d+):\s+Val\s+loss\s+([\d.]+)
 --resume-adapter-file <path-to-existing-adapters.safetensors>
 ```
 
-Appended by **two** paths in [`TrainingService.swift`](../MLXStudio/Services/TrainingService.swift):
+Appended by **two** paths in [`TrainingService.swift`](../LLMPro/Services/TrainingService.swift):
 
 - `resume(job:, latestAdapterFile:, context:)` — crash-recovery resume of an
   *orphaned* job from its last checkpoint.
@@ -124,7 +124,7 @@ Appended by **two** paths in [`TrainingService.swift`](../MLXStudio/Services/Tra
 
 ### `mlx_lm generate` — inference
 
-Used by [`InferenceService.swift`](../MLXStudio/Services/InferenceService.swift).
+Used by [`InferenceService.swift`](../LLMPro/Services/InferenceService.swift).
 
 ```
 python -m mlx_lm generate \
@@ -153,7 +153,7 @@ We yield lines between the `==========` markers as streaming tokens.
 
 ### `mlx_lm fuse` — merge LoRA + GGUF export
 
-Used by [`FuseService.swift`](../MLXStudio/Services/FuseService.swift).
+Used by [`FuseService.swift`](../LLMPro/Services/FuseService.swift).
 
 ```
 python -m mlx_lm fuse \
@@ -169,7 +169,7 @@ mixtral`. For Qwen / Gemma / Phi we fall back to llama.cpp's `convert_hf_to_gguf
 
 ### `mlx_lm convert` — quantize HF model to MLX format
 
-Used by [`ConversionService.swift`](../MLXStudio/Services/ConversionService.swift).
+Used by [`ConversionService.swift`](../LLMPro/Services/ConversionService.swift).
 
 ```
 python -m mlx_lm convert \
@@ -180,7 +180,7 @@ python -m mlx_lm convert \
 
 ### `mlx_lm server` — long-lived OpenAI-compatible server
 
-Used by [`MLXServerService.swift`](../MLXStudio/Services/MLXServerService.swift) as
+Used by [`MLXServerService.swift`](../LLMPro/Services/MLXServerService.swift) as
 the coding agent's inference backbone. Unlike every other mlx-lm invocation this is
 a **daemon** — it stays running and the model loads once.
 
@@ -261,7 +261,7 @@ If the mlx-lm API changes, update `abliterate.py`'s load/dequantize/save block.
 
 ## 3. Helper script protocol
 
-All Python helpers in [`MLXStudio/Resources/helpers/`](../MLXStudio/Resources/helpers/)
+All Python helpers in [`LLMPro/Resources/helpers/`](../LLMPro/Resources/helpers/)
 follow the same conventions so Swift can parse them uniformly.
 
 ### Invocation
@@ -270,7 +270,7 @@ follow the same conventions so Swift can parse them uniformly.
 python <helper>.py <required-args...> [optional-args...]
 ```
 
-Swift side: spawn via [`ProcessRunner.swift`](../MLXStudio/Core/ProcessRunner.swift)
+Swift side: spawn via [`ProcessRunner.swift`](../LLMPro/Core/ProcessRunner.swift)
 with `PYTHONUNBUFFERED=1` in the environment so output flushes line-by-line.
 
 **`mlx_run.py` launcher — Apple-Silicon MLX memory tuning (always on).**
@@ -289,9 +289,9 @@ real module:
   run that genuinely needs more is still allowed — nothing that used to fit stops
   fitting. Raising the ceiling itself needs `sudo sysctl iogpu.wired_limit_mb`,
   which the app can't/shouldn't do, so `set_wired_limit` is clamped to the ceiling.
-- Env overrides: `MLXSTUDIO_MEMORY_LIMIT_BYTES=<N>` (the Memory-tab budget, wins
-  over the auto memory limit), `MLXSTUDIO_CACHE_LIMIT_BYTES=<M>`, and
-  `MLXSTUDIO_NO_AUTOTUNE=1` (skip all tuning, use stock MLX defaults).
+- Env overrides: `LLMPRO_MEMORY_LIMIT_BYTES=<N>` (the Memory-tab budget, wins
+  over the auto memory limit), `LLMPRO_CACHE_LIMIT_BYTES=<M>`, and
+  `LLMPRO_NO_AUTOTUNE=1` (skip all tuning, use stock MLX defaults).
 
 `TrainingService`, `InferenceService`, and `MLXServerService` all route their
 `["-m","mlx_lm",…]` argv through `MemoryService.wrap(_:)`. If `mlx_run.py` is
@@ -360,7 +360,7 @@ Every helper emits at least these three event types:
 `self_improve_round.py` and `eval_pass_rate.py` extend the base vocabulary with
 streaming per-row events so the UI can show a meaningful "Problem 7 of 20: …"
 progress without polling. Consumed by
-[`SelfImproveService.swift`](../MLXStudio/Services/SelfImproveService.swift).
+[`SelfImproveService.swift`](../LLMPro/Services/SelfImproveService.swift).
 
 ```jsonc
 {"event": "model_loaded", "ms": 14400, "with_adapter": false}
@@ -382,14 +382,14 @@ The contracts of `start / done / error` are unchanged — see above.
 
 ### `inspect_attention.py` — Inspect tab attention capture
 
-[`inspect_attention.py`](../MLXStudio/Resources/helpers/inspect_attention.py)
+[`inspect_attention.py`](../LLMPro/Resources/helpers/inspect_attention.py)
 runs ONE forward pass, dumps per-layer attention for the Inspect tab's heatmap,
 then exits. Consumed by
-[`AttentionInspectService.swift`](../MLXStudio/Services/AttentionInspectService.swift).
+[`AttentionInspectService.swift`](../LLMPro/Services/AttentionInspectService.swift).
 
 CLI: `python <helpers>/inspect_attention.py --model <ABS-PATH> --prompt <text>
 [--max-seq 64] [--layers all|0,5,10] [--head mean|<int>]`. `--model` must be an
-absolute on-disk path (Swift resolves it). Env: `HF_HOME`, `MLXSTUDIO_MEM_LIMIT_GB`
+absolute on-disk path (Swift resolves it). Env: `HF_HOME`, `LLMPRO_MEM_LIMIT_GB`
 (default 108 — self-pins MLX memory since it bypasses `mlx_run.py`), `PYTHONUNBUFFERED`.
 
 Mechanism: monkeypatches `mx.fast.scaled_dot_product_attention` (the shared, fused
@@ -409,7 +409,7 @@ Memory: attention is O(L²·heads·layers) — `--max-seq` capped at 64, heads a
 by default, to stay under the Metal ceiling. The Inspect **Thinking** pane needs no
 helper (reuses the live server's `reasoning` SSE delta via `OpenAIChatClient.stream`
 + `chat_template_kwargs:{enable_thinking:true}`); the **Weights** pane is pure-Swift
-safetensors-header parsing ([`Core/SafetensorsHeader.swift`](../MLXStudio/Core/SafetensorsHeader.swift)).
+safetensors-header parsing ([`Core/SafetensorsHeader.swift`](../LLMPro/Core/SafetensorsHeader.swift)).
 
 ### Exit codes
 
@@ -426,8 +426,8 @@ safetensors-header parsing ([`Core/SafetensorsHeader.swift`](../MLXStudio/Core/S
 ### Swift side parsing pattern
 
 Every service that wraps a helper uses this pattern (see
-[`DownloadService.swift`](../MLXStudio/Services/DownloadService.swift) and
-[`DatasetPrepService.swift`](../MLXStudio/Services/DatasetPrepService.swift)):
+[`DownloadService.swift`](../LLMPro/Services/DownloadService.swift) and
+[`DatasetPrepService.swift`](../LLMPro/Services/DatasetPrepService.swift)):
 
 ```swift
 _ = try await ProcessRunner.runCapturing(
@@ -458,7 +458,7 @@ private func handle(line: String, id: UUID) {
 
 ## 4. HuggingFace Hub API
 
-Used by [`HuggingFaceClient.swift`](../MLXStudio/Services/HuggingFaceClient.swift).
+Used by [`HuggingFaceClient.swift`](../LLMPro/Services/HuggingFaceClient.swift).
 No special SDK — plain `URLSession` with `Bearer` auth from Keychain when a token
 exists.
 
@@ -519,7 +519,7 @@ in the helper's stderr but it still works.
 
 ## 5. Ollama CLI
 
-Used by [`FuseService.swift`](../MLXStudio/Services/FuseService.swift) in
+Used by [`FuseService.swift`](../LLMPro/Services/FuseService.swift) in
 `installInOllama()`.
 
 We locate the binary by trying:
@@ -548,11 +548,11 @@ for the exact strings.
 
 ## 6. Filesystem layout (the canonical paths)
 
-Defined in [`PathResolver.swift`](../MLXStudio/Core/PathResolver.swift). Other code
+Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 **must** route every path lookup through here.
 
 ```
-~/Library/Application Support/MLXStudio/
+~/Library/Application Support/LLMPro/
 ├── runtime/
 │   ├── uv                          ← bundled uv binary (when shipped)
 │   ├── .venv/                      ← uv-managed Python 3.11 venv
@@ -654,7 +654,7 @@ that folder. New persistence is the `@AppStorage("codeWorkspacePath")`,
 `@AppStorage("codeOrchestratorModel")`, and `@AppStorage("codeAdapterJobID")`
 UserDefaults keys, plus `AgentSettings.useSkills` (the skills on/off toggle).
 
-`MLXStudio/runtime/.venv/` is path-pinned (uv venvs hardcode the absolute path of
+`LLMPro/runtime/.venv/` is path-pinned (uv venvs hardcode the absolute path of
 the Python interpreter in shebang lines). If the user moves the app or rename
 the support dir, the venv breaks — `bootstrapIfNeeded()` would need to detect
 and recreate it. Not currently implemented.
@@ -663,7 +663,7 @@ and recreate it. Not currently implemented.
 
 ## 7. SwiftData schema
 
-Defined in `MLXStudio/Models/`. SwiftData manages migration automatically. **If
+Defined in `LLMPro/Models/`. SwiftData manages migration automatically. **If
 you change a `@Model` field, expect existing user data to need a manual migration**
 — there's no migration strategy in place yet. For now, prefer additive changes.
 
@@ -746,7 +746,7 @@ inspection (same pattern as `TrainingJob.writeSidecar`).
 ### `AgentProfile` (`@Model`)
 
 One per saved Code-tab agent. Additive entity (consistent with the additive-only
-stance above); registered in `MLXStudioApp`'s `modelContainer(for:)` list.
+stance above); registered in `LLMProApp`'s `modelContainer(for:)` list.
 
 ```swift
 id: UUID @Attribute(.unique)
@@ -780,21 +780,21 @@ Currently defined but underused. Keep them; we'll need them when:
 ## 8. Notification.Name extensions (cross-tab events)
 
 Declared next to the views that send them, listened-to in
-[`RootView.swift`](../MLXStudio/App/RootView.swift). Adding a new one is fine; just
+[`RootView.swift`](../LLMPro/App/RootView.swift). Adding a new one is fine; just
 keep them sparse — see [`CONVENTIONS.md`](CONVENTIONS.md).
 
 Current set:
 
 ```swift
 // DashboardView
-Notification.Name("MLXStudio.switchSidebar")        // object: SidebarSection
+Notification.Name("LLMPro.switchSidebar")        // object: SidebarSection
 // TrainingConfigView
-Notification.Name("MLXStudio.switchToMonitor")      // no payload
+Notification.Name("LLMPro.switchToMonitor")      // no payload
 // ModelDetailView
-Notification.Name("MLXStudio.openTrainingWithModel") // object: String (repoID)
-Notification.Name("MLXStudio.openChatWithModel")    // object: ModelHandoff OR String (see below)
+Notification.Name("LLMPro.openTrainingWithModel") // object: String (repoID)
+Notification.Name("LLMPro.openChatWithModel")    // object: ModelHandoff OR String (see below)
 // LoopHandoff.swift
-Notification.Name("MLXStudio.openCodeWithModel")    // object: ModelHandoff OR String (see below)
+Notification.Name("LLMPro.openCodeWithModel")    // object: ModelHandoff OR String (see below)
 ```
 
 These carry the **feedback-loop hand-off** — moving a fine-tuned model (+adapter)
@@ -804,7 +804,7 @@ for the full edge map.
 
 #### `ModelHandoff` (the hand-off payload)
 
-Declared in [`LoopHandoff.swift`](../MLXStudio/Core/LoopHandoff.swift):
+Declared in [`LoopHandoff.swift`](../LLMPro/Core/LoopHandoff.swift):
 
 ```swift
 struct ModelHandoff: Sendable {
@@ -843,9 +843,9 @@ keys plus the `AgentProfile` SwiftData entity (see §6, §7).
 
 The Code tab talks to the local `mlx_lm server` (see §1) over the OpenAI chat
 subset, and runs a tool-use loop on top of it. Both halves are contracts the agent
-depends on. Consumers: [`OpenAIChatClient.swift`](../MLXStudio/Services/OpenAIChatClient.swift),
-[`AgentTools.swift`](../MLXStudio/Services/AgentTools.swift),
-[`CodingAgentService.swift`](../MLXStudio/Services/CodingAgentService.swift).
+depends on. Consumers: [`OpenAIChatClient.swift`](../LLMPro/Services/OpenAIChatClient.swift),
+[`AgentTools.swift`](../LLMPro/Services/AgentTools.swift),
+[`CodingAgentService.swift`](../LLMPro/Services/CodingAgentService.swift).
 
 ### Request / response (the OpenAI subset we use)
 
@@ -953,7 +953,7 @@ intercepted in `CodingAgentService`, not the executor.
 ### The Orchestrator team + delegation tools
 
 The Code tab runs a **fixed five-role team** (`TeamRole`: orchestrator, planner,
-researcher, coder, ui — see [`AgentRoles.swift`](../MLXStudio/Services/AgentRoles.swift)).
+researcher, coder, ui — see [`AgentRoles.swift`](../LLMPro/Services/AgentRoles.swift)).
 Roles call each other through **delegation tools** named `call_<role>(task)`, each
 taking one `task` string (the callee does **not** see the caller's conversation).
 Like `ask_user` / `todo_write`, delegation calls are **intercepted by the
@@ -1044,7 +1044,7 @@ can read them.
 name to its instructions.
 
 **Seeding.** `SkillStore.installDefaultsAndScan()` runs at launch from
-`MLXStudioApp`'s `.task`. It scans `skillsDir` and, on the very first launch only
+`LLMProApp`'s `.task`. It scans `skillsDir` and, on the very first launch only
 (guarded by the `didSeedExampleSkills` `UserDefaults` flag so deletions don't
 reappear), seeds two instruction-only example skills: `conventional-commits` and
 `code-reviewer`.
@@ -1062,9 +1062,9 @@ local Markdown files with no network dependency.
 ### Agent markdown file format (team agents)
 
 The five Code-tab roles (orchestrator, planner, researcher, coder, ui) are
-defined by one Markdown file each — bundled at `MLXStudio/Resources/agents/<role>.md`
-and seeded into `~/Library/Application Support/MLXStudio/agents/` (`PathResolver.agentsDir`)
-by [`AgentStore`](../MLXStudio/Services/AgentStore.swift). The copy happens **only if
+defined by one Markdown file each — bundled at `LLMPro/Resources/agents/<role>.md`
+and seeded into `~/Library/Application Support/LLMPro/agents/` (`PathResolver.agentsDir`)
+by [`AgentStore`](../LLMPro/Services/AgentStore.swift). The copy happens **only if
 the file is missing** — unlike the Python helpers (refreshed every launch), agent
 files are seeded once so **user edits persist across launches**. `TeamRole` reads
 the parsed result from `AgentStore.overrides[<role>]`; each field falls back to a
@@ -1112,7 +1112,7 @@ Format rules (parsed by `AgentStore.parse`):
 - A file with no frontmatter is treated as an all-body prompt. A missing or
   unparseable file → the role uses its compiled-in defaults.
 
-The editor is [`AgentsManagerView`](../MLXStudio/Features/Code/AgentsManagerView.swift)
+The editor is [`AgentsManagerView`](../LLMPro/Features/Code/AgentsManagerView.swift)
 (Code tab → Options → "Edit team agents…"): edit the raw markdown, **Save** (writes
 the file + reloads `AgentStore` so the next run obeys it), **Reset to default**
 (re-copies the bundled version), **Show in Finder**. It edits the raw markdown via

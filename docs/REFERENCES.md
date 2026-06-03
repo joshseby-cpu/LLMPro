@@ -1,7 +1,7 @@
 # Reference projects (prior art & upstream)
 
 > 📝 **Maintainers**: this doc is *context*, not a contract. It lists the external
-> projects that informed MLX Studio's design, and the one we actually depend on at
+> projects that informed LLMPro's design, and the one we actually depend on at
 > runtime. When you add a feature that borrows a pattern from one of these — or
 > when you reach for "how does $TOOL do this?" — note the link here so the next
 > agent has the same map. Nothing here is imported except **mlx** (see
@@ -9,7 +9,7 @@
 > we ship. Some entries are pointers a maintainer supplied for context / future
 > direction — they need not have shaped a shipped feature yet.
 
-MLX Studio is one closed feedback loop — **download → fine-tune → test → use in the
+LLMPro is one closed feedback loop — **download → fine-tune → test → use in the
 Code agent → retrain** (see [`CONCEPT.md`](CONCEPT.md)). Each stage has well-known
 open-source prior art. These are the projects we looked at while building, grouped
 by the stage / concern they map to.
@@ -37,8 +37,8 @@ run loop, and reasoning/chain-of-thought handling. See
 | **claw-code** — <https://github.com/ultraworkers/claw-code> | Lightweight LLM agentic-coding harness — reference for a small, local-first coding agent loop. |
 | **opencode** — <https://github.com/anomalyco/opencode> | Open agentic coding assistant — reference for tool design and the edit/run/approve flow. |
 | **pi** — <https://github.com/earendil-works/pi> | Coding-agent with on-demand **skills** (`/skill:name`) and TypeScript **extensions** — a direct influence on our Agent Skills model (SKILL.md packages + progressive disclosure). |
-| **autoresearch-mlx** — <https://github.com/trevin-creator/autoresearch-mlx> | Fixed-time **autonomous research/agent loops on MLX**. An MLX-native autonomous-loop reference — pointer for time-boxed agent runs: the same instinct behind Teach's Quick/Standard/Thorough budgets ([`AutoTuner`](../MLXStudio/Services/AutoTuner.swift) `TrainingDuration`) and a candidate shape for a time-budgeted Code/Practice run. |
-| **query-llm** — <https://github.com/ariya/query-llm> | Asking questions with **chain-of-thought** (and RAG) against local LLMs. Reference for the Code agent's reasoning path — the `reasoning`-delta / `letModelThink` handling in [`OpenAIChatClient`](../MLXStudio/Services/OpenAIChatClient.swift) + [`CodingAgentService`](../MLXStudio/Services/CodingAgentService.swift) — and for CoT prompting in the Arena. |
+| **autoresearch-mlx** — <https://github.com/trevin-creator/autoresearch-mlx> | Fixed-time **autonomous research/agent loops on MLX**. An MLX-native autonomous-loop reference — pointer for time-boxed agent runs: the same instinct behind Teach's Quick/Standard/Thorough budgets ([`AutoTuner`](../LLMPro/Services/AutoTuner.swift) `TrainingDuration`) and a candidate shape for a time-budgeted Code/Practice run. |
+| **query-llm** — <https://github.com/ariya/query-llm> | Asking questions with **chain-of-thought** (and RAG) against local LLMs. Reference for the Code agent's reasoning path — the `reasoning`-delta / `letModelThink` handling in [`OpenAIChatClient`](../LLMPro/Services/OpenAIChatClient.swift) + [`CodingAgentService`](../LLMPro/Services/CodingAgentService.swift) — and for CoT prompting in the Arena. |
 
 Adjacent specs we follow for the skills + agents format (linked where used):
 OpenAI Codex Skills and Anthropic Agent Skills — see the SKILL.md format in
@@ -79,7 +79,7 @@ These are the richer techniques we'd reach for if/when we go further.
 
 | Project | Relevance |
 |---|---|
-| **Flowise** — <https://github.com/FlowiseAI/Flowise> | Visual builder for LLM agents/flows. A UX *contrast*: MLX Studio deliberately uses **editable Markdown files** for agents and skills (CRUD + linking) rather than a node graph — but Flowise is the reference point for the agent-manager problem space. |
+| **Flowise** — <https://github.com/FlowiseAI/Flowise> | Visual builder for LLM agents/flows. A UX *contrast*: LLMPro deliberately uses **editable Markdown files** for agents and skills (CRUD + linking) rather than a node graph — but Flowise is the reference point for the agent-manager problem space. |
 
 ## ⑦ Visualization (Progress charts / Practice trend)
 
