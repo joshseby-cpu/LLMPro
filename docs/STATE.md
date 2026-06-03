@@ -1908,3 +1908,29 @@ name + code identity + repo), per user request "no more refs to mlx-studio".
 
 **Note:** product is now "LLMPro" everywhere user-facing; the on-disk legacy dir
 migrates automatically. App still wraps mlx-lm (that name is unchanged).
+
+### Session 2026-06-03 (cont.) — Rebrand follow-ups found by live testing
+
+Launched the renamed LLMPro.app on the real 331 GB data dir and verified end-to-end.
+Two latent rebrand bugs surfaced (neither caught by the build) and were fixed:
+
+1. **First-launch venv re-create hard-failed.** After the 331 GB move, the cold
+   `import mlx_lm` verify was slow, so bootstrap fell through to `uv venv` and
+   errored "a virtual environment already exists". Fixed by adding `--clear`
+   (`PythonRuntime.bootstrap`) so venv creation is idempotent. Self-heals on the
+   next launch regardless; this removes the scary first-launch error.
+2. **UserDefaults didn't survive the bundle-id change** (`com.josh.mlxstudio.MLXStudio`
+   → `com.josh.llmpro.LLMPro`). The renamed app read empty defaults → re-showed
+   First Run, would re-seed example skills, forgot the Code model/workspace. Added
+   `Core/LegacyMigration.swift` (`migrateUserDefaultsIfNeeded`), called from
+   `LLMProApp.init()` before any view reads `@AppStorage`. Copies non-`NS*` keys
+   from the legacy domain once (idempotent flag `didMigrateFromMLXStudioDefaults`;
+   never overwrites a key already set in the new domain).
+
+**Verified live:** data dir migrated (legacy gone, LLMPro present, 331 GB, venv
+`import mlx_lm 0.31.3` OK); clean relaunch 0 ERROR/FAULT, no .ips; UserDefaults
+migration sets firstRunComplete=1 + didSeedExampleSkills=1 + carries
+codeOrchestratorModel/codeWorkspacePath. **NOT done:** interactive click-through of
+each tab's UI/Options — the computer-use MCP (native screenshot/click) is
+disconnected this session; only browser controllers are available, which can't
+drive a native SwiftUI app. Needs computer-use reconnected to complete.
