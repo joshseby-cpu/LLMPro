@@ -59,10 +59,22 @@ of any local model, no ML background required.
 
 ![Inspect](docs/screenshots/inspect.png)
 
+### Practice
+Recursive self-improvement: the model attempts coding problems, the ones it solves
+(verified by real unit tests) become the next round's training data — and pass@1 is
+re-measured each round.
+
+![Practice](docs/screenshots/practice.png)
+
+### Fusion
+Merge two models into a new one (SLERP / linear / TIES / DARE-TIES). The result
+shows up as a brand-new model in your Models tab; the originals stay untouched.
+
+![Fusion](docs/screenshots/fuse.png)
+
 > More sections — **Lessons** (dataset catalog + editor), **Try it out** (base-vs-
-> fine-tune arena), **Practice** (recursive self-improvement), **Fusion** (model
-> merging), **Memory**, and **Save & Use** (export to Ollama / LM Studio) — are
-> covered in [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
+> fine-tune arena), **Memory**, and **Save & Use** (export to Ollama / LM Studio) —
+> are covered in [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 
 ---
 
