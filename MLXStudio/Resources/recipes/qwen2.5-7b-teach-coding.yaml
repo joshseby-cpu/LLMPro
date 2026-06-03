@@ -1,0 +1,27 @@
+# Teach Qwen2.5-7B-Instruct (general) to be a strong coding assistant.
+# This is the recommended 7B path — Qwen's instruction tuning is robust, so LoRA grafting
+# of code skill converges quickly.
+#
+# Expected outcome on M-series w/ 16 GB: ~3-8 tok/s training, ~90 min for 600 iters.
+model: "mlx-community/Qwen2.5-7B-Instruct-4bit"
+train: true
+fine_tune_type: lora
+seed: 0
+batch_size: 1
+iters: 600
+learning_rate: 1.0e-5
+num_layers: 24
+grad_accumulation_steps: 4
+max_seq_length: 4096
+val_batches: 25
+steps_per_report: 10
+steps_per_eval: 75
+save_every: 150
+grad_checkpoint: true
+mask_prompt: true
+optimizer: adamw
+lora_parameters:
+  keys: ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj"]
+  rank: 16
+  scale: 32.0
+  dropout: 0.05
