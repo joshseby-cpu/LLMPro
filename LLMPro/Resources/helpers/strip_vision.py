@@ -270,11 +270,26 @@ def main() -> int:
     # MiniCPM-V style). Gemma-4 needs the nested config kept intact — flatten
     # there empirically breaks inference, same way the prefix strip does.
     if not is_gemma4:
+        top_model_type = new_cfg.get("model_type", "")
         text_config = new_cfg.pop("text_config", None)
         if isinstance(text_config, dict):
             for k, v in text_config.items():
-                if k not in new_cfg or k == "model_type":
+                # Lift only keys the top level doesn't already have. We must NOT
+                # let the nested `model_type` overwrite the top-level one: many
+                # VLM wrappers tag the inner LM with a `_text` suffix variant
+                # (e.g. qwen3_5 → text_config.model_type == "qwen3_5_text") that
+                # mlx-lm's registry does NOT know — flattening it up made
+                # downstream `mlx_lm convert` (the Shrink stage) fail with
+                # "Model type qwen3_5_text not supported". The top-level
+                # model_type is the one loaders recognize; keep it.
+                if k not in new_cfg:
                     new_cfg[k] = v
+            # If the wrapper had no usable top-level model_type, fall back to the
+            # nested one with any trailing "_text" stripped to its base arch.
+            if not top_model_type:
+                nested = (text_config.get("model_type") or "")
+                if nested:
+                    new_cfg["model_type"] = nested[:-5] if nested.endswith("_text") else nested
             for k in ("audio_config", "vision_tower", "image_processor_config",
                       "audio_token_id", "boa_token_id", "boi_token_id",
                       "eoa_token_id", "eoa_token_index", "eoi_token_id",

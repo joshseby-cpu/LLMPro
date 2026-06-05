@@ -2005,3 +2005,24 @@ codeOrchestratorModel/codeWorkspacePath. **NOT done:** interactive click-through
 each tab's UI/Options — the computer-use MCP (native screenshot/click) is
 disconnected this session; only browser controllers are available, which can't
 drive a native SwiftUI app. Needs computer-use reconnected to complete.
+
+### Session 2026-06-05 — Fix strip-vision → shrink on Qwen3.5-family VLMs
+
+**Bug (from user's log):** modifying Qwen3.6-27B with strip-vision + shrink failed:
+`mlx_lm convert … -q` → `ValueError: Model type qwen3_5_text not supported.`
+
+**Cause:** `strip_vision.py`'s generic (non-gemma4) flatten path lifted
+`text_config` to top level and let the nested `model_type` overwrite the top-level
+one (`or k == "model_type"`). Qwen3.5 VLMs tag the inner LM `qwen3_5_text` — a
+variant mlx-lm's registry doesn't know — so the stripped config advertised an
+unsupported type and the Shrink stage (`mlx_lm convert`) bailed.
+
+**Fix:** flatten lifts only keys the top level lacks; the top-level `model_type`
+(`qwen3_5`, which loaders recognize) is preserved. Fallback: if there's no
+top-level model_type, use the nested one with a trailing `_text` stripped.
+
+**Verified end-to-end on the real cached Qwen3.6-27B-bf16:** strip → stripped
+config `model_type: qwen3_5`, `architectures: [Qwen3_5ForCausalLM]`, no text_config;
+then the exact failing `mlx_lm convert -q --q-bits 8` **completed** —
+"Quantized model with 8.501 bits per weight", 0 "not supported" errors. gemma-4
+path untouched (still keeps its nested config).
