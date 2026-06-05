@@ -116,3 +116,9 @@ struct ModelInspectorView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Inspect") {
+    ModelInspectorView().previewEnvironment()
+}
+#endif

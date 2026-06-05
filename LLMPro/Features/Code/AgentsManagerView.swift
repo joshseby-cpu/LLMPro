@@ -224,3 +224,9 @@ struct AgentsManagerView: View {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }
+
+#if DEBUG
+#Preview("Team agents") {
+    AgentsManagerView().previewEnvironment()
+}
+#endif

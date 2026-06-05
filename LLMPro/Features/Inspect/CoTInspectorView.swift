@@ -215,3 +215,10 @@ struct CoTInspectorView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Thinking") {
+    CoTInspectorView(model: PreviewSupport.sampleDetectedModel)
+        .previewEnvironment()
+}
+#endif

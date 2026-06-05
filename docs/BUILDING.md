@@ -168,6 +168,20 @@ Common dev-loop tasks and how to do them quickly.
 Just hit ⌘R in Xcode. If you've added a new file, do
 `xcodegen generate` first so XcodeGen picks it up.
 
+### "I want to use the SwiftUI canvas / previews"
+
+Previews are enabled (`ENABLE_PREVIEWS: YES` in `project.yml`) and every
+view-bearing file carries a `#Preview` built via `View.previewEnvironment()` (the
+DEBUG-only scaffold in [`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift)
+— an in-memory `ModelContainer` + seeded samples + the real
+`PythonRuntime.shared`/`JobRegistry.shared` singletons). Open a view file in Xcode
+and use the canvas (⌥⌘↩ / "Editor → Canvas"). There is **no headless
+preview-render CLI on macOS** — the canvas is the check. A Debug `xcodebuild`
+compiles the `#Preview` blocks (they live behind `#if DEBUG`), so a clean Debug
+build confirms they at least type-check; visual rendering is an Xcode-GUI step. To
+add a preview to a new view, see
+[`EXTENDING.md`](EXTENDING.md#add-a-preview-to-a-new-view).
+
 ### "I edited a Python helper and want to test"
 
 If the app is running, just relaunch it — `bootstrapIfNeeded()` copies helpers
@@ -247,6 +261,30 @@ Task { @MainActor in
     if let job = fetchJob(id: jobID, context: context) { … }
 }
 ```
+
+### SwiftUI canvas fails with "unable to type-check this expression in reasonable time"
+
+A view's `#Preview` fails in the Xcode canvas with *"the compiler is unable to
+type-check this expression in reasonable time"* even though a plain `xcodebuild`
+succeeded. The preview-dylib compiler type-checks **much more strictly** than the
+normal build, so a `body` can pass `xcodebuild` and still blow the canvas budget
+(usually a long `.alert`/`.sheet`/`.onReceive` chain, an inline `Binding(get:set:)`,
+or an `enumerated()`-based `ForEach`). Find the offending expression with a **clean**
+diagnostic build:
+
+```bash
+xcodebuild -project LLMPro.xcodeproj -scheme LLMPro -configuration Debug \
+  -destination 'platform=macOS' clean build \
+  OTHER_SWIFT_FLAGS="-Xfrontend -warn-long-expression-type-checking=80 \
+                     -Xfrontend -warn-long-function-bodies=80"
+```
+
+(Incremental builds cache and hide these times — you need `clean`.) Then apply the
+behavior-preserving fix for whichever anti-pattern it flags (lift inline `Binding`s
+out of `body`, split long modifier chains into named `ViewModifier` structs, map
+`enumerated()` tails to `Core/IndexedLogLine`, use `Binding.rounding` for Int
+sliders). Full list + rationale:
+[`CONVENTIONS.md`](CONVENTIONS.md#preview-type-checker-anti-patterns-a-plain-build-is-not-enough).
 
 ### App icon is wrong / shows generic Xcode placeholder
 

@@ -136,3 +136,10 @@ struct DatasetRowEditorView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Edit lesson") {
+    DatasetRowEditorView(initial: PreviewSupport.sampleChatRow, isNew: false) { _ in }
+        .previewEnvironment()
+}
+#endif

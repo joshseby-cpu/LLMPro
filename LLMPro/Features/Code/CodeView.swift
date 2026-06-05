@@ -952,3 +952,9 @@ private struct PlanView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Code") {
+    CodeView().previewEnvironment()
+}
+#endif

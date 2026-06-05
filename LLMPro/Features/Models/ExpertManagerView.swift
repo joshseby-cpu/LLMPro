@@ -457,3 +457,10 @@ struct ExpertManagerView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Manage experts") {
+    ExpertManagerView(model: PreviewSupport.sampleMoEModel)
+        .previewEnvironment()
+}
+#endif

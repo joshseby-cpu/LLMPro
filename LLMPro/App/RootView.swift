@@ -73,21 +73,7 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom) {
             runtimeStatusFooter
         }
-        .onReceive(NotificationCenter.default.publisher(for: .switchSidebar)) { note in
-            if let section = note.object as? SidebarSection { selection = section }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .switchToMonitor)) { _ in
-            selection = .monitor
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openTrainingWithModel)) { _ in
-            selection = .training
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openChatWithModel)) { _ in
-            selection = .chat
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openCodeWithModel)) { _ in
-            selection = .code
-        }
+        .modifier(SidebarNotificationRouter(selection: $selection))
     }
 
     @ViewBuilder
@@ -126,3 +112,37 @@ struct RootView: View {
         .background(.bar)
     }
 }
+
+/// Routes the cross-tab `switch*`/`open*With*` notifications to the sidebar's
+/// `selection`. Pulled out of `RootView.sidebar` because a stack of six
+/// `.onReceive` modifiers (each with a closure) on one expression is a
+/// type-check hot spot the preview compiler is especially sensitive to. Behavior
+/// is unchanged — the same notifications drive the same selection.
+private struct SidebarNotificationRouter: ViewModifier {
+    @Binding var selection: SidebarSection
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .switchSidebar)) { note in
+                if let section = note.object as? SidebarSection { selection = section }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .switchToMonitor)) { _ in
+                selection = .monitor
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openTrainingWithModel)) { _ in
+                selection = .training
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openChatWithModel)) { _ in
+                selection = .chat
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openCodeWithModel)) { _ in
+                selection = .code
+            }
+    }
+}
+
+#if DEBUG
+#Preview("App") {
+    RootView().previewEnvironment()
+}
+#endif

@@ -93,3 +93,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 }
+
+#if DEBUG
+#Preview("Settings") {
+    SettingsView().previewEnvironment()
+}
+#endif

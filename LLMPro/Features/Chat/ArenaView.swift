@@ -155,3 +155,9 @@ struct ArenaView: View {
         adapterSession.send(chosen)
     }
 }
+
+#if DEBUG
+#Preview("Try it out") {
+    ArenaView().previewEnvironment()
+}
+#endif

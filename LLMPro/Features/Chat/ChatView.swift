@@ -67,3 +67,10 @@ private struct MessageBubble: View {
                     in: RoundedRectangle(cornerRadius: 8))
     }
 }
+
+#if DEBUG
+#Preview("Chat pane") {
+    ChatPaneView(session: PreviewSupport.sampleChatSession)
+        .previewEnvironment()
+}
+#endif

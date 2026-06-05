@@ -65,3 +65,10 @@ struct ChatInputView: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+#Preview("Chat input") {
+    ChatInputView(text: .constant("Ask the team to build a feature…"), onSubmit: {})
+        .previewEnvironment()
+}
+#endif

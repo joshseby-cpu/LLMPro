@@ -945,3 +945,9 @@ private struct ExpertPickerGrid: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Teach") {
+    TrainingConfigView().previewEnvironment()
+}
+#endif

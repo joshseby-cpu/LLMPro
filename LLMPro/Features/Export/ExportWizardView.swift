@@ -296,3 +296,9 @@ struct ExportWizardView: View {
         if let writeError { throw writeError }
     }
 }
+
+#if DEBUG
+#Preview("Save & Use") {
+    ExportWizardView().previewEnvironment()
+}
+#endif

@@ -53,3 +53,10 @@ struct MarkdownEditor: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+#Preview("Markdown editor") {
+    MarkdownEditor(text: .constant("# SKILL\n\nDescribe the skill here."))
+        .previewEnvironment()
+}
+#endif

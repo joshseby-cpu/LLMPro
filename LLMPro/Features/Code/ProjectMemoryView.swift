@@ -130,3 +130,10 @@ struct ProjectMemoryView: View {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }
+
+#if DEBUG
+#Preview("Project memory") {
+    ProjectMemoryView(workspace: PreviewSupport.sampleWorkspace)
+        .previewEnvironment()
+}
+#endif

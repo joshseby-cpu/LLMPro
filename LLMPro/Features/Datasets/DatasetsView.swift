@@ -39,62 +39,49 @@ struct DatasetsView: View {
                 .padding(16)
             }
             .navigationTitle("Datasets")
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        createBlankDataset()
-                    } label: {
-                        Label("New blank…", systemImage: "plus.square")
-                    }
-                    .help("Create an empty dataset and add rows yourself")
-                    Button {
-                        showingHFSearch = true
-                    } label: {
-                        Label("Search HuggingFace…", systemImage: "magnifyingglass")
-                    }
-                    .help("Find any dataset on HuggingFace and download it")
-                    Button { importer = true } label: { Label("Import file…", systemImage: "tray.and.arrow.down") }
-                }
-            }
-            .sheet(isPresented: $showingHFSearch) {
-                HuggingFaceDatasetSearchView()
-            }
-            .sheet(item: $editingDataset) { ds in
-                DatasetDetailView(dataset: ds)
-            }
-            .sheet(item: $shrinkTarget) { ds in
-                shrinkSheet(for: ds)
-                    .frame(minWidth: 480, minHeight: 380)
-            }
-            .alert("Rename dataset", isPresented: renameBinding, presenting: renameTarget) { ds in
-                TextField("Name", text: $renameDraft)
-                Button("Save") {
-                    let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty { ds.name = trimmed; try? modelContext.save() }
-                    renameTarget = nil
-                }
-                Button("Cancel", role: .cancel) { renameTarget = nil }
-            }
-            .alert("Delete dataset?", isPresented: deletionBinding, presenting: deletionTarget) { ds in
-                Button("Delete", role: .destructive) {
+            .toolbar { datasetsToolbar }
+            .modifier(DatasetsPresentationModifier(
+                showingHFSearch: $showingHFSearch,
+                editingDataset: $editingDataset,
+                shrinkTarget: $shrinkTarget,
+                shrinkSheet: { ds in AnyView(shrinkSheet(for: ds).frame(minWidth: 480, minHeight: 380)) },
+                renamePresented: renameBinding,
+                renameTarget: renameTarget,
+                renameDraft: $renameDraft,
+                onRename: { ds, newName in ds.name = newName; try? modelContext.save() },
+                onClearRename: { renameTarget = nil },
+                deletionPresented: deletionBinding,
+                deletionTarget: deletionTarget,
+                onDelete: { ds in
                     try? FileManager.default.removeItem(at: ds.directoryURL)
                     modelContext.delete(ds)
                     try? modelContext.save()
-                    deletionTarget = nil
-                }
-                Button("Cancel", role: .cancel) { deletionTarget = nil }
-            } message: { ds in
-                Text("Removes \"\(ds.name)\" and all its lesson files from this Mac. You can't undo this.")
+                },
+                onClearDeletion: { deletionTarget = nil },
+                importer: $importer,
+                onImport: handleImport,
+                prepHistoryCount: prep.history.count,
+                onPrepHistoryChange: registerCompletedPreps
+            ))
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var datasetsToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                createBlankDataset()
+            } label: {
+                Label("New blank…", systemImage: "plus.square")
             }
-            .fileImporter(isPresented: $importer,
-                          allowedContentTypes: [UTType.fileURL, UTType.directory, UTType.json,
-                                                UTType(filenameExtension: "jsonl") ?? .data],
-                          allowsMultipleSelection: false) { result in
-                handleImport(result)
+            .help("Create an empty dataset and add rows yourself")
+            Button {
+                showingHFSearch = true
+            } label: {
+                Label("Search HuggingFace…", systemImage: "magnifyingglass")
             }
-            .onChange(of: prep.history.count) { _, _ in
-                registerCompletedPreps()
-            }
+            .help("Find any dataset on HuggingFace and download it")
+            Button { importer = true } label: { Label("Import file…", systemImage: "tray.and.arrow.down") }
         }
     }
 
@@ -472,6 +459,80 @@ struct DatasetsView: View {
     }
 }
 
+// MARK: - Presentation-modifier group
+//
+// `DatasetsView.body` previously hung three `.sheet`s, two `presenting:` alerts
+// (each with inline action closures touching `modelContext`), a `.fileImporter`,
+// and an `.onChange` off one `NavigationStack` expression — ~277ms to type-check
+// before the SwiftUI preview compiler even adds its `__designTimeString`
+// instrumentation, which is what tips the canvas over the work limit. Moving the
+// whole presentation chain into this `ViewModifier` (with the state passed in as
+// bindings + closures, so behavior is identical) makes `body` a small skeleton
+// and gives this modifier its own fast `body(content:)` type-check unit.
+private struct DatasetsPresentationModifier: ViewModifier {
+    let showingHFSearch: Binding<Bool>
+    let editingDataset: Binding<DatasetRecord?>
+    let shrinkTarget: Binding<DatasetRecord?>
+    let shrinkSheet: (DatasetRecord) -> AnyView
+    let renamePresented: Binding<Bool>
+    let renameTarget: DatasetRecord?
+    let renameDraft: Binding<String>
+    let onRename: (DatasetRecord, String) -> Void
+    let onClearRename: () -> Void
+    let deletionPresented: Binding<Bool>
+    let deletionTarget: DatasetRecord?
+    let onDelete: (DatasetRecord) -> Void
+    let onClearDeletion: () -> Void
+    let importer: Binding<Bool>
+    let onImport: (Result<[URL], Error>) -> Void
+    let prepHistoryCount: Int
+    let onPrepHistoryChange: () -> Void
+
+    private var importContentTypes: [UTType] {
+        [UTType.fileURL, UTType.directory, UTType.json,
+         UTType(filenameExtension: "jsonl") ?? .data]
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: showingHFSearch) {
+                HuggingFaceDatasetSearchView()
+            }
+            .sheet(item: editingDataset) { ds in
+                DatasetDetailView(dataset: ds)
+            }
+            .sheet(item: shrinkTarget) { ds in
+                shrinkSheet(ds)
+            }
+            .alert("Rename dataset", isPresented: renamePresented, presenting: renameTarget) { ds in
+                TextField("Name", text: renameDraft)
+                Button("Save") {
+                    let trimmed = renameDraft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { onRename(ds, trimmed) }
+                    onClearRename()
+                }
+                Button("Cancel", role: .cancel) { onClearRename() }
+            }
+            .alert("Delete dataset?", isPresented: deletionPresented, presenting: deletionTarget) { ds in
+                Button("Delete", role: .destructive) {
+                    onDelete(ds)
+                    onClearDeletion()
+                }
+                Button("Cancel", role: .cancel) { onClearDeletion() }
+            } message: { ds in
+                Text("Removes \"\(ds.name)\" and all its lesson files from this Mac. You can't undo this.")
+            }
+            .fileImporter(isPresented: importer,
+                          allowedContentTypes: importContentTypes,
+                          allowsMultipleSelection: false) { result in
+                onImport(result)
+            }
+            .onChange(of: prepHistoryCount) { _, _ in
+                onPrepHistoryChange()
+            }
+    }
+}
+
 private struct StarterDatasetsSection: View {
     @State private var maxRowsByPreset: [String: Int] = [:]
     private var prepService = DatasetPrepService.shared
@@ -531,3 +592,9 @@ private struct StarterDatasetsSection: View {
     }
 }
 
+
+#if DEBUG
+#Preview("Lessons") {
+    DatasetsView().previewEnvironment()
+}
+#endif

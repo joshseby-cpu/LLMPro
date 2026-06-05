@@ -189,3 +189,10 @@ struct WeightsInspectorView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Weights") {
+    WeightsInspectorView(model: PreviewSupport.sampleDetectedModel)
+        .previewEnvironment()
+}
+#endif

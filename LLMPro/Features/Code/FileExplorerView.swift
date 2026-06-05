@@ -113,3 +113,10 @@ struct FileExplorerView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("File explorer") {
+    FileExplorerView(root: PreviewSupport.sampleWorkspace, selection: .constant(nil))
+        .previewEnvironment()
+}
+#endif

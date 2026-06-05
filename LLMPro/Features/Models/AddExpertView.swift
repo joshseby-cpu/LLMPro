@@ -182,3 +182,10 @@ struct AddExpertView: View {
         !outputName.isEmpty && service.active == nil
     }
 }
+
+#if DEBUG
+#Preview("Add experts") {
+    AddExpertView(model: PreviewSupport.sampleMoEModel)
+        .previewEnvironment()
+}
+#endif

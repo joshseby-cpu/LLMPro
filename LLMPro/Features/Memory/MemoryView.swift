@@ -378,3 +378,9 @@ struct MemoryView: View {
         return Color.green.opacity(0.45 + 0.45 * t)
     }
 }
+
+#if DEBUG
+#Preview("Memory") {
+    MemoryView().previewEnvironment()
+}
+#endif

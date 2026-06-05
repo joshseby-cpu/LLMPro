@@ -163,3 +163,10 @@ private struct AttentionHeatmap: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Attention") {
+    AttentionInspectorView(model: PreviewSupport.sampleDetectedModel)
+        .previewEnvironment()
+}
+#endif

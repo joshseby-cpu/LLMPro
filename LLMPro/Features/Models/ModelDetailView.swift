@@ -160,3 +160,10 @@ struct FlowLayout: Layout {
         }
     }
 }
+
+#if DEBUG
+#Preview("Model detail") {
+    ModelDetailView(model: PreviewSupport.sampleHFModel)
+        .previewEnvironment()
+}
+#endif

@@ -60,6 +60,17 @@ scope.
   running; quit-while-training prompt with Stop / Detach / Cancel.
 - ✅ **Cross-tab navigation** — Notification.Name events for "use this model for
   training", "open in chat", "open Models from Dashboard", etc.
+- ✅ **SwiftUI live previews** — `ENABLE_PREVIEWS: YES` plus a `#Preview` on every
+  view-bearing file (32 under `Features/` + `App/RootView.swift` = 33), each built
+  via `View.previewEnvironment()` from the DEBUG-only scaffold
+  [`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift) (in-memory
+  `ModelContainer` for all 6 `@Model` types + seeded samples + the real
+  `PythonRuntime.shared`/`JobRegistry.shared` singletons). **Debug build clean,
+  zero warnings, no new crash report.** Canvas rendering is an Xcode-GUI check (no
+  headless macOS-preview render exists) — and the bodies now type-check fast enough
+  that the canvas dylib compile no longer trips the stricter preview type-checker
+  (diagnostic build shows 0 expressions over 80 ms; see the Recent-session-log
+  hardening entry + [`CONVENTIONS.md`](CONVENTIONS.md#preview-type-checker-anti-patterns-a-plain-build-is-not-enough)).
 - ✅ **Code tab (agentic coding assistant) — agent loop verified end-to-end.**
   New sidebar tab driving an agent loop with the user's local (optionally
   fine-tuned) MLX model over a long-lived `mlx_lm server`. **Compile-clean (BUILD
@@ -426,6 +437,66 @@ for the full reasoning. Quick reference:
 
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
+
+- **Hardened SwiftUI preview type-checking — lifted inline `Binding(get:set:)` out of
+  view bodies + split long `.alert`/`.sheet`/`.onReceive` chains into `ViewModifier`
+  structs across 7 views; added `Core/IndexedLogLine.swift` + `Core/BindingBridges.swift`;
+  clean Debug build, 0 expr >80 ms.** Follow-up to the previews pass: adding a
+  `#Preview` to every view surfaced that the preview-dylib compiler (it instruments
+  literals with `__designTimeString` + recompiles each view to a canvas dylib) is far
+  stricter on type-check time than `xcodebuild` — `ModelsBrowserView` built clean but
+  **failed the canvas** with "unable to type-check this expression in reasonable time"
+  (a long `.alert`/`.sheet` chain with inline `Binding(get:set:)`). Behavior- and
+  UI-preserving fix: two new `Core/` helpers —
+  [`IndexedLogLine`](../LLMPro/Core/IndexedLogLine.swift) (`.tail(...)` → concrete
+  `[IndexedLogLine]`, replaces `ForEach(Array(log.suffix(N).enumerated()),
+  id: \.offset)`; used by `TrainingMonitorView` + `FirstRunView`) and
+  [`BindingBridges`](../LLMPro/Core/BindingBridges.swift)
+  (`Binding<Double>.rounding(_:)` bridges Int `@State` → `Double` slider; used by
+  `SelfImproveView`) — plus lifting inline `Binding`s into computed properties and
+  splitting long presentation/`.onReceive` chains into named `ViewModifier` structs
+  (state passed as `Binding`s/closures, **NOT `self`**, to preserve `@State` identity):
+  `ModelsBrowserView` (`DeletionAndSheetsModifier`/`DuplicateAlertsModifier`/
+  `LMStudioAlertsModifier`), `DatasetsView` (`DatasetsPresentationModifier` +
+  a `@ToolbarContentBuilder` property), `RootView` (`SidebarNotificationRouter` for the
+  6-deep `.onReceive` chain), `DashboardView`, `SelfImproveView`, `TrainingMonitorView`,
+  `FirstRunView`. **Verified:** clean Debug `xcodebuild` → BUILD SUCCEEDED, 0 swift
+  warnings; a diagnostic build with `-warn-long-expression-type-checking=80
+  -warn-long-function-bodies=80` shows **0** expressions over 80 ms (worst offenders
+  `ModelsBrowserView.list` 263 ms and `DatasetsView.body` 277 ms → gone). Key lesson
+  for the next agent adding previews: **a plain `xcodebuild` is NOT a sufficient
+  preview gate** — re-run with those frontend flags on a `clean` build (incremental
+  builds cache + hide the times). Anti-patterns + detection recipe now in
+  [`CONVENTIONS.md`](CONVENTIONS.md#preview-type-checker-anti-patterns-a-plain-build-is-not-enough)
+  + [`BUILDING.md`](BUILDING.md#swiftui-canvas-fails-with-unable-to-type-check-this-expression-in-reasonable-time).
+  Docs updated (ARCHITECTURE / CONVENTIONS / BUILDING / STATE).
+
+- **SwiftUI previews — added `Core/PreviewSupport.swift` + a `#Preview` to all 33
+  views; in-memory SwiftData container + `.previewEnvironment()`; clean Debug
+  build.** `ENABLE_PREVIEWS: YES` was already set but no view had a `#Preview`, so
+  the canvas was empty. New DEBUG-only `@MainActor enum PreviewSupport`
+  ([`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift)) holds one
+  in-memory `ModelContainer` registered for all 6 `@Model` types
+  (`ModelConfiguration(isStoredInMemoryOnly: true)`) seeded with realistic samples
+  (`sampleJob`/`sampleCompletedJob`/`sampleDataset`+variants/`sampleModel`+variants/
+  `sampleSettings`/`sampleRun`/`sampleAgent` + non-persisted value types
+  `sampleHFModel`/`sampleDetectedModel`/`sampleMoEModel`/`sampleChatSession`/
+  `sampleChatRow`/`sampleWorkspace`/`sampleFile`), and a
+  `View.previewEnvironment()` modifier (`.modelContainer` + the real
+  `PythonRuntime.shared`/`JobRegistry.shared` — no-op `private init`s, so no mocks —
+  + a 900×600 default frame). A `#Preview` (own `#if DEBUG`, ending in
+  `.previewEnvironment()`, friendly sidebar names) was added to every view-bearing
+  file under `Features/` (32) + `App/RootView.swift` = **33 blocks**; the 3 non-view
+  files (`Chat/ChatModels.swift`, `Code/Attachment.swift`, `Code/AgentTemplate.swift`)
+  were skipped. `DEBUG` comes from XcodeGen's default
+  `SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG` (no explicit `project.yml` flag).
+  **`xcodegen generate` + Debug `xcodebuild` → BUILD SUCCEEDED, zero warnings, no new
+  crash report** (canvas rendering is the user's Xcode check — no headless
+  macOS-preview render CLI). Gotchas for the next agent: a new `@Model` type must be
+  registered in **both** `LLMProApp`'s `.modelContainer(for:)` list **and**
+  `PreviewSupport`'s schema; a view needing a new injected env value means extending
+  `previewEnvironment()`; new view files still need `xcodegen generate`. Docs updated
+  (ARCHITECTURE / CONVENTIONS / EXTENDING / BUILDING / STATE).
 
 - **New rule: always read the logs after testing (docs-only).** Added
   `### Always read the logs after testing` to CONVENTIONS.md → Build hygiene: a
