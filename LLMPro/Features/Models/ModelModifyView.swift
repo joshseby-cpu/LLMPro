@@ -458,3 +458,10 @@ struct ModelModifyView: View {
         return name
     }
 }
+
+#if DEBUG
+#Preview("Modify model") {
+    ModelModifyView(model: PreviewSupport.sampleDetectedModel)
+        .previewEnvironment()
+}
+#endif

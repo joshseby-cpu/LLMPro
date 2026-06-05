@@ -404,3 +404,9 @@ struct FusionView: View {
 private extension Array {
     subscript(safe i: Int) -> Element? { (i >= 0 && i < count) ? self[i] : nil }
 }
+
+#if DEBUG
+#Preview("Fusion") {
+    FusionView().previewEnvironment()
+}
+#endif

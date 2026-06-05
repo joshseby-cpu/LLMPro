@@ -327,3 +327,9 @@ struct HuggingFaceDatasetSearchView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("HF dataset search") {
+    HuggingFaceDatasetSearchView().previewEnvironment()
+}
+#endif

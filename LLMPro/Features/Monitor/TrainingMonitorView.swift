@@ -271,12 +271,17 @@ struct TrainingMonitorView: View {
     }
 
     private func logTail(job: JobRegistry.LiveJob) -> some View {
-        VStack(alignment: .leading) {
+        // `Array(job.logTail.suffix(30).enumerated())` inline forces the solver
+        // through a deep EnumeratedSequence<ArraySlice<…>> → Array → ForEach
+        // generic chain; annotating the result type up front keeps the body fast
+        // (and well under the preview compiler's stricter limit).
+        let lines: [IndexedLogLine] = IndexedLogLine.tail(of: job.logTail, count: 30)
+        return VStack(alignment: .leading) {
             Text("Log (last 30 lines)").font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(job.logTail.suffix(30).enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
+                    ForEach(lines) { line in
+                        Text(line.text).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,3 +334,9 @@ private struct StatChip: View {
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
     }
 }
+
+#if DEBUG
+#Preview("Progress") {
+    TrainingMonitorView().previewEnvironment()
+}
+#endif

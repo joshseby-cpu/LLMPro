@@ -252,3 +252,9 @@ struct SkillsManagerView: View {
     Anything the agent should keep in mind.
     """
 }
+
+#if DEBUG
+#Preview("Skills") {
+    SkillsManagerView().previewEnvironment()
+}
+#endif

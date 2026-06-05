@@ -70,9 +70,8 @@ struct ModelsBrowserView: View {
 
     @ViewBuilder
     private var content: some View {
+        list.frame(maxWidth: .infinity, maxHeight: .infinity)
         HSplitView {
-            list
-                .frame(minWidth: 380, idealWidth: 440)
             if let selected {
                 ModelDetailView(model: selected)
             } else {
@@ -147,117 +146,51 @@ struct ModelsBrowserView: View {
             }
         }
         .listStyle(.inset)
-        .alert(
-            deletionAlertTitle,
-            isPresented: deletionAlertBinding,
-            presenting: deletionTarget
-        ) { model in
-            Button("Delete", role: .destructive) { confirmDelete(model: model) }
-            Button("Cancel", role: .cancel) { deletionTarget = nil }
-        } message: { model in
-            Text("This will permanently remove \(model.humanSize) of model files from this Mac. You can re-download anytime.")
-        }
-        .alert("Freed up disk space", isPresented: $showDeletionResult) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Freed \(ByteCountFormatter.string(fromByteCount: lastDeletionFreed, countStyle: .file)) of disk space.")
-        }
-        .sheet(item: $modifyTarget) { target in
-            ModelModifyView(model: target)
-        }
-        .sheet(item: $addExpertTarget) { target in
-            AddExpertView(model: target)
-        }
-        .sheet(item: $manageExpertsTarget) { target in
-            ExpertManagerView(model: target)
-        }
-        .alert("Duplicate \(duplicateTarget?.displayName ?? "model")",
-               isPresented: Binding(
-                get: { duplicateTarget != nil },
-                set: { if !$0 { duplicateTarget = nil } }
-               )) {
-            TextField("New name", text: $duplicateText)
-            // Capture source + name SYNCHRONOUSLY before SwiftUI's alert
-            // dismissal nukes duplicateTarget. Reading them inside the async
-            // closure would race-fail.
-            Button("Duplicate") {
-                guard let source = duplicateTarget else { return }
-                let name = duplicateText.trimmingCharacters(in: .whitespacesAndNewlines)
-                Task { await commitDuplicate(source: source, newName: name) }
-            }
-            .disabled(duplicateText.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Cancel", role: .cancel) { duplicateTarget = nil }
-        } message: {
-            if let t = duplicateTarget {
-                Text("Creates an independent copy in your local-models folder (\(t.humanSize) on non-APFS volumes, near-zero on APFS thanks to clonefile).")
-            }
-        }
-        .alert("Duplicating…",
-               isPresented: $duplicating) {
-            // Auto-dismisses when commitDuplicate sets `duplicating = false`.
-            // No buttons — the user is supposed to wait.
-        } message: {
-            Text("Cloning the model into your local-models folder. APFS CoW means this is usually near-instant; on non-APFS volumes it can take a minute per ~30 GB.")
-        }
-        .alert("Couldn't duplicate model",
-               isPresented: Binding(
-                get: { duplicationError != nil },
-                set: { if !$0 { duplicationError = nil } }
-               )) {
-            Button("OK", role: .cancel) { duplicationError = nil }
-        } message: {
-            Text(duplicationError ?? "")
-        }
-        .alert("Send to LM Studio",
-               isPresented: Binding(
-                get: { lmstudioTarget != nil },
-                set: { if !$0 { lmstudioTarget = nil } }
-               )) {
-            TextField("Publisher (folder)", text: $lmstudioPublisher)
-            TextField("Model name", text: $lmstudioName)
-            Button("Send") {
-                guard let source = lmstudioTarget else { return }
-                let pub = lmstudioPublisher.trimmingCharacters(in: .whitespaces)
-                let nm = lmstudioName.trimmingCharacters(in: .whitespaces)
-                Task { await commitLMStudio(source: source, publisher: pub, name: nm) }
-            }
-            .disabled(lmstudioPublisher.trimmingCharacters(in: .whitespaces).isEmpty ||
-                      lmstudioName.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Cancel", role: .cancel) { lmstudioTarget = nil }
-        } message: {
-            if let t = lmstudioTarget {
-                Text("Will copy \(t.humanSize) into ~/.lmstudio/models/<publisher>/<name>/. APFS Copy-on-Write means this is usually near-instant with zero extra disk.")
-            }
-        }
-        .alert("Sending to LM Studio…", isPresented: $lmstudioInstalling) {
-            // No buttons; auto-dismisses on completion.
-        } message: {
-            Text("Cloning model files into LM Studio's folder.")
-        }
-        .alert("Installed in LM Studio",
-               isPresented: Binding(
-                get: { lmstudioInstalledAt != nil },
-                set: { if !$0 { lmstudioInstalledAt = nil } }
-               )) {
-            Button("Show in Finder") {
-                if let url = lmstudioInstalledAt {
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                }
-                lmstudioInstalledAt = nil
-            }
-            Button("OK", role: .cancel) { lmstudioInstalledAt = nil }
-        } message: {
-            Text("Open LM Studio and look for the model under its new publisher.")
-        }
-        .alert("Couldn't send to LM Studio",
-               isPresented: Binding(
-                get: { lmstudioError != nil },
-                set: { if !$0 { lmstudioError = nil } }
-               )) {
-            Button("OK", role: .cancel) { lmstudioError = nil }
-        } message: {
-            Text(lmstudioError ?? "")
-        }
+        .modifier(DeletionAndSheetsModifier(
+            deletionTitle: deletionAlertTitle,
+            deletionPresented: deletionAlertBinding,
+            deletionTarget: deletionTarget,
+            onConfirmDelete: confirmDelete,
+            onClearDeletion: { deletionTarget = nil },
+            showDeletionResult: $showDeletionResult,
+            lastDeletionFreed: lastDeletionFreed,
+            modifyTarget: $modifyTarget,
+            addExpertTarget: $addExpertTarget,
+            manageExpertsTarget: $manageExpertsTarget
+        ))
+        .modifier(DuplicateAlertsModifier(
+            title: duplicateAlertTitle,
+            presented: duplicateAlertBinding,
+            duplicateText: $duplicateText,
+            target: duplicateTarget,
+            duplicating: $duplicating,
+            errorPresented: duplicationErrorBinding,
+            errorText: duplicationError,
+            onClearError: { duplicationError = nil },
+            onClearTarget: { duplicateTarget = nil },
+            onCommit: { source, name in Task { await commitDuplicate(source: source, newName: name) } }
+        ))
+        .modifier(LMStudioAlertsModifier(
+            targetPresented: lmstudioTargetBinding,
+            target: lmstudioTarget,
+            publisher: $lmstudioPublisher,
+            name: $lmstudioName,
+            installing: $lmstudioInstalling,
+            installedPresented: lmstudioInstalledBinding,
+            installedAt: lmstudioInstalledAt,
+            errorPresented: lmstudioErrorBinding,
+            errorText: lmstudioError,
+            onClearError: { lmstudioError = nil },
+            onClearTarget: { lmstudioTarget = nil },
+            onClearInstalled: { lmstudioInstalledAt = nil },
+            onCommit: { source, pub, nm in Task { await commitLMStudio(source: source, publisher: pub, name: nm) } }
+        ))
+    }
+
+    // MARK: - Alert titles (lifted out of the modifier chain)
+
+    private var duplicateAlertTitle: String {
+        "Duplicate \(duplicateTarget?.displayName ?? "model")"
     }
 
     private func promptDuplicate(of model: ModelRegistry.DetectedModel) {
@@ -362,6 +295,53 @@ struct ModelsBrowserView: View {
         Binding(
             get: { deletionTarget != nil },
             set: { newValue in if !newValue { deletionTarget = nil } }
+        )
+    }
+
+    // The following item-driven alerts use `isPresented:` + a synthesized Bool
+    // binding rather than `.alert(item:)` because they need to read the optional
+    // state inside their `message`/`actions` closures. Lifting each
+    // `Binding(get:set:)` out of `body` keeps the view-body type-checker (and the
+    // preview-dylib compiler, which is far stricter) from choking on the long
+    // `.alert` modifier chain.
+
+    /// Present the duplicate-name alert while a model is targeted for duplication.
+    private var duplicateAlertBinding: Binding<Bool> {
+        Binding(
+            get: { duplicateTarget != nil },
+            set: { if !$0 { duplicateTarget = nil } }
+        )
+    }
+
+    /// Present the duplication-error alert while an error message is set.
+    private var duplicationErrorBinding: Binding<Bool> {
+        Binding(
+            get: { duplicationError != nil },
+            set: { if !$0 { duplicationError = nil } }
+        )
+    }
+
+    /// Present the LM Studio publisher/name alert while a model is targeted.
+    private var lmstudioTargetBinding: Binding<Bool> {
+        Binding(
+            get: { lmstudioTarget != nil },
+            set: { if !$0 { lmstudioTarget = nil } }
+        )
+    }
+
+    /// Present the "installed in LM Studio" alert once an install path exists.
+    private var lmstudioInstalledBinding: Binding<Bool> {
+        Binding(
+            get: { lmstudioInstalledAt != nil },
+            set: { if !$0 { lmstudioInstalledAt = nil } }
+        )
+    }
+
+    /// Present the LM Studio error alert while an error message is set.
+    private var lmstudioErrorBinding: Binding<Bool> {
+        Binding(
+            get: { lmstudioError != nil },
+            set: { if !$0 { lmstudioError = nil } }
         )
     }
 
@@ -520,3 +500,191 @@ private struct DownloadRow: View {
         return String(format: "%.1f%%", download.percent * 100)
     }
 }
+
+// MARK: - Presentation-modifier groups
+//
+// `ModelsBrowserView.list` used to hang a single chain of ~9 `.alert`/`.sheet`
+// modifiers — several with inline `Binding(get:set:)` — off one expression.
+// That whole `ModifiedContent<…>` tower has to be type-checked at once, which is
+// a known constraint-solver hot spot. The SwiftUI *preview-dylib* compiler makes
+// it worse: it instruments every string literal with
+// `__designTimeString(_:fallback:)`, pushing the borderline expression past the
+// type-checker's work limit so the canvas fails to build even though the normal
+// `xcodebuild` passes. Splitting the chain into these three small `ViewModifier`
+// structs gives the solver three independent, fast `body(content:)` units while
+// keeping every alert, binding, and action byte-for-byte identical in behavior.
+
+private struct DeletionAndSheetsModifier: ViewModifier {
+    let deletionTitle: String
+    let deletionPresented: Binding<Bool>
+    let deletionTarget: ModelRegistry.DetectedModel?
+    let onConfirmDelete: (ModelRegistry.DetectedModel) -> Void
+    let onClearDeletion: () -> Void
+    let showDeletionResult: Binding<Bool>
+    let lastDeletionFreed: Int64
+    let modifyTarget: Binding<ModelRegistry.DetectedModel?>
+    let addExpertTarget: Binding<ModelRegistry.DetectedModel?>
+    let manageExpertsTarget: Binding<ModelRegistry.DetectedModel?>
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                deletionTitle,
+                isPresented: deletionPresented,
+                presenting: deletionTarget
+            ) { model in
+                Button("Delete", role: .destructive) { onConfirmDelete(model) }
+                Button("Cancel", role: .cancel) { onClearDeletion() }
+            } message: { model in
+                Text("This will permanently remove \(model.humanSize) of model files from this Mac. You can re-download anytime.")
+            }
+            .alert("Freed up disk space", isPresented: showDeletionResult) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Freed \(ByteCountFormatter.string(fromByteCount: lastDeletionFreed, countStyle: .file)) of disk space.")
+            }
+            .sheet(item: modifyTarget) { target in
+                ModelModifyView(model: target)
+            }
+            .sheet(item: addExpertTarget) { target in
+                AddExpertView(model: target)
+            }
+            .sheet(item: manageExpertsTarget) { target in
+                ExpertManagerView(model: target)
+            }
+    }
+}
+
+private struct DuplicateAlertsModifier: ViewModifier {
+    let title: String
+    let presented: Binding<Bool>
+    let duplicateText: Binding<String>
+    let target: ModelRegistry.DetectedModel?
+    let duplicating: Binding<Bool>
+    let errorPresented: Binding<Bool>
+    let errorText: String?
+    let onClearError: () -> Void
+    let onClearTarget: () -> Void
+    let onCommit: (ModelRegistry.DetectedModel, String) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert(title, isPresented: presented) {
+                duplicateActions
+            } message: {
+                duplicateMessage
+            }
+            .alert("Duplicating…", isPresented: duplicating) {
+                // Auto-dismisses when commitDuplicate sets `duplicating = false`.
+                // No buttons — the user is supposed to wait.
+            } message: {
+                Text("Cloning the model into your local-models folder. APFS CoW means this is usually near-instant; on non-APFS volumes it can take a minute per ~30 GB.")
+            }
+            .alert("Couldn't duplicate model", isPresented: errorPresented) {
+                Button("OK", role: .cancel) { onClearError() }
+            } message: {
+                Text(errorText ?? "")
+            }
+    }
+
+    @ViewBuilder
+    private var duplicateActions: some View {
+        TextField("New name", text: duplicateText)
+        // Capture source + name SYNCHRONOUSLY before SwiftUI's alert
+        // dismissal nukes duplicateTarget. Reading them inside the async
+        // closure would race-fail.
+        Button("Duplicate") {
+            guard let source = target else { return }
+            let name = duplicateText.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            onCommit(source, name)
+        }
+        .disabled(duplicateText.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
+        Button("Cancel", role: .cancel) { onClearTarget() }
+    }
+
+    @ViewBuilder
+    private var duplicateMessage: some View {
+        if let t = target {
+            Text("Creates an independent copy in your local-models folder (\(t.humanSize) on non-APFS volumes, near-zero on APFS thanks to clonefile).")
+        }
+    }
+}
+
+private struct LMStudioAlertsModifier: ViewModifier {
+    let targetPresented: Binding<Bool>
+    let target: ModelRegistry.DetectedModel?
+    let publisher: Binding<String>
+    let name: Binding<String>
+    let installing: Binding<Bool>
+    let installedPresented: Binding<Bool>
+    let installedAt: URL?
+    let errorPresented: Binding<Bool>
+    let errorText: String?
+    let onClearError: () -> Void
+    let onClearTarget: () -> Void
+    let onClearInstalled: () -> Void
+    let onCommit: (ModelRegistry.DetectedModel, String, String) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Send to LM Studio", isPresented: targetPresented) {
+                sendActions
+            } message: {
+                sendMessage
+            }
+            .alert("Sending to LM Studio…", isPresented: installing) {
+                // No buttons; auto-dismisses on completion.
+            } message: {
+                Text("Cloning model files into LM Studio's folder.")
+            }
+            .alert("Installed in LM Studio", isPresented: installedPresented) {
+                installedActions
+            } message: {
+                Text("Open LM Studio and look for the model under its new publisher.")
+            }
+            .alert("Couldn't send to LM Studio", isPresented: errorPresented) {
+                Button("OK", role: .cancel) { onClearError() }
+            } message: {
+                Text(errorText ?? "")
+            }
+    }
+
+    @ViewBuilder
+    private var sendActions: some View {
+        TextField("Publisher (folder)", text: publisher)
+        TextField("Model name", text: name)
+        Button("Send") {
+            guard let source = target else { return }
+            let pub = publisher.wrappedValue.trimmingCharacters(in: .whitespaces)
+            let nm = name.wrappedValue.trimmingCharacters(in: .whitespaces)
+            onCommit(source, pub, nm)
+        }
+        .disabled(publisher.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty ||
+                  name.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
+        Button("Cancel", role: .cancel) { onClearTarget() }
+    }
+
+    @ViewBuilder
+    private var sendMessage: some View {
+        if let t = target {
+            Text("Will copy \(t.humanSize) into ~/.lmstudio/models/<publisher>/<name>/. APFS Copy-on-Write means this is usually near-instant with zero extra disk.")
+        }
+    }
+
+    @ViewBuilder
+    private var installedActions: some View {
+        Button("Show in Finder") {
+            if let url = installedAt {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+            onClearInstalled()
+        }
+        Button("OK", role: .cancel) { onClearInstalled() }
+    }
+}
+
+#if DEBUG
+#Preview("Models") {
+    ModelsBrowserView().previewEnvironment()
+}
+#endif

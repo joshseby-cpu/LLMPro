@@ -311,3 +311,10 @@ struct DatasetDetailView: View {
         dismiss()
     }
 }
+
+#if DEBUG
+#Preview("Dataset detail") {
+    DatasetDetailView(dataset: PreviewSupport.sampleDataset)
+        .previewEnvironment()
+}
+#endif

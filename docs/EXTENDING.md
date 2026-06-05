@@ -250,6 +250,56 @@ Don't do this lightly — we have a dozen already. But the recipe:
 
 4. **`xcodegen generate`** and build.
 
+5. **Add a `#Preview`** to the new file (see the next recipe) — every
+   view-bearing file carries one.
+
+---
+
+## Add a preview to a new view
+
+Every SwiftUI view-bearing file under `Features/` (and `App/RootView.swift`) ends
+in a `#Preview` so the Xcode canvas isn't empty. The scaffold — one in-memory
+`ModelContainer` for all 6 `@Model` types + seeded samples + the
+`View.previewEnvironment()` modifier — lives in
+[`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift) behind `#if DEBUG`.
+To add one:
+
+1. **At end-of-file, wrap it in `#if DEBUG`** and end the view chain in
+   `.previewEnvironment()` (which applies the in-memory container + the real
+   `PythonRuntime.shared` / `JobRegistry.shared` singletons + a default frame):
+
+   ```swift
+   #if DEBUG
+   #Preview("Home") {              // use the friendly sidebar name
+       YourTabView()
+           .previewEnvironment()
+   }
+   #endif
+   ```
+
+2. **Pull any required arguments from `PreviewSupport` samples** (e.g.
+   `PreviewSupport.sampleJob`, `.sampleDataset`, `.sampleDetectedModel`,
+   `.sampleChatSession`), and for `@Binding`s use `.constant(…)`:
+
+   ```swift
+   #Preview("Lessons") {
+       DatasetDetailView(record: PreviewSupport.sampleDataset)
+           .previewEnvironment()
+   }
+   ```
+
+3. **Two gotchas to keep previews building:**
+   - If you added a **new `@Model` type**, register it in `PreviewSupport`'s
+     schema too (and in `LLMProApp`'s `.modelContainer(for:)` list) — otherwise a
+     `@Query` of that type fails in the canvas.
+   - If the view needs a **new injected environment value** beyond the two
+     singletons, extend `previewEnvironment()` rather than adding a one-off
+     `.environment(…)` to the preview.
+
+4. **`xcodegen generate`** if this is a brand-new file (the `#Preview` itself
+   needs no extra wiring; the canvas is an Xcode GUI feature — there's no headless
+   render to run from the CLI).
+
 ---
 
 ## Add cross-tab navigation

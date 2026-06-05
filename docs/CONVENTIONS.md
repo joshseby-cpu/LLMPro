@@ -220,6 +220,69 @@ the pattern past a handful of named events.
 For more complex shared state, add a service. Cross-tab "open this in another
 tab" is the only legitimate use.
 
+### Every view carries a `#Preview` ending in `.previewEnvironment()`
+
+Every SwiftUI view-bearing file (each tab root + every sheet/sub-view under
+`Features/`, plus `App/RootView.swift`) ends in a `#Preview` wrapped in its own
+`#if DEBUG`, and that preview's view is built via the
+[`View.previewEnvironment()`](../LLMPro/Core/PreviewSupport.swift) modifier as its
+**last** modifier. The preview-only sample data and the single in-memory
+`ModelContainer` (registered for all 6 `@Model` types,
+`ModelConfiguration(isStoredInMemoryOnly: true)`, seeded once) live in
+[`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift) behind `#if DEBUG`
+— don't scatter ad-hoc sample structs into individual view files.
+`previewEnvironment()` injects the **real** `PythonRuntime.shared` and
+`JobRegistry.shared` (their `private init`s are no-ops, so there's nothing to mock)
+plus a default window-sized frame; extend that one modifier if a view needs a new
+environment value, rather than adding `.environment(…)` per preview. This exists
+because `ENABLE_PREVIEWS: YES` was already set but no view had a `#Preview`, so the
+Xcode canvas was empty. Recipe for adding one:
+[`EXTENDING.md`](EXTENDING.md#add-a-preview-to-a-new-view).
+
+### Preview type-checker anti-patterns (a plain build is NOT enough)
+
+**A plain `xcodebuild` is not a sufficient gate for preview health.** The SwiftUI
+preview-dylib compiler (it instruments literals with `__designTimeString` and
+recompiles each view into a canvas dylib) is **much stricter about type-checking
+time** than the normal build, so a `body` that compiles fine under `xcodebuild` can
+still fail the canvas with *"the compiler is unable to type-check this expression in
+reasonable time."* (This is exactly what `ModelsBrowserView` did once we added a
+`#Preview` to every view — a long `.alert`/`.sheet` chain with inline
+`Binding(get:set:)` closures.) In a view `body`, avoid these four — each has a
+behavior-preserving fix:
+
+1. **Inline `Binding(get:set:)` inside `.alert`/`.sheet`/`.popover`.** → Lift it to a
+   computed `Binding` property (or pass it into a child `ViewModifier`).
+2. **Long single chains (5+) of presentation / `.onReceive` modifiers on one
+   expression.** → Split into a named `ViewModifier` struct, passing the state it
+   needs as `Binding`s / closures — **never the whole view (`self`)**, so the
+   modifier doesn't capture and re-own the `@State` (that would break `@State`
+   identity). (Done for `ModelsBrowserView`'s deletion/duplicate/LM-Studio chains,
+   `DatasetsView`'s presentation chain, and `RootView`'s 6-deep `.onReceive` router.)
+3. **`ForEach(Array(collection.suffix(N).enumerated()), id: \.offset)`.** → Map to a
+   concrete `[Identifiable]` first via
+   [`IndexedLogLine.tail(...)`](../LLMPro/Core/IndexedLogLine.swift); the
+   `EnumeratedSequence<ArraySlice<…>>` type is what's slow to check (positional IDs
+   keep diffing identical).
+4. **Inline `Binding(get: { Double(x) }, set: { x = Int($0.rounded()) })` for an
+   Int-backed `Slider`/`Stepper`.** → Use
+   [`Binding.rounding($intState)`](../LLMPro/Core/BindingBridges.swift).
+
+**Detection** (incremental builds cache and *hide* these times, so you need a clean
+build with the diagnostic flags):
+
+```bash
+xcodebuild -project LLMPro.xcodeproj -scheme LLMPro -configuration Debug \
+  -destination 'platform=macOS' clean build \
+  OTHER_SWIFT_FLAGS="-Xfrontend -warn-long-expression-type-checking=80 \
+                     -Xfrontend -warn-long-function-bodies=80"
+```
+
+Anything it flags is at risk. The 80 ms number is **uninstrumented** — the canvas
+compile is slower than the plain build, so keep margin (the fix above took
+`ModelsBrowserView.list` 263 ms and `DatasetsView.body` 277 ms to **zero** expressions
+over 80 ms). Troubleshooting cross-ref: [`BUILDING.md`](BUILDING.md#swiftui-canvas-fails-with-unable-to-type-check-this-expression-in-reasonable-time).
+
 ---
 
 ## The feedback loop (the app's organizing spine)

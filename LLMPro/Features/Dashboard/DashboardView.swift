@@ -30,11 +30,7 @@ struct DashboardView: View {
             }
             .navigationTitle("LLMPro")
             .task { metrics.start(); await registry.scan() }
-            .alert("Rename lesson",
-                   isPresented: Binding(
-                    get: { renameTarget != nil },
-                    set: { if !$0 { renameTarget = nil } }
-                   )) {
+            .alert("Rename lesson", isPresented: renameAlertBinding) {
                 TextField("New name", text: $renameText)
                 Button("Save") { commitRename() }
                 Button("Cancel", role: .cancel) { renameTarget = nil }
@@ -44,6 +40,17 @@ struct DashboardView: View {
                 }
             }
         }
+    }
+
+    /// Present the rename alert while a job is targeted; clear on dismiss.
+    /// Lifted out of the inline `.alert(isPresented:)` so the preview-dylib
+    /// compiler (which instruments every string literal) doesn't have to infer a
+    /// fresh `Binding(get:set:)` closure inside `body`.
+    private var renameAlertBinding: Binding<Bool> {
+        Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )
     }
 
     private func commitRename() {
@@ -223,3 +230,9 @@ struct DashboardView: View {
 extension Notification.Name {
     static let switchSidebar = Notification.Name("LLMPro.switchSidebar")
 }
+
+#if DEBUG
+#Preview("Home") {
+    DashboardView().previewEnvironment()
+}
+#endif

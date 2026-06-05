@@ -145,3 +145,10 @@ struct HighlightedTextView: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+#Preview("Code editor") {
+    CodeEditorView(url: PreviewSupport.sampleFile)
+        .previewEnvironment()
+}
+#endif

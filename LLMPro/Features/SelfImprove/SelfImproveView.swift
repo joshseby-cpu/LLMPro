@@ -119,21 +119,21 @@ struct SelfImproveView: View {
                     Divider()
 
                     sliderRow("How many rounds of practice?",
-                              value: Binding(get: { Double(targetRounds) }, set: { targetRounds = Int($0.rounded()) }),
+                              value: .rounding($targetRounds),
                               range: 1...6, step: 1, formatted: "\(targetRounds)",
                               hint: HelpHint("Rounds",
                                 "One round = generate K candidate solutions per problem, run the unit tests, keep the passing ones as training data, train a LoRA on those, evaluate. Each round builds on the previous round's LoRA. More rounds = more cumulative learning but also more wall-clock time.",
                                 learnMore: URL(string: "https://github.com/karpathy/autoresearch")))
 
                     sliderRow("How many tries per problem?",
-                              value: Binding(get: { Double(candidatesPerPrompt) }, set: { candidatesPerPrompt = Int($0.rounded()) }),
+                              value: .rounding($candidatesPerPrompt),
                               range: 2...8, step: 1, formatted: "\(candidatesPerPrompt)",
                               hint: HelpHint("Candidates per problem",
                                 "How many solutions the model generates for each problem. Each one is unit-tested; the ones that pass become next-round training data. More candidates = more diversity (better at finding a working solution) but linearly more inference time per round.",
                                 link: "https://arxiv.org/abs/2107.03374"))
 
                     sliderRow("How many problems per round?",
-                              value: Binding(get: { Double(rowsPerRound) }, set: { rowsPerRound = Int($0.rounded()) }),
+                              value: .rounding($rowsPerRound),
                               range: 10...60, step: 5, formatted: "\(rowsPerRound) problems",
                               hint: HelpHint("Problems per round",
                                 "How many distinct programming problems to attempt each round. More problems = broader practice surface; fewer = faster rounds. The default 20 balances signal-to-noise on the pass-rate curve with reasonable wall-clock time.",
@@ -155,7 +155,7 @@ struct SelfImproveView: View {
                         .buttonStyle(.plain)
                         if showPracticeAdvanced {
                             sliderRow("Study iterations per round",
-                                      value: Binding(get: { Double(trainIters) }, set: { trainIters = Int($0.rounded()) }),
+                                      value: .rounding($trainIters),
                                       range: 30...250, step: 10, formatted: "\(trainIters)",
                                       hint: HelpHint("Training iterations per round",
                                         "Each round trains a small LoRA on the candidates that passed unit tests. More iterations means the model fits those passing examples more thoroughly — useful early but risks overfitting once you've got a small keeper set. 80-120 is the sweet spot.",
@@ -514,3 +514,9 @@ struct SelfImproveView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Practice") {
+    SelfImproveView().previewEnvironment()
+}
+#endif

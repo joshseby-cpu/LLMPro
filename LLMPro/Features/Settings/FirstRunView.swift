@@ -61,14 +61,17 @@ struct FirstRunView: View {
     }
 
     private var runtimePane: some View {
-        VStack(spacing: 12) {
+        // See IndexedLogLine: the inline Array(...suffix.enumerated()) chain is a
+        // type-check hot spot that the preview compiler makes worse.
+        let lines: [IndexedLogLine] = IndexedLogLine.tail(of: runtime.logTail, count: 40)
+        return VStack(spacing: 12) {
             Text("Python runtime").font(.title2.bold())
             Text(runtime.statusLine).foregroundStyle(runtime.statusColor)
             ProgressView().opacity(runtime.isReady ? 0 : 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(runtime.logTail.suffix(40).enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.system(.caption2, design: .monospaced))
+                    ForEach(lines) { line in
+                        Text(line.text).font(.system(.caption2, design: .monospaced))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -156,3 +159,10 @@ struct FirstRunView: View {
         ProcessInfo.processInfo.physicalMemory >= 16 * 1024 * 1024 * 1024
     }
 }
+
+#if DEBUG
+#Preview("First run") {
+    FirstRunView(onComplete: {})
+        .previewEnvironment()
+}
+#endif
