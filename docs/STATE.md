@@ -2075,3 +2075,29 @@ loop). Build green. Tradeoff: always-follow (no "user scrolled up" suppression),
 matching the existing count/isRunning behavior; near-bottom detection was skipped on
 purpose because the scroll-offset GeometryReader it needs reintroduces the per-frame
 layout cost the transcript explicitly avoids.
+
+### Session 2026-06-05 (cont.) — "Run teammates in parallel" toggle now controls the orchestrator's plan
+
+**Symptom (user):** with "Run teammates in parallel" UNCHECKED, the orchestrator
+still says/tries "dispatch these in parallel".
+
+**Diagnosis:** execution was already correct — `runDelegations` serializes delegates
+when `settings.parallelAgents` is off (only one request in flight). The bug was
+prompt-side: `parallelAgents` never reached the system prompt, and `orchestrator.md`
+hardcoded "To run builders IN PARALLEL, call them in the SAME turn." So the model was
+*told* to go parallel regardless of the toggle — it kept emitting both `call_*` calls
+in one turn and narrating "in parallel," even though they then ran sequentially.
+
+**Fix:**
+- `CodingAgentService.systemMessage`: for any role that delegates to >1 teammate
+  (the orchestrator), append a "Teammate dispatch" directive that reflects the
+  toggle — PARALLEL ON → "dispatch independent teammates in the same turn";
+  OFF → "emit exactly ONE call_* per turn, wait, then the next; don't say
+  'in parallel'." Injected after the .md body, so it's authoritative regardless of
+  the installed agent file.
+- `orchestrator.md`: replaced the hardcoded parallel instruction with "follow the
+  Teammate dispatch directive below." Refreshed the installed copy too (it was the
+  stock default, no custom edits).
+
+Build green. NOT yet observed through a live model turn (needs a session); the prompt
+now matches the setting and execution was already gated.
