@@ -20,9 +20,12 @@ specializes them into coding assistants you actually use.
 ---
 
 > ### 🛠️ Just want to run it on your Mac?
-> Follow **[`INSTALL.md`](INSTALL.md)** — a step-by-step, beginner-friendly guide
-> that takes you from a fresh Mac to a running app (install prerequisites → build
-> → first launch). No prior Xcode experience needed.
+> - **Download the app:** grab the latest `.zip` from
+>   [**Releases**](https://github.com/joshseby-cpu/LLMPro/releases) and follow
+>   [`docs/INSTALL_BINARY.md`](docs/INSTALL_BINARY.md). (Not notarized — macOS needs
+>   a one-time "Open Anyway"; the guide shows how.)
+> - **Build from source:** follow **[`INSTALL.md`](INSTALL.md)** — beginner-friendly,
+>   no Xcode experience needed, and the resulting app opens with no Gatekeeper prompt.
 
 ---
 
