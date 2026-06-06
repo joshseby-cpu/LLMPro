@@ -624,6 +624,20 @@ final class CodingAgentService {
             \(lines)
             """
         }
+        // Parallelism directive — reflects the "Run teammates in parallel" toggle.
+        // Only relevant to a role that can delegate to more than one teammate (the
+        // orchestrator). Without this the model follows its base prompt's "call
+        // them in the same turn" guidance even when the user turned parallel OFF,
+        // so it keeps narrating/attempting parallel dispatch. The runtime already
+        // serializes execution when off (runDelegations), but the model's PLAN
+        // should match the setting too.
+        if role.delegates.count > 1 {
+            if settings.parallelAgents {
+                content += "\n\n## Teammate dispatch: PARALLEL is ON\nWhen two teammates' tasks are independent, dispatch them together (emit both `call_*` tool calls in the SAME turn) so they run concurrently. Only serialize when one genuinely depends on another's output."
+            } else {
+                content += "\n\n## Teammate dispatch: ONE AT A TIME\nParallel teammates are turned OFF. Dispatch teammates SEQUENTIALLY: emit exactly ONE `call_*` tool call per turn, wait for its result, then dispatch the next. Do NOT emit multiple `call_*` calls in the same turn, and do not describe the work as running \"in parallel\"."
+            }
+        }
         return ChatWireMessage(role: "system", content: content)
     }
 
