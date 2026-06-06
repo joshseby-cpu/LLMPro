@@ -71,7 +71,6 @@ struct FileExplorerView: View {
                     }
                 }
             }
-            .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 24)
         }
         .onChange(of: refreshToken) { _, _ in nodes = FileNode.tree(at: root) }
