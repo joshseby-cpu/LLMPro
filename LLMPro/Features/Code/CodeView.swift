@@ -403,7 +403,24 @@ struct CodeView: View {
             .onChange(of: agent.isRunning) { _, _ in
                 proxy.scrollTo("BOTTOM", anchor: .bottom)
             }
+            // Keep the bottom in view WHILE the current task streams. The active
+            // turn appends text / reasoning / tool calls into the LAST bubble
+            // without adding a new one, so transcript.count doesn't change — only
+            // this tail signature does. Watching it follows the live agent output
+            // (the streaming answer, each new tool call) down the screen. Cheap:
+            // it's a single Int, and scrollTo is unanimated (see note above).
+            .onChange(of: transcriptTailSignature) { _, _ in
+                proxy.scrollTo("BOTTOM", anchor: .bottom)
+            }
         }
+    }
+
+    /// A scalar that changes whenever the last (currently-streaming) bubble grows:
+    /// its text + reasoning length and tool-call count. Drives live auto-scroll
+    /// during a turn without depending on a new bubble being appended.
+    private var transcriptTailSignature: Int {
+        guard let last = agent.transcript.last else { return 0 }
+        return last.text.count &+ last.reasoning.count &+ (last.toolCalls.count &* 100_000)
     }
 
     private var emptyState: some View {

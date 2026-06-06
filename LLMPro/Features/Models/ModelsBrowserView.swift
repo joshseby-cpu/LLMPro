@@ -38,9 +38,9 @@ struct ModelsBrowserView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 searchBar
-                Divider()
                 content
             }
+            .padding(10)
             .navigationTitle("Models")
             .task(id: "init") {
                 await registry.scan()
@@ -49,12 +49,12 @@ struct ModelsBrowserView: View {
     }
 
     private var searchBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 5) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search HuggingFace…", text: $query, onCommit: search)
-                .textFieldStyle(.plain)
-                .frame(maxWidth: .infinity)
-                .onSubmit { search() }
+                    .textFieldStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                    .onSubmit { search() }
             Toggle("mlx-community only", isOn: $mlxOnly)
                 .toggleStyle(.switch)
                 .controlSize(.small)
@@ -64,8 +64,12 @@ struct ModelsBrowserView: View {
             }
             .keyboardShortcut(.return, modifiers: [.command])
         }
-        .padding(12)
+        .padding(5)
         .background(.bar)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(.secondary, lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -74,10 +78,6 @@ struct ModelsBrowserView: View {
         HSplitView {
             if let selected {
                 ModelDetailView(model: selected)
-            } else {
-                ContentUnavailableView("Pick a model", systemImage: "cube.box",
-                                       description: Text("Select a HuggingFace result or a local model on the left."))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -93,12 +93,12 @@ struct ModelsBrowserView: View {
                 }
             }
 
-            Section("HuggingFace results") {
+            Section() {
                 if let searchError {
                     Label(searchError, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.red)
-                } else if results.isEmpty {
-                    Text(searching ? "Searching…" : "Press Search to query HuggingFace.")
+                } else if searching {
+                    Text("Searching…")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(results) { model in

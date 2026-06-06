@@ -2058,3 +2058,20 @@ standalone Swift harness using the exact parsing code: `web_search('mlx-lm lora
 fine-tuning')` → 10 real results with un-wrapped URLs + snippets; `fetch_url(
 example.com)` → HTTP 200 stripped to text. NOT yet driven through the in-app agent
 loop (would need a model session); the tool layer is proven.
+
+### Session 2026-06-05 (cont.) — Code transcript follows the live agent task
+
+The transcript auto-scrolled only when a NEW bubble was appended
+(`transcript.count`) or `isRunning` flipped. But the *current* task streams text,
+reasoning, and tool calls INTO the existing last bubble — count doesn't change — so
+the bottom drifted off-screen and the user couldn't watch the active agent work.
+
+Fix (`CodeView.transcript`): added an `onChange(of: transcriptTailSignature)` →
+`scrollTo("BOTTOM")`. `transcriptTailSignature` is a single Int derived from the
+last bubble's `text.count + reasoning.count + toolCalls.count*100k`, so it bumps on
+every stream flush / new tool call and the view follows the live output down.
+Unanimated scrollTo (per the existing perf note — animated scroll pegs the @MainActor
+loop). Build green. Tradeoff: always-follow (no "user scrolled up" suppression),
+matching the existing count/isRunning behavior; near-bottom detection was skipped on
+purpose because the scroll-offset GeometryReader it needs reintroduces the per-frame
+layout cost the transcript explicitly avoids.
