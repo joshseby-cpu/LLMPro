@@ -833,6 +833,8 @@ private struct ToolCardView: View {
         case .todoWrite:  return "checklist"
         case .askUser:    return "questionmark.bubble"
         case .remember:   return "brain"
+        case .webSearch:  return "globe"
+        case .fetchUrl:   return "link"
         case nil:         return "wrench.and.screwdriver"
         }
     }
