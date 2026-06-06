@@ -49,6 +49,8 @@ struct AgentToolCallView: Identifiable, Sendable {
         case .todoWrite:  return "Update plan"
         case .askUser:    return "Ask you: \(s("question").prefix(70))"
         case .remember:   return "Remember: \(s("lesson").prefix(70))"
+        case .webSearch:  return "Search web: \(s("query").prefix(60))"
+        case .fetchUrl:   return "Fetch \(s("url").prefix(70))"
         case nil:         return name
         }
     }

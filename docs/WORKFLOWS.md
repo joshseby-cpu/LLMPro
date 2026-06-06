@@ -855,8 +855,10 @@ in-app, no rebuild required. Open **Code -> Options** in the Code tab toolbar.
   Two example skills (`conventional-commits`, `code-reviewer`) are seeded on first
   launch.
 
-Both managers are **fully offline** (local Markdown only; the agents have no network
-tools). See `docs/CONTRACTS.md` for the agent/SKILL.md frontmatter format and
+Both managers edit **local Markdown only** (no network in the editors themselves).
+Note the *agents* are no longer fully offline: the Researcher has `web_search` /
+`fetch_url` (restored 2026-06-05 — see CONVENTIONS.md "Real web research"). See
+`docs/CONTRACTS.md` for the agent/SKILL.md frontmatter format and
 `docs/ARCHITECTURE.md` for the `AgentStore` / `SkillStore` services.
 
 > **History:** an earlier design had a single switchable "Agent" with an

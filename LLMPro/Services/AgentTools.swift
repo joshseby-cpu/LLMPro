@@ -25,16 +25,19 @@ enum AgentToolName: String, CaseIterable, Sendable {
     case todoWrite   = "todo_write"
     case askUser     = "ask_user"
     case remember    = "remember"
+    case webSearch   = "web_search"
+    case fetchUrl    = "fetch_url"
 
     /// Read-only tools can't change anything, so they auto-run without an
     /// approval prompt. The rest mutate the workspace or run arbitrary code and
     /// are gated unless the user opted into auto-approve. `todo_write`, the web
     /// tools, `ask_user`, and `remember` never touch the workspace, so they're
-    /// read-only too.
+    /// read-only too. The web tools only READ from the network (no posting),
+    /// so they auto-run as well.
     var isReadOnly: Bool {
         switch self {
         case .readFile, .listDir, .glob, .grep, .useSkill, .todoWrite,
-             .askUser, .remember: return true
+             .askUser, .remember, .webSearch, .fetchUrl: return true
         case .writeFile, .editFile, .runCommand: return false
         }
     }
@@ -103,6 +106,14 @@ enum AgentTools {
             return spec(.remember, "Save a DURABLE lesson or fact about THIS project to your long-term memory, so future sessions reuse it. Use for things that stay true: the build/test/run commands, framework & versions, directory layout, conventions, key decisions, and mistakes to avoid. NOT for one-off task details.",
                  props: ["lesson": "One concise, reusable fact or lesson (≤ 20 words)."],
                  required: ["lesson"])
+        case .webSearch:
+            return spec(.webSearch, "Search the web and get a list of result titles, URLs, and snippets. Use this to find current information, docs, library versions, or APIs that may be newer than your training data. Follow up with fetch_url to read a promising result in full.",
+                 props: ["query": "The search query, like you'd type into a search engine."],
+                 required: ["query"])
+        case .fetchUrl:
+            return spec(.fetchUrl, "Download a web page and return its readable text (HTML stripped). Use after web_search to read a result, or to fetch a known docs/API URL directly.",
+                 props: ["url": "The full http(s) URL to fetch."],
+                 required: ["url"])
         }
     }
 
@@ -280,6 +291,8 @@ struct ToolExecutor: Sendable {
             case .editFile:   return try editFile(args)
             case .runCommand: return try await runCommand(args)
             case .useSkill:   return try useSkill(args)
+            case .webSearch:  return try await webSearch(args)
+            case .fetchUrl:   return try await fetchUrl(args)
             // todo_write, ask_user, and remember are intercepted in the
             // orchestration engine (they update app state / pause for the user /
             // write project memory); these are defensive fallbacks.
@@ -478,6 +491,146 @@ struct ToolExecutor: Sendable {
         let available = skills.map(\.name).joined(separator: ", ")
         return ToolResult(output: "No skill named “\(name)”. Available skills: \(available.isEmpty ? "(none)" : available)",
                           isError: true)
+    }
+
+    // MARK: web tools (read-only network)
+
+    /// Browser-y headers + a short timeout shared by both web tools. DuckDuckGo's
+    /// HTML endpoint and most docs sites reject a default URLSession user-agent.
+    private static func webRequest(_ url: URL) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 20
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+                     + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                     forHTTPHeaderField: "User-Agent")
+        return req
+    }
+
+    /// Web search via DuckDuckGo's keyless HTML endpoint — no API key, no account,
+    /// consistent with the app's no-credentials posture. Parses the result anchors
+    /// + snippets out of the returned HTML. Best-effort: returns a clear message if
+    /// the network is down or the markup changes, rather than throwing.
+    private func webSearch(_ args: [String: Any]) async throws -> ToolResult {
+        let query = try stringArg(args, "query")
+        guard let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://html.duckduckgo.com/html/?q=\(q)") else {
+            return ToolResult(output: "Invalid search query.", isError: true)
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(for: Self.webRequest(url))
+            guard let html = String(data: data, encoding: .utf8) else {
+                return ToolResult(output: "Search returned no readable response.", isError: true)
+            }
+            let results = Self.parseDuckDuckGo(html)
+            if results.isEmpty {
+                return ToolResult(output: "No results for “\(query)”.", isError: false)
+            }
+            let body = results.prefix(8).enumerated().map { i, r in
+                "\(i + 1). \(r.title)\n   \(r.url)\n   \(r.snippet)"
+            }.joined(separator: "\n\n")
+            return ToolResult(output: truncate(body), isError: false)
+        } catch {
+            return ToolResult(output: "Web search failed (offline or blocked): \(error.localizedDescription)",
+                              isError: true)
+        }
+    }
+
+    /// Fetch a URL and return readable text (scripts/styles/tags stripped). Only
+    /// http/https; refuses other schemes. Best-effort HTML→text — good enough for
+    /// the model to read docs / API references.
+    private func fetchUrl(_ args: [String: Any]) async throws -> ToolResult {
+        let raw = try stringArg(args, "url")
+        guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return ToolResult(output: "fetch_url needs a full http(s) URL. Got: \(raw)", isError: true)
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: Self.webRequest(url))
+            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                return ToolResult(output: "HTTP \(http.statusCode) fetching \(url.host ?? raw).", isError: true)
+            }
+            guard let body = String(data: data, encoding: .utf8) else {
+                return ToolResult(output: "Fetched \(data.count) bytes but couldn't decode as text "
+                                  + "(probably a binary file).", isError: true)
+            }
+            let text = Self.htmlToText(body)
+            return ToolResult(output: truncate(text.isEmpty ? "(page had no readable text)" : text),
+                              isError: false)
+        } catch {
+            return ToolResult(output: "Couldn't fetch \(url.host ?? raw): \(error.localizedDescription)",
+                              isError: true)
+        }
+    }
+
+    struct WebResult { let title: String; let url: String; let snippet: String }
+
+    /// Pull (title, url, snippet) triples out of DuckDuckGo HTML results. The
+    /// lite/html endpoint wraps each hit's title in `<a class="result__a" …>` and
+    /// the blurb in `class="result__snippet"`. We also un-wrap DDG's redirect
+    /// links (`/l/?…uddg=<real-url>`) back to the real destination.
+    static func parseDuckDuckGo(_ html: String) -> [WebResult] {
+        var out: [WebResult] = []
+        let ns = html as NSString
+        guard let linkRx = try? NSRegularExpression(
+            pattern: "result__a[^>]*href=\"(.*?)\"[^>]*>(.*?)</a>",
+            options: [.dotMatchesLineSeparators, .caseInsensitive]) else { return out }
+        let snipRx = try? NSRegularExpression(
+            pattern: "result__snippet[^>]*>(.*?)</a>",
+            options: [.dotMatchesLineSeparators, .caseInsensitive])
+        let links = linkRx.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        let snips = snipRx?.matches(in: html, range: NSRange(location: 0, length: ns.length)) ?? []
+        for (i, m) in links.enumerated() where m.numberOfRanges >= 3 {
+            let href = unwrapDDG(ns.substring(with: m.range(at: 1)))
+            let title = stripTags(ns.substring(with: m.range(at: 2)))
+            var snippet = ""
+            if i < snips.count, snips[i].numberOfRanges >= 2 {
+                snippet = stripTags(ns.substring(with: snips[i].range(at: 1)))
+            }
+            if !title.isEmpty { out.append(WebResult(title: title, url: href, snippet: snippet)) }
+        }
+        return out
+    }
+
+    private static func unwrapDDG(_ href: String) -> String {
+        // DDG wraps results as //duckduckgo.com/l/?uddg=<percent-encoded-real-url>
+        guard href.contains("uddg=") else {
+            return href.hasPrefix("//") ? "https:" + href : href
+        }
+        guard let comps = URLComponents(string: href.hasPrefix("//") ? "https:" + href : href),
+              let real = comps.queryItems?.first(where: { $0.name == "uddg" })?.value else { return href }
+        return real
+    }
+
+    /// Crude but effective HTML → readable text: drop script/style, turn tags into
+    /// spaces, decode the few entities that matter, collapse whitespace.
+    static func htmlToText(_ html: String) -> String {
+        var s = html
+        for pattern in ["<script[^>]*>.*?</script>", "<style[^>]*>.*?</style>",
+                        "<!--.*?-->", "<head[^>]*>.*?</head>"] {
+            if let rx = try? NSRegularExpression(pattern: pattern,
+                    options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+                s = rx.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: " ")
+            }
+        }
+        return stripTags(s)
+    }
+
+    /// Remove HTML tags, decode common entities, collapse runs of whitespace.
+    static func stripTags(_ html: String) -> String {
+        var s = html
+        if let rx = try? NSRegularExpression(pattern: "<[^>]+>", options: [.dotMatchesLineSeparators]) {
+            s = rx.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: " ")
+        }
+        let entities = ["&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"",
+                        "&#39;": "'", "&#x27;": "'", "&nbsp;": " ", "&hellip;": "…"]
+        for (e, c) in entities { s = s.replacingOccurrences(of: e, with: c) }
+        if let rx = try? NSRegularExpression(pattern: "[ \\t]*\\n[ \\t\\n]*") {
+            s = rx.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "\n")
+        }
+        if let rx = try? NSRegularExpression(pattern: "[ \\t]{2,}") {
+            s = rx.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: " ")
+        }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Compute the diff a write/edit WOULD produce, without applying it — so the

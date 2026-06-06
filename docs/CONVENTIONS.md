@@ -629,11 +629,24 @@ scheduler.
 
 ### Real web research via DuckDuckGo (no API key)
 
-The Researcher gets real web tools ([`WebSearch`](../LLMPro/Services/WebSearch.swift)):
-`web_search` scrapes the **DuckDuckGo HTML endpoint** (no key, no account) and
-`fetch_url` downloads + strips a page to readable text. It's deliberately key-free
-and best-effort (degrades gracefully) to stay in the app's no-account, local-first
-posture. Don't add a paid search API or require credentials.
+The Researcher gets real web tools, implemented in pure Swift inside
+[`AgentTools.swift`](../LLMPro/Services/AgentTools.swift)'s `ToolExecutor`
+(`webSearch`/`fetchUrl` — there is no separate `WebSearch.swift`): `web_search`
+scrapes the **DuckDuckGo HTML endpoint** (`html.duckduckgo.com`, no key, no account,
+results' redirect links un-wrapped to real URLs) and `fetch_url` downloads a page and
+strips it to readable text (`htmlToText`/`stripTags`). Both use `URLSession` with a
+browser User-Agent + 20 s timeout, are **read-only** (network reads only, never POST),
+and **auto-run** (no approval prompt). Best-effort: a network failure or markup change
+returns a clear message instead of throwing. Don't add a paid search API or require
+credentials.
+
+> **History (important).** These tools were *removed* in an earlier session to make
+> the agents "fully offline," then **restored 2026-06-05** at the user's request so
+> the Researcher can stay current (library versions, recent APIs/docs). Only the
+> **Researcher** carries them by default (`researcher.md` frontmatter `tools:`); add
+> `web_search`/`fetch_url` to another agent's `tools:` to give it web access too. The
+> app is not sandboxed (`com.apple.security.app-sandbox: false`), so no entitlement
+> change is needed for outbound HTTP.
 
 ### Agent Skills: progressive disclosure + linking
 

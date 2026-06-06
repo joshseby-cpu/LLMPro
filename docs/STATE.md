@@ -2026,3 +2026,35 @@ config `model_type: qwen3_5`, `architectures: [Qwen3_5ForCausalLM]`, no text_con
 then the exact failing `mlx_lm convert -q --q-bits 8` **completed** —
 "Quantized model with 8.501 bits per weight", 0 "not supported" errors. gemma-4
 path untouched (still keeps its nested config).
+
+### Session 2026-06-05 (cont.) — Restore web access for Code agents (Researcher)
+
+User asked for the Code agents to reach the internet to stay up to date. This
+**reverses** the earlier "make agents fully offline" decision (their explicit call).
+
+- `AgentTools.swift`: re-added `web_search` + `fetch_url` to `AgentToolName` (both
+  `isReadOnly` → auto-run, network reads only). Pure-Swift implementations in
+  `ToolExecutor` (no Python, no new file): `webSearch` hits the keyless DuckDuckGo
+  HTML endpoint and parses title/url/snippet (redirect links un-wrapped); `fetchUrl`
+  downloads + `htmlToText`-strips a page. `URLSession`, browser UA, 20 s timeout,
+  graceful failure messages.
+- Added the two `case`s to the three exhaustive `AgentToolName` switches that broke
+  the build: `CodingAgentService.summary` (label), `CodeView.icon` (globe/link SF
+  symbols). (`AgentTools.previewDiff` already had a `default`.)
+- `researcher.md`: `tools:` now includes `web_search, fetch_url`; prompt rewritten
+  from "you have no web access" to "use the web to check anything newer than your
+  training data; prefer official/primary sources; cite files AND links." Only the
+  Researcher carries web tools by default; add them to another agent's `tools:` to
+  extend.
+- App is **not sandboxed**, so outbound HTTP needs no entitlement change.
+- Docs reconciled: most (ARCHITECTURE/CONTRACTS/WORKFLOWS/STATE) already *described*
+  these tools (never fully reverted when they were removed), so this brings code back
+  in line. Fixed CONVENTIONS "Real web research" (corrected the dead
+  `WebSearch.swift` path → it's in `AgentTools.swift`; added the remove→restore
+  history) and the WORKFLOWS "agents have no network tools" line.
+
+**Verified:** `xcodebuild` → BUILD SUCCEEDED, 0 errors. Web logic live-tested in a
+standalone Swift harness using the exact parsing code: `web_search('mlx-lm lora
+fine-tuning')` → 10 real results with un-wrapped URLs + snippets; `fetch_url(
+example.com)` → HTTP 200 stripped to text. NOT yet driven through the in-app agent
+loop (would need a model session); the tool layer is proven.
