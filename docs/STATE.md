@@ -2101,3 +2101,25 @@ in one turn and narrating "in parallel," even though they then ran sequentially.
 
 Build green. NOT yet observed through a live model turn (needs a session); the prompt
 now matches the setting and execution was already gated.
+
+### Session 2026-06-07 — Remove the Adapter picker from the Code tab
+
+User: "In the Code section I do not want the Adapter." Removed the LoRA-adapter
+picker from `CodeView`'s top bar — the Code team now always runs the **base model
+only**.
+
+- Deleted the `Picker("Adapter", …)` from the toolbar (the "Base only / <job>"
+  dropdown) and all its supporting state: `@AppStorage("codeAdapterJobID")`
+  `savedAdapterID`, `@State selectedAdapterID`, the `onChange` persistence, the
+  `completedAdapterJobs` + `selectedAdapterPath` computed props, the restore-on-
+  launch block, and the now-unused `@Query var jobs` + `import SwiftData`.
+- `startSession()` now calls `agent.startSession(model:, adapterPath: nil)`.
+- `applyHandoff` keeps pre-filling the model from a Progress/Practice hand-off but
+  ignores any adapter path.
+- `CodingAgentService.startSession(model:adapterPath:)` signature unchanged (still
+  takes the optional) — the Code tab just always passes nil. To re-fine-tune-and-run
+  in one place, that's still the Try-it-out / Save & Use flows.
+
+Verified: BUILD SUCCEEDED, 0 errors, no new warnings (the 6 build warnings are all
+pre-existing, in other files). UI confirmed via screenshot: top bar is now
+folder · Model · Start session, no Adapter dropdown; app launches clean, 0 log errors.

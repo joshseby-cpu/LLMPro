@@ -1,5 +1,4 @@
 import SwiftUI
-import SwiftData
 import AppKit
 import UniformTypeIdentifiers
 
@@ -32,13 +31,6 @@ struct CodeView: View {
     @AppStorage("codeWorkspacePath") private var savedWorkspacePath = ""
     @AppStorage("codeOrchestratorModel") private var selectedModel = ""
 
-    // The fine-tuned LoRA the team runs on (optional). This is the loop's
-    // "use the coding model I trained" edge — a completed Teach/Practice adapter
-    // layered on the base model.
-    @AppStorage("codeAdapterJobID") private var savedAdapterID = ""
-    @State private var selectedAdapterID: UUID? = nil
-    @Query(sort: \TrainingJob.createdAt, order: .reverse) private var jobs: [TrainingJob]
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -51,14 +43,6 @@ struct CodeView: View {
         .task { await prepare() }
         .onChange(of: agent.transcript.count) { _, _ in
             explorerRefresh += 1   // re-scan the file tree as agents write files
-        }
-        .onChange(of: selectedAdapterID) { _, id in
-            savedAdapterID = id?.uuidString ?? ""
-            // A LoRA only works with the model it was trained on — keep them consistent.
-            if let id, let job = jobs.first(where: { $0.id == id }),
-               registry.localModels.contains(where: { $0.repoID == job.baseModelRepoID }) {
-                selectedModel = job.baseModelRepoID
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openCodeWithModel)) { note in
             applyHandoff(note.object)
@@ -215,17 +199,6 @@ struct CodeView: View {
                 }
                 .frame(maxWidth: 240)
                 .help("The shared LLM the whole agent team runs on. Press Start/Restart to load it.")
-
-                if !completedAdapterJobs.isEmpty {
-                    Picker("Adapter", selection: $selectedAdapterID) {
-                        Text("Base only").tag(UUID?.none)
-                        ForEach(completedAdapterJobs) { j in
-                            Text(j.name).tag(Optional(j.id))
-                        }
-                    }
-                    .frame(maxWidth: 200)
-                    .help("Run the team on a LoRA you fine-tuned in the Teach or Practice tab, layered on the base model.")
-                }
 
                 Spacer()
                 sessionButton
@@ -536,20 +509,6 @@ struct CodeView: View {
 
     // MARK: Derived values
 
-    /// Completed Teach/Practice jobs whose adapter weights are on disk — the
-    /// fine-tuned coders the user can point the team at.
-    private var completedAdapterJobs: [TrainingJob] {
-        jobs.filter {
-            $0.status == .completed &&
-            FileManager.default.fileExists(atPath: $0.adapterURL.appendingPathComponent("adapters.safetensors").path)
-        }
-    }
-
-    private var selectedAdapterPath: String? {
-        guard let id = selectedAdapterID, let job = jobs.first(where: { $0.id == id }) else { return nil }
-        return job.adapterURL.path
-    }
-
     private var folderLabel: String {
         agent.workspaceURL?.lastPathComponent ?? "Choose folder…"
     }
@@ -574,11 +533,6 @@ struct CodeView: View {
            FileManager.default.fileExists(atPath: savedWorkspacePath) {
             agent.workspaceURL = URL(fileURLWithPath: savedWorkspacePath)
         }
-        if selectedAdapterID == nil, !savedAdapterID.isEmpty,
-           let id = UUID(uuidString: savedAdapterID),
-           jobs.contains(where: { $0.id == id }) {
-            selectedAdapterID = id
-        }
     }
 
     private func chooseFolder() {
@@ -596,18 +550,16 @@ struct CodeView: View {
 
     private func startSession() {
         guard !selectedModel.isEmpty else { return }
-        let adapter = selectedAdapterPath
-        Task { await agent.startSession(model: selectedModel, adapterPath: adapter) }
+        // The Code team runs on the base model only — no LoRA adapter.
+        Task { await agent.startSession(model: selectedModel, adapterPath: nil) }
     }
 
-    /// Pre-fill the model + adapter pickers from a Progress/Practice hand-off so
-    /// the fine-tune the user just produced is the one the team loads.
+    /// Pre-fill the model picker from a Progress/Practice hand-off so the model the
+    /// user just worked with is the one the team loads. (The Code team runs the base
+    /// model only — any adapter in the hand-off is ignored here.)
     private func applyHandoff(_ object: Any?) {
         if let h = object as? ModelHandoff {
             if registry.localModels.contains(where: { $0.repoID == h.model }) { selectedModel = h.model }
-            if let p = h.adapterPath, let job = jobs.first(where: { $0.adapterURL.path == p }) {
-                selectedAdapterID = job.id
-            }
         } else if let repo = object as? String,
                   registry.localModels.contains(where: { $0.repoID == repo }) {
             selectedModel = repo
