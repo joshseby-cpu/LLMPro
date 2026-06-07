@@ -52,6 +52,11 @@ struct TrainingConfigView: View {
     @State private var launching = false
     @State private var error: String?
 
+    // "Training should modify the model": when on, the finished training is fused
+    // into the chosen model and saved as a new ready-to-use model (the original is
+    // kept). Non-destructive — no confirmation needed.
+    @State private var applyToModelInPlace = false
+
     /// Convenience: the DetectedModel for the currently selected repoID, or nil
     /// if the user hasn't picked yet / the model isn't registered.
     private var selectedModel: ModelRegistry.DetectedModel? {
@@ -290,6 +295,7 @@ struct TrainingConfigView: View {
 
     private var summaryAndStart: some View {
         VStack(alignment: .leading, spacing: 10) {
+            applyInPlaceToggle
             TextField(derivedDefaultName, text: $jobName)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 360)
@@ -330,6 +336,37 @@ struct TrainingConfigView: View {
                     .font(.caption).foregroundStyle(.orange)
             }
         }
+    }
+
+    /// The "training should modify the model" switch + an honest caption.
+    private var applyInPlaceToggle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Save the trained model when done", isOn: $applyToModelInPlace)
+            Text(applyToModelInPlace
+                 ? "On: when training finishes, it's merged into the model and saved as a new ready-to-use model “\(selectedModelDisplayName)-trained” — no separate adapter step. Your original model is kept. \(applyCaveat)"
+                 : "Off (normal): training produces a separate adapter; pick it up later in Save & Use to make a model from it.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(applyToModelInPlace ? Color.accentColor.opacity(0.08) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Caveat tailored to the selected model: quantized models come back larger
+    /// because fusing dequantizes them.
+    private var applyCaveat: String {
+        guard let repo = selectedModelRepoID,
+              let m = registry.localModels.first(where: { $0.repoID == repo }),
+              !m.quantization.isEmpty, m.quantization.lowercased() != "none"
+        else { return "" }
+        return "(It's \(m.quantization) — merging makes the saved copy full-precision, so it'll be larger on disk.)"
+    }
+
+    private var selectedModelDisplayName: String {
+        guard let repo = selectedModelRepoID else { return "the selected model" }
+        return registry.localModels.first(where: { $0.repoID == repo })?.displayName ?? repo
     }
 
     @ViewBuilder
@@ -693,7 +730,8 @@ struct TrainingConfigView: View {
             configYAML: yaml,
             baseModelRepoID: repo,
             datasetID: ds.id,
-            adapterRelativePath: jobID.uuidString
+            adapterRelativePath: jobID.uuidString,
+            applyToModelInPlace: applyToModelInPlace
         )
         modelContext.insert(job)
         do { try modelContext.save() } catch {

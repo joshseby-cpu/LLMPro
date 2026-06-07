@@ -34,6 +34,20 @@ final class TrainingJob {
     var lastEvalLoss: Double?
     var metricsBlob: Data
     var createdAt: Date
+    /// When true, on successful completion the trained adapter is automatically
+    /// fused into the base model and saved as a NEW ready-to-use model under
+    /// `models/<name>-trained` (the user's "training should modify the model"
+    /// choice). The original model is always kept — this is a copy, never an
+    /// overwrite. Default false = the normal flow (adapter stays separate; use
+    /// Save & Use to fuse on demand). Applied by `ModelApplyService` from the
+    /// training-completion hook. A non-optional with a default is a lightweight
+    /// SwiftData migration — old jobs read as false.
+    /// (Stored name kept for migration stability; semantics are "auto-fuse to a
+    /// new model," not in-place.)
+    var applyToModelInPlace: Bool = false
+    /// Set by `ModelApplyService` after the auto-fuse finishes (or fails), so the
+    /// UI can show the outcome. nil = not attempted.
+    var applyOutcome: String?
 
     init(
         id: UUID = UUID(),
@@ -41,7 +55,8 @@ final class TrainingJob {
         configYAML: String,
         baseModelRepoID: String,
         datasetID: UUID,
-        adapterRelativePath: String
+        adapterRelativePath: String,
+        applyToModelInPlace: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -50,6 +65,7 @@ final class TrainingJob {
         self.baseModelRepoID = baseModelRepoID
         self.datasetID = datasetID
         self.adapterRelativePath = adapterRelativePath
+        self.applyToModelInPlace = applyToModelInPlace
         self.lastIter = 0
         self.metricsBlob = Data()
         self.createdAt = Date()

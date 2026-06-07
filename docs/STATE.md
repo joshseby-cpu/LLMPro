@@ -2179,3 +2179,37 @@ Verified: BUILD SUCCEEDED 0 errors; skill scans in the live dir (4 skills presen
 The earlier live agent test already proved the build-loop works end-to-end (it built
 + compiled a macOS SwiftUI app unaided); this skill generalizes that to any language
 whose toolchain is installed.
+
+### Session 2026-06-07 (cont.) — "Training modifies the model" → auto-fuse to a new model
+
+User wanted training to modify the model it trains on. After weighing options
+(in-place overwrite is irreversible + risks corrupting the shared HF cache; fusing
+quantized dequantizes), settled on the **safe** design: when the toggle is on,
+training auto-fuses the adapter into the base and saves a NEW `models/<name>-trained`
+model on completion. The original is always kept.
+
+- New `Services/ModelApplyService.swift` (`@MainActor @Observable`): fuse base+adapter
+  into a temp dir → validate (config.json + a .safetensors present) → move into a
+  unique `models/<name>-trained` → `ModelRegistry.scan()`. Nothing registers unless
+  the fused output validates; a failed fuse leaves only a discardable temp dir.
+- `TrainingJob` gained `applyToModelInPlace: Bool = false` (+ `applyOutcome: String?`).
+  Name kept for SwiftData migration stability; semantics are "auto-fuse to a new
+  model," NOT in-place overwrite. Lightweight migration (old jobs read false).
+- `TrainingService` completion hook: on clean success + flag, calls
+  `ModelApplyService.apply` and records the outcome on the job.
+- Teach UI (`TrainingConfigView`): new "Save the trained model when done" toggle
+  with an honest caption; no confirmation alert (non-destructive). Carries the flag
+  into the `TrainingJob`.
+
+**Verified end-to-end** (mechanism mirror on real artifacts): fused
+mlx-community/Llama-3.2-1B-Instruct-4bit + a 6.5M adapter → valid model (config + 1
+safetensors, 680M) → moved into models/ → **loads cleanly via mlx_lm.load**. Notable:
+fusing an already-MLX-4bit model PRESERVED 4-bit quant (stayed 680M) — the
+"dequantizes/larger" caveat is conservative; true for bf16/fp16 sources, not
+necessarily for MLX-quantized ones. BUILD SUCCEEDED 0 errors.
+
+**Gotcha logged for future:** `cp -cRL <model>/` on an HF snapshot can follow a
+symlink that escapes to the filesystem root and recursively clone huge system trees
+(hit during an abandoned in-place test). ModelApplyService avoids cp entirely (it
+moves the fused temp dir), so it's not affected — but don't use `cp -L` on snapshot
+dirs.

@@ -295,6 +295,30 @@ final class TrainingService {
                 job.endedAt = Date()
                 try? context.save()
                 job.writeSidecar()
+
+                // "Training should modify the model": if the user asked for it,
+                // auto-fuse the freshly-trained adapter into the base model and save
+                // the result as a new ready-to-use model (the original is kept).
+                // Runs only on a clean success; nothing registers unless the fused
+                // output validates (see ModelApplyService).
+                if result.code == 0, job.applyToModelInPlace {
+                    let repoID = job.baseModelRepoID
+                    let adapterDir = job.adapterURL
+                    Task { @MainActor in
+                        do {
+                            let newModel = try await ModelApplyService.shared.apply(repoID: repoID, adapterDir: adapterDir)
+                            if let j = Self.fetchJob(id: jobID, context: context) {
+                                j.applyOutcome = "Saved trained model: \(newModel.lastPathComponent)"
+                                try? context.save(); j.writeSidecar()
+                            }
+                        } catch {
+                            if let j = Self.fetchJob(id: jobID, context: context) {
+                                j.applyOutcome = "Auto-fuse failed: \(error.localizedDescription)"
+                                try? context.save(); j.writeSidecar()
+                            }
+                        }
+                    }
+                }
             }
         }
     }
