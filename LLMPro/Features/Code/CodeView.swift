@@ -221,15 +221,30 @@ struct CodeView: View {
                 }
             }
 
-            Button { showOptions.toggle() } label: {
-                Label("Options", systemImage: "gearshape").font(.caption)
+            // Options as an inline collapsible section (not a popover) so it
+            // pushes the IDE down rather than floating over the transcript.
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { showOptions.toggle() }
+            } label: {
+                Label("Options", systemImage: showOptions ? "chevron.down" : "chevron.right")
+                    .font(.caption)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .popover(isPresented: $showOptions, arrowEdge: .bottom) {
-                ScrollView { optionsForm.padding(14) }
-                    .frame(width: 380)
-                    .frame(maxHeight: 460)
+
+            if showOptions {
+                // The form is long; cap its height and let IT scroll. This
+                // ScrollView is in the header (above the Divider) — a sibling of
+                // the IDE/transcript area, NOT nested inside the chat column — so
+                // it doesn't reintroduce the competing-ScrollView layout cycle the
+                // optionsForm comment warns about.
+                ScrollView {
+                    optionsForm.padding(12)
+                }
+                .frame(maxWidth: 460, alignment: .leading)
+                .frame(maxHeight: 360)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(10)

@@ -2213,3 +2213,21 @@ symlink that escapes to the filesystem root and recursively clone huge system tr
 (hit during an abandoned in-place test). ModelApplyService avoids cp entirely (it
 moves the fused temp dir), so it's not affected — but don't use `cp -L` on snapshot
 dirs.
+
+### Session 2026-06-07 (cont.) — Code Options: popover → inline collapsible section
+
+User: the Code-tab Options should be a collapsible section, not a popover floating
+over the transcript. Replaced the `.popover(isPresented:)` on the Options button
+with an inline disclosure in the header: the button toggles `showOptions` (chevron
+right→down) and, when expanded, renders `optionsForm` in a capped, rounded panel
+right below it — pushing the IDE/transcript down instead of overlaying it.
+
+Safety: the inline form's ScrollView lives IN THE HEADER (sibling of workspaceArea,
+above the Divider), NOT nested in the chat column, so it does not reintroduce the
+competing-ScrollView macOS layout cycle that `optionsForm`'s comment warns about.
+Capped at maxHeight 360 so a long form scrolls internally rather than shoving the
+IDE off-screen. The existing `showOptions = false` on the agents/skills/memory
+buttons now just collapses the section when a sheet opens (still correct).
+
+Verified live: expand shows the form inline (IDE moves down, transcript not
+covered); collapse restores full height; 0 log errors, no beachball. BUILD SUCCEEDED.
