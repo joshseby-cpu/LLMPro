@@ -175,6 +175,38 @@ final class SkillStore {
          - One type per file, named after the type. Don't invent SwiftUI APIs — if unsure, keep it simple or have the Researcher check current docs.
          - Definition of done = builds clean + a real @main App + at least one working screen across multiple files + you told the user how to run it.
          """),
+        ("project-build-verify",
+         "Use for ANY coding project in any language (Rust, .NET/C#, TypeScript/Node, Go, Zig, Python, C/C++, Java, …). Detect the language and its build tool, scaffold idiomatically, then ALWAYS compile/test and iterate until it's green.",
+         """
+         ## When to use
+         Any time you create or modify a real project in any language. (For a macOS/iOS SwiftUI **app**, prefer `swiftui-app-builder`; this covers everything else.)
+
+         ## The one rule
+         Writing code is not done — compiling/testing clean is done. After any change, build/test with `run_command`, READ the output, fix the exact errors, repeat until green. Never hand back code you haven't built.
+
+         ## Step 1 — detect language & build tool (look for the manifest)
+         - `Cargo.toml` → Rust: `cargo new <name>` · `cargo build` · `cargo test`
+         - `*.csproj`/`*.sln` → .NET: `dotnet new console|classlib|web -n <name>` · `dotnet build` · `dotnet test`
+         - `package.json` → TS/JS: `npm init -y` (+ `npx tsc --init` for TS) · `npx tsc --noEmit` or `npm run build` · `npm test`
+         - `go.mod` → Go: `go mod init <name>` · `go build ./...` · `go test ./...`
+         - `build.zig` → Zig: `zig init` · `zig build` · `zig build test`
+         - `CMakeLists.txt` → C/C++: `cmake -B build && cmake --build build` · `ctest --test-dir build`
+         - `pyproject.toml`/`requirements.txt` → Python: `python -m compileall .` · `pytest`
+         - `pom.xml`/`build.gradle` → Java: `mvn compile`/`gradle build` · `mvn test`
+         For a NEW project, prefer the language's own scaffolder over hand-creating files, then edit what it generates.
+
+         ## Step 2 — confirm the tool exists
+         A toolchain works only if installed. If a build command returns "command not found", do NOT silently switch languages — tell the user: "<tool> isn't installed. Install it (e.g. `brew install <tool>`) and I'll continue." (Verify with `command -v <tool>`.)
+
+         ## Step 3 — scaffold idiomatically
+         One concern per file; follow the language's conventions and the scaffolder's layout. Minimal, current dependencies. Unsure if a crate/package/API version is current? The Researcher teammate has `web_search`/`fetch_url` — use it instead of guessing.
+
+         ## Step 4 — build & test loop (the point)
+         Build → read errors → fix the named file → rebuild until it builds. Run tests if present (or add them) and make them pass. THEN report done and give the user the exact build/run command.
+
+         ## Definition of done
+         Builds with no errors via its real build tool; tests pass; you told the user how to build/run it; a new project has an idiomatic multi-file layout (not one giant file).
+         """),
     ]
 
     // MARK: Lookup

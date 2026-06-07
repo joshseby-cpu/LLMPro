@@ -2156,3 +2156,26 @@ chat JSONL on real rows; catalog↔helper id contract holds; skill well-formed.
 Realistic expectation set in the card copy: datasets give fluency; the Skill + the
 agent build loop give whole apps. Not yet run through a live fine-tune or a full
 end-to-end "build me an app" agent session.
+
+### Session 2026-06-07 (cont.) — Multi-language build support (generic build-verify skill)
+
+User: will build projects in many languages (Rust, Zig, .NET, TypeScript, …), not
+just Swift. Confirmed the Code agent is already language-agnostic — its tools are
+read/write/edit_file + run_command (nothing Swift-specific); the only gate is whether
+a language's toolchain is on PATH (run_command uses `/bin/zsh -lc`, inheriting it).
+
+- Probed installed toolchains: **present** — cargo 1.94, dotnet 10.0.201, node 25.8/
+  npm, swift 6.3.2, clang 21, cmake 4.3, python3, ruby. **Absent** — zig, go, java,
+  deno, bun. (User chose not to install any now.)
+- Added a generic **`project-build-verify`** Skill (live dir + SkillStore defaults →
+  now 4 seeded): detect language by manifest (Cargo.toml/*.csproj/package.json/go.mod/
+  build.zig/CMakeLists/pyproject/pom), scaffold with the language's own tool, then the
+  build→read-errors→fix→rebuild loop until green; if a tool is "command not found",
+  tell the user to install it rather than silently switching languages. Complements
+  `swiftui-app-builder` (which stays the macOS/iOS-app specialist).
+- Docs: ARCHITECTURE + CONTRACTS skill counts three→four.
+
+Verified: BUILD SUCCEEDED 0 errors; skill scans in the live dir (4 skills present).
+The earlier live agent test already proved the build-loop works end-to-end (it built
++ compiled a macOS SwiftUI app unaided); this skill generalizes that to any language
+whose toolchain is installed.
