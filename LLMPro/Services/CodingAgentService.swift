@@ -93,9 +93,9 @@ struct AgentSettings: Sendable {
     var autoApproveEdits = true            // ON by default for the team (builders run unattended)
     var autoRunCommands = true
     var useNativeTools = true
-    var parallelAgents = true              // when off, the orchestrator runs delegates one at a time
+    var parallelAgents = false              // when off, the orchestrator runs delegates one at a time
                                            // (kinder to a smaller model — only one request in flight)
-    var letModelThink = false              // OFF by default → send enable_thinking:false so a
+    var letModelThink = true              // OFF by default → send enable_thinking:false so a
                                            // "thinking" model (Gemma-4, Qwen3) acts directly instead of
                                            // reasoning past the token budget and never tool-calling
     var temperature = 0.2

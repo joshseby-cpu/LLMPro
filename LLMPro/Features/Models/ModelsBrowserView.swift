@@ -34,6 +34,8 @@ struct ModelsBrowserView: View {
     @State private var lmstudioError: String?
     @State private var lmstudioInstalledAt: URL?
 
+    @State private var showGGUFImport = false
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -44,6 +46,9 @@ struct ModelsBrowserView: View {
             .navigationTitle("Models")
             .task(id: "init") {
                 await registry.scan()
+            }
+            .sheet(isPresented: $showGGUFImport) {
+                GGUFImportView()
             }
         }
     }
@@ -63,6 +68,11 @@ struct ModelsBrowserView: View {
                 else { Text("Search") }
             }
             .keyboardShortcut(.return, modifiers: [.command])
+            Divider().frame(height: 16)
+            Button { showGGUFImport = true } label: {
+                Label("Import GGUF", systemImage: "square.and.arrow.down")
+            }
+            .help("Convert a GGUF model file (from LM Studio / Ollama / HuggingFace) into an MLX model")
         }
         .padding(5)
         .background(.bar)

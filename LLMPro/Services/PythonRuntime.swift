@@ -79,7 +79,10 @@ final class PythonRuntime {
             try await runUV(uv, [
                 "pip", "install",
                 "--python", PathResolver.venvPython.path,
-                "mlx-lm", "huggingface_hub", "datasets", "safetensors", "sentencepiece", "protobuf"
+                "mlx-lm", "huggingface_hub", "datasets", "safetensors", "sentencepiece", "protobuf",
+                // `gguf` is the tiny pure-python reader used by gguf_to_mlx.py to
+                // read GGUF metadata/vocab for the GGUF→MLX importer (no PyTorch).
+                "gguf"
             ])
 
             // mergekit powers the Fusion tab. It pulls in torch + transformers
@@ -199,7 +202,7 @@ final class PythonRuntime {
                      "humaneval_pull", "self_improve_round", "eval_pass_rate",
                      "merge_models", "add_expert", "manage_experts",
                      "mem_probe", "model_memory", "profile_experts", "mlx_run",
-                     "inspect_attention"] {
+                     "inspect_attention", "gguf_to_mlx"] {
             guard let resourceURL = Bundle.main.url(forResource: name, withExtension: "py", subdirectory: "helpers")
                                   ?? Bundle.main.url(forResource: name, withExtension: "py")
             else { continue }

@@ -2231,3 +2231,35 @@ buttons now just collapses the section when a sheet opens (still correct).
 
 Verified live: expand shows the form inline (IDE moves down, transcript not
 covered); collapse restores full height; 0 log errors, no beachball. BUILD SUCCEEDED.
+
+### Session 2026-06-07 (cont.) — GGUF → MLX import (Models tab)
+
+User wanted to convert GGUF model files to MLX. Investigated the real constraints
+(mlx-lm's `convert` can't read GGUF; transformers' gguf loader needs PyTorch). Found
+the lightweight path: **mlx.core has a NATIVE gguf loader** (`mx.load(path,
+return_metadata=True)`) — no torch — that handles F16/F32/Q4_0/Q4_1/Q8_0 (NOT
+K-quants). Tokenizer is rebuilt from the GGUF's embedded vocab via
+`transformers.integrations.ggml.GGUF*Converter` (pure-python, the torch-gated
+load_gguf_checkpoint bypassed by feeding the metadata dict directly).
+
+- `Resources/helpers/gguf_to_mlx.py`: `precheck` (arch+quant → convertible?) and
+  `convert` (mx.load → remap GGML→HF tensor names → rebuild config.json + tokenizer
+  → write models/<name>/). JSON-event protocol. Registered in installHelpers; `gguf`
+  added to bootstrap pip line (tiny, pure-python).
+- `Services/GGUFImportService.swift` (`@MainActor @Observable`): precheck + convert +
+  single-file HF download (huggingface_hub). Phase enum for the UI.
+- `Features/Models/GGUFImportView.swift`: "Import GGUF" sheet (Local file picker /
+  HuggingFace repo+file), shows the convertible verdict (arch/quant/reason) BEFORE
+  converting, then converts. Button added to ModelsBrowserView search bar.
+- Pre-check gates convert: K-quant GGUFs are refused with guidance ("download the MLX
+  build from HuggingFace instead") rather than failing cryptically.
+
+**Verified end-to-end (helper AND live UI):** precheck correct both ways (Q8_0
+TinyLlama → convertible; nomic Q4_K_M → not, with reason). Converted the Q8_0
+TinyLlama via the Import GGUF sheet → new MLX model appeared in the Models list
+(llama·8bit·1.24GB) and **loads + generates via mlx_lm.load**. 0 log errors. BUILD
+SUCCEEDED. Swift-first: no PyTorch added.
+
+**Scope note (honest):** the common modern K-quant GGUFs (Q4_K_M etc.) are NOT
+convertible by this lightweight path — the precheck flags them. Full K-quant support
+would require adding PyTorch, which the app deliberately avoids.
