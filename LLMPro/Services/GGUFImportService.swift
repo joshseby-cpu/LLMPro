@@ -128,8 +128,16 @@ final class GGUFImportService {
 
     /// Convert the GGUF to an MLX model under `models/<outputName>/`. Re-runs the
     /// precheck first and refuses an unsupported file with its reason.
+    ///
+    /// `optimize`: when true AND the GGUF was full-precision (F16/F32), the new
+    /// model is quantized to `optimizeBits`-bit MLX — a real size/speed win
+    /// (e.g. fp16 1.2 GB → 4-bit ~350 MB). If the GGUF was ALREADY quantized
+    /// (Q4_0/Q8_0), optimization is SKIPPED: re-quantizing an already-quantized
+    /// model only adds overhead (measured ~9 bpw from an 8-bit source) and loses
+    /// quality, so the imported MLX model is left as-is — it's already optimal.
     @discardableResult
-    func convert(path: String, outputName: String) async throws -> URL {
+    func convert(path: String, outputName: String,
+                 optimize: Bool = true, optimizeBits: Int = 4) async throws -> URL {
         guard PythonRuntime.shared.isReady, let python = PythonRuntime.shared.pythonURL
         else { throw ImportError.runtimeNotReady }
         guard FileManager.default.fileExists(atPath: helperURL.path) else { throw ImportError.helperMissing }
@@ -182,9 +190,61 @@ final class GGUFImportService {
             phase = .failed(reason: msg)
             throw ImportError.failed(msg)
         }
+
+        // Optimize for MLX: quantize, but ONLY if the GGUF was full-precision.
+        // The helper's `done` event reports whether the output is already
+        // quantized (an already-quantized GGUF → quantization in config). We
+        // detect it from config.json to decide.
+        if optimize, !modelIsQuantized(dest) {
+            do {
+                try await quantizeInPlace(dir: dest, bits: optimizeBits, python: python)
+            } catch {
+                // Quantization is a bonus — the unquantized model is still valid.
+                // Keep it and tell the user the optimize step didn't run.
+                Log.error("GGUF import: optimize step failed: \(error.localizedDescription)", .model)
+            }
+        }
+
         await ModelRegistry.shared.scan()
         phase = .done(modelName: dest.lastPathComponent, modelPath: dest.path)
         return dest
+    }
+
+    /// True if the MLX model at `dir` already carries a `quantization` block.
+    private func modelIsQuantized(_ dir: URL) -> Bool {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("config.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return json["quantization"] != nil
+    }
+
+    /// Quantize an MLX model dir to `bits`-bit, in place: `mlx_lm convert -q`
+    /// writes to a temp dir (it refuses to overwrite), then we swap it in.
+    private func quantizeInPlace(dir: URL, bits: Int, python: URL) async throws {
+        phase = .converting(stage: "optimize", message: "Optimizing for MLX (\(bits)-bit quantize)…")
+        let fm = FileManager.default
+        let tmp = dir.appendingPathExtension("opt-\(UUID().uuidString)")
+        try? fm.removeItem(at: tmp)
+        let lines = LineCollector()
+        do {
+            _ = try await ProcessRunner.runCapturing(
+                executable: python,
+                arguments: ["-m", "mlx_lm", "convert", "--hf-path", dir.path,
+                            "--mlx-path", tmp.path, "-q", "--q-bits", "\(bits)"],
+                environment: ["HF_HOME": PathResolver.hfHome.path, "PYTHONUNBUFFERED": "1"],
+                onStdout: { line in lines.add(line) },
+                onStderr: { line in lines.add(line) })
+        } catch {
+            try? fm.removeItem(at: tmp)
+            throw ImportError.failed("quantize: " + (Self.lastError(lines.all) ?? error.localizedDescription))
+        }
+        guard fm.fileExists(atPath: tmp.appendingPathComponent("config.json").path) else {
+            try? fm.removeItem(at: tmp)
+            throw ImportError.failed("Optimization produced no model.")
+        }
+        // Swap: replace the unquantized dir with the quantized one.
+        try? fm.removeItem(at: dir)
+        try fm.moveItem(at: tmp, to: dir)
     }
 
     // MARK: line parsing (nonisolated — safe to call from @Sendable callbacks)

@@ -2263,3 +2263,24 @@ SUCCEEDED. Swift-first: no PyTorch added.
 **Scope note (honest):** the common modern K-quant GGUFs (Q4_K_M etc.) are NOT
 convertible by this lightweight path — the precheck flags them. Full K-quant support
 would require adding PyTorch, which the app deliberately avoids.
+
+### Session 2026-06-07 (cont.) — GGUF import now optimizes for MLX
+
+Extended the GGUF→MLX importer to optionally OPTIMIZE the result with a proper MLX
+quantization pass, gated on the source precision (verified the gating matters):
+- **Full-precision GGUF (F16/F32)** → after convert, run `mlx_lm convert -q` →
+  canonical MLX quant (group_size 64, affine). Measured: qwen2 fp16 1.2 GB → 4-bit
+  349 MB (~3.4×), still loads + generates.
+- **Already-quantized GGUF (Q4_0/Q8_0)** → SKIP. Re-quantizing an already-quantized
+  model adds overhead + loses quality (measured ~9 bpw from an 8-bit source), so the
+  imported model is left as-is — already optimal.
+
+- `GGUFImportService.convert(path:outputName:optimize:optimizeBits:)`: after the
+  helper writes the model, `modelIsQuantized(dir)` checks config.json; if
+  full-precision and `optimize`, `quantizeInPlace` runs `mlx_lm convert -q` to a temp
+  dir and swaps it in. Optimize failure is non-fatal (keeps the unquantized model).
+- `GGUFImportView`: "Optimize for MLX (quantize)" toggle + 4/8-bit picker, shown only
+  for full-precision GGUFs; already-quantized shows "imported as-is, already optimal".
+
+Verified end-to-end: F16 path convert→quantize→swap→load (1.2GB→349MB, generates);
+quantized path correctly skipped. BUILD SUCCEEDED.

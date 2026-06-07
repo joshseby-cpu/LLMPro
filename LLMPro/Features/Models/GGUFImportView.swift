@@ -22,6 +22,8 @@ struct GGUFImportView: View {
 
     @State private var precheck: GGUFImportService.PrecheckResult?
     @State private var outputName: String = ""
+    @State private var optimize = true
+    @State private var optimizeBits = 4
     @State private var busy = false
     @State private var error: String?
     @State private var showFilePicker = false
@@ -117,10 +119,45 @@ struct GGUFImportView: View {
                 TextField("Save as (model name)", text: $outputName)
                     .textFieldStyle(.roundedBorder)
                     .onAppear { if outputName.isEmpty { outputName = defaultName(p) } }
+                optimizeControls(p)
             }
         }
         .padding(10)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// "Optimize for MLX" — quantize the result. Only meaningful for a
+    /// full-precision (F16/F32) GGUF; an already-quantized GGUF is left as-is
+    /// (re-quantizing degrades it), so we show that instead of a live toggle.
+    @ViewBuilder
+    private func optimizeControls(_ p: GGUFImportService.PrecheckResult) -> some View {
+        if sourceIsFullPrecision(p) {
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Optimize for MLX (quantize)", isOn: $optimize)
+                if optimize {
+                    Picker("Precision", selection: $optimizeBits) {
+                        Text("4-bit (smallest)").tag(4)
+                        Text("8-bit (higher quality)").tag(8)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 280)
+                }
+                Text(optimize
+                     ? "This GGUF is full-precision; quantizing makes the MLX model much smaller and faster (e.g. ~4× smaller at 4-bit)."
+                     : "Off: keep full precision (largest, highest quality).")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            Text("Already quantized (\(p.quant.joined(separator: ", "))) — it's imported as-is, already optimal for MLX. Re-quantizing would only lose quality.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// A GGUF is "full precision" when its tensors are only F16/F32 (no Q* types).
+    private func sourceIsFullPrecision(_ p: GGUFImportService.PrecheckResult) -> Bool {
+        !p.quant.contains { $0.uppercased().hasPrefix("Q") }
     }
 
     @ViewBuilder
@@ -202,7 +239,8 @@ struct GGUFImportView: View {
         busy = true; defer { busy = false }
         error = nil
         do {
-            _ = try await importer.convert(path: sourcePath, outputName: outputName)
+            _ = try await importer.convert(path: sourcePath, outputName: outputName,
+                                           optimize: optimize, optimizeBits: optimizeBits)
         } catch {
             self.error = error.localizedDescription
         }
