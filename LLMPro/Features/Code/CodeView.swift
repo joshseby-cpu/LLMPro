@@ -222,7 +222,9 @@ struct CodeView: View {
             }
 
             // Options as an inline collapsible section (not a popover) so it
-            // pushes the IDE down rather than floating over the transcript.
+            // pushes the IDE down rather than floating over the transcript. When
+            // expanded it reads as part of the header — full-width, no boxed card,
+            // separated only by a hairline divider — rather than a pasted-in panel.
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { showOptions.toggle() }
             } label: {
@@ -233,17 +235,18 @@ struct CodeView: View {
             .foregroundStyle(.secondary)
 
             if showOptions {
+                Divider()
                 // The form is long; cap its height and let IT scroll. This
-                // ScrollView is in the header (above the Divider) — a sibling of
-                // the IDE/transcript area, NOT nested inside the chat column — so
-                // it doesn't reintroduce the competing-ScrollView layout cycle the
-                // optionsForm comment warns about.
+                // ScrollView is in the header (above the Divider below workspaceArea)
+                // — a sibling of the IDE/transcript area, NOT nested inside the chat
+                // column — so it doesn't reintroduce the competing-ScrollView layout
+                // cycle the optionsForm comment warns about.
                 ScrollView {
-                    optionsForm.padding(12)
+                    optionsForm
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
                 }
-                .frame(maxWidth: 460, alignment: .leading)
                 .frame(maxHeight: 360)
-                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
