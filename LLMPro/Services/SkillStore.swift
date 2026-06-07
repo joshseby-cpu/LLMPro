@@ -113,6 +113,68 @@ final class SkillStore {
          For each finding give: severity (blocker / major / minor), the location, and a suggested fix.
          End with an overall verdict: approve, approve-with-nits, or request-changes.
          """),
+        ("swiftui-app-builder",
+         "Use when asked to build a macOS or iOS app (SwiftUI). Scaffolds a complete multi-file Xcode project, builds it, and fixes errors until it compiles.",
+         """
+         ## When to use
+         Whenever the user asks you to create a Mac or iOS **app** (not a single snippet) — e.g. "build a to-do app", "make a macOS menu-bar timer", "an iOS weather app".
+
+         ## The golden rule
+         A real app is a **multi-file Xcode project that compiles**, not one big file. Always scaffold the project, then **build it and read the errors**, then fix and rebuild until it compiles cleanly. Stop at "it builds", not "here's the code".
+
+         ## Project setup — use XcodeGen (installed)
+         Generate the `.xcodeproj` from a small `project.yml` instead of hand-writing it.
+         Layout: `<AppName>/project.yml` + `Sources/<AppName>App.swift` (@main) + `ContentView.swift` + `Models/ Views/ Services/`.
+         Minimal `project.yml`:
+         ```yaml
+         name: <AppName>
+         options: { bundleIdPrefix: com.example }
+         targets:
+           <AppName>:
+             type: application
+             platform: macOS          # or iOS
+             deploymentTarget: "14.0" # iOS: "17.0"
+             sources: [Sources]
+             settings:
+               base:
+                 PRODUCT_BUNDLE_IDENTIFIER: com.example.<AppName>
+                 GENERATE_INFOPLIST_FILE: YES
+                 MARKETING_VERSION: "1.0"
+                 CURRENT_PROJECT_VERSION: "1"
+         ```
+         Then `cd <AppName> && xcodegen generate`.
+
+         ## Entry point
+         ```swift
+         import SwiftUI
+         @main
+         struct <AppName>App: App {
+             var body: some Scene { WindowGroup { ContentView() } }
+         }
+         ```
+         Split features into Views/ (thin SwiftUI views), Models/ (data; `@Observable` on macOS 14+/iOS 17+), Services/ (networking, persistence).
+
+         ## Build — iterate until green (the step that makes it a real app)
+         macOS:
+         ```bash
+         xcodebuild -project <AppName>.xcodeproj -scheme <AppName> -configuration Debug -destination 'platform=macOS' build
+         ```
+         iOS (simulator — no signing):
+         ```bash
+         xcodebuild -project <AppName>.xcodeproj -scheme <AppName> -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' build
+         ```
+         (If the device name isn't found, run `xcrun simctl list devices available` and pick one.)
+         Read the output; on error open the named file, fix the exact issue, rebuild. Repeat until `** BUILD SUCCEEDED **`.
+
+         ## Running it
+         - macOS: `open ~/Library/Developer/Xcode/DerivedData/<AppName>-*/Build/Products/Debug/<AppName>.app`
+         - iOS: `xcrun simctl boot "iPhone 16"; open -a Simulator; xcrun simctl install booted <app>; xcrun simctl launch booted com.example.<AppName>`
+
+         ## Rules
+         - Target installed SDKs (macOS 14+/iOS 17+): prefer `@Observable`, `NavigationStack`, `.task {}`.
+         - One type per file, named after the type. Don't invent SwiftUI APIs — if unsure, keep it simple or have the Researcher check current docs.
+         - Definition of done = builds clean + a real @main App + at least one working screen across multiple files + you told the user how to run it.
+         """),
     ]
 
     // MARK: Lookup

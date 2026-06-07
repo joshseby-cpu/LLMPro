@@ -80,6 +80,39 @@ enum CodingDatasetCatalog {
             description: "Broad multi-language coding instructions (Python, C#, Java, JS, Go, etc.). Use when you want the model to be competent across many languages, including .NET. Sample 30K rows by default — full 120K is heavy.",
             recommendedFor: "General-purpose coding base; pair with a C#-only follow-up for .NET focus",
             licenseHint: "Apache-2.0."
+        ),
+        // Swift / SwiftUI presets — for Apple-platform (Mac / iOS) fine-tunes.
+        // All three repo IDs + schemas verified live against the HF datasets-server.
+        // Honest framing: these teach Swift LANGUAGE fluency + SwiftUI idiom; no
+        // public dataset teaches whole multi-file Xcode apps, so for full Mac/iOS
+        // apps pair a fine-tune here with the Code tab's "SwiftUI app builder"
+        // Skill (which scaffolds the project structure) + the build loop.
+        .init(
+            id: "swift-rlvr-133k",
+            displayName: "Swift (functions & algorithms) 133K",
+            hfRepo: "saurabh5/rlvr-code-data-Swift",
+            approxRows: 133_000,
+            description: "The largest real Swift instruction set on HuggingFace — ~133K problem→solution pairs (with verified unit tests). Teaches solid Swift LANGUAGE fluency: types, optionals, generics, control flow. It's algorithm/function-style, NOT whole-app structure — use it as the foundation, then layer the SwiftUI set on top. Sample 20–30K rows by default.",
+            recommendedFor: "Any 7B+ base you want fluent in Swift (the foundation for Apple-platform work)",
+            licenseHint: "Check the HF card (translated from open RLVR code data)."
+        ),
+        .init(
+            id: "swiftui-examples",
+            displayName: "SwiftUI Code Examples",
+            hfRepo: "MCES10-Software/SwiftUI-Code-Examples",
+            approxRows: 1_009,
+            description: "Small but on-target: ~1K prompt→SwiftUI-view pairs (\"Create a SwiftUI view with a TabView\" → working SwiftUI code). The only SwiftUI-specific instruction set on HF. SMALL — it specializes an already-capable model in SwiftUI idiom; it won't teach coding from scratch. Best as a SECOND pass after a broader coding or Swift dataset.",
+            recommendedFor: "Specializing a Swift-fluent model in SwiftUI views (pair after swift-rlvr-133k)",
+            licenseHint: "Check the HF card."
+        ),
+        .init(
+            id: "swift-qa-4k",
+            displayName: "Swift code Q&A 4K",
+            hfRepo: "mcorsa/swifterX-4k",
+            approxRows: 4_800,
+            description: "~4.8K instruction→Swift-code pairs drawn from real Swift files (broader than just UI — view controllers, data structures, utilities). Small and specialized; a good supplement to the 133K function set for more real-world Swift patterns.",
+            recommendedFor: "Adding real-world Swift breadth on top of the function/algorithm set",
+            licenseHint: "Check the HF card."
         )
     ]
 }

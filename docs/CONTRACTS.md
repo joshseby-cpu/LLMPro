@@ -1046,8 +1046,9 @@ name to its instructions.
 **Seeding.** `SkillStore.installDefaultsAndScan()` runs at launch from
 `LLMProApp`'s `.task`. It scans `skillsDir` and, on the very first launch only
 (guarded by the `didSeedExampleSkills` `UserDefaults` flag so deletions don't
-reappear), seeds two instruction-only example skills: `conventional-commits` and
-`code-reviewer`.
+reappear), seeds three instruction-only example skills: `conventional-commits`,
+`code-reviewer`, and `swiftui-app-builder` (scaffolds + builds a full macOS/iOS
+SwiftUI app — the "make real apps" companion to the Swift dataset presets).
 
 Skills are **team-global by default** — an agent with no `skills:` frontmatter sees
 the whole catalogue (matching the implicit-by-description model in Codex /

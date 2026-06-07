@@ -2123,3 +2123,36 @@ only**.
 Verified: BUILD SUCCEEDED, 0 errors, no new warnings (the 6 build warnings are all
 pre-existing, in other files). UI confirmed via screenshot: top bar is now
 folder · Model · Start session, no Adapter dropdown; app launches clean, 0 log errors.
+
+### Session 2026-06-07 — Swift/SwiftUI datasets + "build full Mac/iOS apps" path
+
+User wants to fine-tune for Apple Swift/SwiftUI and "create full Mac and iOS apps."
+Honest finding: no public dataset teaches whole multi-file Xcode apps (a full app is
+a repo, not a prompt→answer pair). So shipped a 3-part path:
+
+1. **Swift dataset presets** (all repo IDs + schemas verified live; download+transform
+   to chat JSONL test-passed on real rows):
+   - `swift-rlvr-133k` → saurabh5/rlvr-code-data-Swift (~133K; `translated_problem` →
+     `translated_solution` — NOTE the dataset's own `messages` col has only the user
+     turn, so we build the pair from problem+solution). Largest real Swift set; Swift
+     LANGUAGE fluency, algorithm-style.
+   - `swiftui-examples` → MCES10-Software/SwiftUI-Code-Examples (~1K; `prompt`→`output`).
+     Only SwiftUI-specific set on HF. Small → specialization pass.
+   - `swift-qa-4k` → mcorsa/swifterX-4k (~4.8K; columns are code=column0,
+     instruction=column1 — we train instruction→code; skip the mislabeled header row).
+   New splitters + PRESETS entries in `prepare_coding_dataset.py`; matching
+   `CodingDatasetCatalog` entries (ids match — contract holds, 10/10).
+2. **`swiftui-app-builder` Skill** — the piece that actually yields multi-file apps:
+   scaffold via XcodeGen (`project.yml`), `@main App`, split Views/Models/Services,
+   then BUILD with the exact `xcodebuild` commands (macOS + iOS-simulator) and iterate
+   until `** BUILD SUCCEEDED **`. Written to the live skills dir AND added to
+   `SkillStore.exampleSkills` so it ships for new installs (now 3 seeded skills).
+3. **Build toolchain verified** on this machine: Swift 6.3.2, Xcode 26.5, xcodegen
+   2.45.4, iOS 26.5 simulator; `swift build` smoke-tested OK → the Code agent's
+   run_command can write→build→fix→rebuild.
+
+Verified: BUILD SUCCEEDED 0 errors; all 3 presets download+transform to valid
+chat JSONL on real rows; catalog↔helper id contract holds; skill well-formed.
+Realistic expectation set in the card copy: datasets give fluency; the Skill + the
+agent build loop give whole apps. Not yet run through a live fine-tune or a full
+end-to-end "build me an app" agent session.
