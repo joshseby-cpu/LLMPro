@@ -51,6 +51,13 @@ enum PathResolver {
     /// in newer versions; both paths are scanned and either works.
     static var lmStudioDefault: URL { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".lmstudio/models") }
     static var selfImproveDir: URL { appSupport.appendingPathComponent("selfimprove", isDirectory: true).ensured() }
+    /// Scored-evaluation data. Layout:
+    ///   evals/humaneval/eval.jsonl        built-in suites, lazily pulled by
+    ///   evals/mbpp-sanitized/eval.jsonl   humaneval_pull.py (folder id == preset id)
+    ///   evals/custom-<uuid>/eval.jsonl    user-supplied custom suites
+    ///   evals/<run-uuid>/eval_run.json    one folder per EvalRun: its sidecar
+    /// `evalSuiteDir(for:)` builds a folder under here by id (suite id OR run id).
+    static var evalsDir: URL      { appSupport.appendingPathComponent("evals", isDirectory: true).ensured() }
     /// SKILL.md packages for the coding agent — one folder per skill, each with a
     /// `SKILL.md` (frontmatter name/description + instructions) and optional files.
     static var skillsDir: URL     { appSupport.appendingPathComponent("skills", isDirectory: true).ensured() }
@@ -75,6 +82,13 @@ enum PathResolver {
 
     static func selfImproveRunDir(for id: UUID) -> URL {
         selfImproveDir.appendingPathComponent(id.uuidString, isDirectory: true).ensured()
+    }
+
+    /// A folder under `evals/` addressed by a string id — used for both suite
+    /// folders (e.g. "humaneval", "custom-<uuid>") and per-run sidecar folders
+    /// (the EvalRun's uuid). Created on access like the other dir helpers.
+    static func evalSuiteDir(for id: String) -> URL {
+        evalsDir.appendingPathComponent(id, isDirectory: true).ensured()
     }
 
     private static func ensureDir(_ url: URL) {

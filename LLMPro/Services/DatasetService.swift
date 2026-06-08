@@ -72,6 +72,10 @@ enum DatasetService {
             else { continue }
             if obj["messages"] != nil { votes[.chat, default: 0] += 1 }
             else if obj["tools"] != nil { votes[.tools, default: 0] += 1 }
+            // Preference rows ({prompt, chosen, rejected}) also carry a `prompt`, so
+            // they must be tested BEFORE the completions check to avoid being
+            // misclassified as prompt/completion.
+            else if obj["prompt"] != nil && obj["chosen"] != nil && obj["rejected"] != nil { votes[.preference, default: 0] += 1 }
             else if obj["prompt"] != nil && obj["completion"] != nil { votes[.completions, default: 0] += 1 }
             else if obj["text"] != nil { votes[.text, default: 0] += 1 }
         }

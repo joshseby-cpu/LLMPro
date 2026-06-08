@@ -29,7 +29,7 @@ struct LLMProApp: App {
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-        .modelContainer(for: [TrainingJob.self, LocalModel.self, DatasetRecord.self, AppSettings.self, SelfImproveRun.self, AgentProfile.self])
+        .modelContainer(for: [TrainingJob.self, LocalModel.self, DatasetRecord.self, AppSettings.self, SelfImproveRun.self, AgentProfile.self, EvalRun.self])
 
         Settings {
             SettingsView()

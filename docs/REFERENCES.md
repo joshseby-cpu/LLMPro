@@ -60,7 +60,7 @@ These are the richer techniques we'd reach for if/when we go further.
 
 | Project | Relevance |
 |---|---|
-| **OpenRLHF** — <https://github.com/OpenRLHF/OpenRLHF> | RLHF/PPO/DPO at scale. Reference for *if/when* we go beyond rejection-sampling self-distillation in Practice. Not used today (no first-class DPO trainer in `mlx_lm lora`). |
+| **OpenRLHF** — <https://github.com/OpenRLHF/OpenRLHF> | RLHF/PPO/DPO **at scale, with an automated judge**. Reference for *if/when* we go beyond rejection-sampling self-distillation in Practice. The full automated-RLHF pipeline is not used today. **NOTE:** a **human-judged DPO** loop *has* shipped — the Arena's "Teach by preference" (via the separate `mlx-lm-lora` package, since `mlx_lm lora` itself has no DPO trainer); see [`CONVENTIONS.md`](CONVENTIONS.md#dpo-preference-loop-via-on-demand-mlx-lm-lora) + [`CONTRACTS.md`](CONTRACTS.md#mlx_lm_loratrain--dpo-preference-training-separate-package). |
 | **AlphaLLM** — <https://github.com/YeTianJHU/AlphaLLM> | Self-improving LLM via **imagination, MCTS searching, and criticizing** ("Towards Self-Improvement of LLMs via …"). Prior art for a *search/critique-guided* alternative to our linear rejection-sampling loop — a pointer for making the Practice retrain edge smarter (tree search + a critic over candidate solutions) rather than just first-pass keep. Not used today. |
 
 ## ④ Model modification (uncensoring)
@@ -73,7 +73,7 @@ These are the richer techniques we'd reach for if/when we go further.
 
 | Project | Relevance |
 |---|---|
-| **llm-checker** — <https://github.com/Pavelevich/llm-checker> | Local LLM evaluation/benchmarking. Reference for our eval surfaces — the Arena mini-eval and the Practice `eval_pass_rate.py` (pass@1) — and a pointer for richer eval if we expand them. |
+| **llm-checker** — <https://github.com/Pavelevich/llm-checker> | Local LLM evaluation/benchmarking. Reference for our eval surfaces — the scored Test node (`EvalService` → `EvalRun`, pass@k via `eval_pass_rate.py`) and the Practice held-out eval — and a pointer for richer eval (more suites, a custom-suite authoring UI) if we expand them. |
 
 ## ⑥ Agent management / orchestration UX (comparison)
 

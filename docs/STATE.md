@@ -50,8 +50,84 @@ scope.
 - ✅ **Progress UI** — friendly phase narrator (📖 / 🧩 / 📚 / 📝 / 🎉),
   5-star learning rating from loss-improvement ratio, ETA, memory gauge,
   Technical Details disclosure with charts and log.
-- ✅ **Try-it-out (Arena)** — base vs fine-tuned A/B chat, shared input bar,
-  Mini-eval button with built-in coding probes.
+- ✅ **Try-it-out (Arena)** — base vs fine-tuned A/B chat, shared input bar. (The
+  old unscored "Mini-eval" button is now the scored **"Score it"** action — see the
+  "Scored Test node" entry below.)
+- ✅ **Scored Test node ("Score it" / EvalService / EvalRun) — verified live
+  end-to-end.** Turns the loop's ③ Test node ([`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift))
+  into a tracked, quantitative **pass@k** score per `(model + adapter)`, written to a new
+  [`EvalRun`](../LLMPro/Models/EvalRun.swift) `@Model` and feeding the ⑤ retrain
+  back-edge. [`EvalService`](../LLMPro/Services/EvalService.swift) (singleton) reuses the
+  **existing** eval engine — one-shot [`eval_pass_rate.py`](../LLMPro/Resources/helpers/eval_pass_rate.py)
+  + [`humaneval_pull.py`](../LLMPro/Resources/helpers/humaneval_pull.py) + the Practice
+  RLIMIT_AS+SIGALRM sandbox — not a new daemon. **Verified live** in the Test node on
+  `qwen2.5-0.5b-instruct-mlx` (HumanEval, depth Quick=20, base/no-adapter) running as a
+  standalone Debug `.app` (BUILD SUCCEEDED; NOT under Xcode's debugger): the UI streamed
+  a live "Grading N of 20 — N passed" status, then rendered the report card — **40%,
+  ★★★☆☆ (3 stars), "HumanEval (164 problems) · 20 problems", "First score for this
+  model."** + a Details disclosure. **Persistence confirmed**: an `EvalRun` record +
+  sidecar `evals/2FB34179-…/eval_run.json` were written with `passAtK 0.40`,
+  `passedCount 8`, `totalCount 20`, `problemCount 20`, suite `humaneval`, baseModel
+  `qwen2.5-0.5b-instruct-mlx`, status `completed`, sourceLabel `Test`, k 1,
+  `elapsedMs ~36392`, `lastError null` — matching the UI exactly. **Logs clean**: zero
+  ERROR/FAULT in `logs/llmpro.log` since launch, no new `DiagnosticReports/LLMPro-*.ips`.
+  The engine was **also validated headless against a real model**: `eval_pass_rate.py`
+  on the 0.5B at **k=1 → pass@1 0.375 (3/8)** with real generations + both pass/fail
+  sandbox paths exercised, and at **k=2** it emitted the new `start.k` /
+  `row.passes`+`row.k` / `done.pass_at_k`+`done.k` fields correctly (a passing-greedy
+  row failing at temp>0 is expected small-model variance, not a bug). Progress's
+  completion card also gained a **"Grade it"** CTA
+  (`.openChatWithModel` + `ModelHandoff.autoScore: true` → Test node auto-scores).
+  **One caveat, build-verified but NOT live-witnessed:** the score-**delta** path
+  (▲/▼ "vs your last try", via `EvalService.previousAdapterEval`) needs two evals of the
+  same base with different adapters, and no small model with an adapter was available —
+  the "first score for this model" no-previous branch WAS verified live; the delta
+  branch was not. Also still on-disk-only (no authoring UI): custom suites
+  (`EvalSuite.custom`). Design rationale in
+  [`CONVENTIONS.md`](CONVENTIONS.md#the-scored-test-node-evalservice--evalrun); trace in
+  [`WORKFLOWS.md §6b`](WORKFLOWS.md).
+- ✅ **DPO preference loop ("Teach by preference") — plumbing verified live
+  end-to-end.** The Arena's ③ Test node gained a second back-edge: the user marks
+  which answer is better (👍 capture row, separate from the Feature-1 "Score it"
+  report card), preference pairs accumulate into a `DatasetSchema.preference`
+  [`DatasetRecord`](../LLMPro/Models/DatasetRecord.swift) via
+  [`PreferenceService`](../LLMPro/Services/PreferenceService.swift), and a **DPO
+  fine-tune** turns them into a normal LoRA adapter that flows back through the loop.
+  DPO runs via the **separate `mlx-lm-lora` (v2.1.0)** package
+  (`python -m mlx_lm_lora.train`), installed on-demand like mergekit (the installed
+  `mlx-lm` 0.31.3 has no DPO). New plumbing: `TrainMode {sft,dpo}` + `dpoBeta`/
+  `dpoLossType` on `TrainingConfig` → `renderDPOYAML()`; `AutoTuner.tuneDPO`;
+  `TrainingJob.trainModeRaw` (additive, default "sft", **no migration**);
+  `LogStreamParser` DPO regex (`Iter N: loss …`, anchored on `: loss `);
+  `PreferenceHandoff` + `.openTrainingWithPreferences` (Arena "Teach by preference →"
+  CTA at ≥4 prefs → Teach in DPO mode). **Verified live** through the UI on
+  `qwen2.5-0.5b-instruct-mlx`: captured 4 preferences (👍 buttons, running count,
+  de-dup), the CTA enabled at 4 and switched to Teach with the `.preference` lesson
+  auto-detecting DPO mode + banner; a Quick DPO run trained **66/66 iters** (real DPO
+  loss lines, **batch clamped 4→1** for the 3-train/1-valid split), wrote
+  `adapters.safetensors` (22 MB) + checkpoints, `job.json` `status: completed`,
+  Progress showed 100% + a star rating, completion CTAs appeared. **Logs clean** (zero
+  ERROR/FAULT in `llmpro.log`, no new `.ips`). **Two honest caveats:** (1) DPO on a
+  4-preference set **overfits** (the star rating was low) — quality needs many more
+  preferences; the **PLUMBING is what's verified**, not the quality. (2) The "Teach by
+  preference" CTA switches tabs but the model/dataset **pre-fill has a
+  notification-timing bug** being fixed separately (sibling agent) — "pre-fill fix in
+  progress." Two contract gotchas worth knowing (full detail in
+  [`CONTRACTS.md`](CONTRACTS.md#mlx_lm_loratrain--dpo-preference-training-separate-package)):
+  `mlx_lm_lora.train` IGNORES YAML for its non-`None`-default args (incl.
+  `--train-mode` default `"sft"`) so DPO knobs MUST be CLI flags; `fuse: false` is
+  required (else it dumps a ~1.3 GB `model.safetensors` per adapter dir); and
+  `--batch-size` MUST be clamped to `min(trainRows, validRows)` (its
+  `iterate_dpo_batches` hangs otherwise). Design rationale in
+  [`CONVENTIONS.md`](CONVENTIONS.md#dpo-preference-loop-via-on-demand-mlx-lm-lora);
+  loop shape in [`CONCEPT.md`](CONCEPT.md#the-preference-back-edge-the-arena-also-produces-fuel).
+- ✅ **Arena local-model inference fix.** `InferenceService.stream` now resolves a
+  bare local-model name (custom `models/<name>` from GGUF import / strip-vision /
+  abliterate / trained-and-saved) to its **absolute path** before `mlx_lm generate`,
+  mirroring the training/eval/server resolvers. Previously the Arena passed the bare
+  name, mlx-lm treated it as an HF repo id, and any local custom model failed with
+  "exited with code 1". HF repo ids (with `/`) pass through unchanged. (Found while
+  verifying the DPO loop, since DPO captures run against a local model in the Arena.)
 - ✅ **Save & Use (Export)** — adapter zip / fused safetensors / GGUF, one-click
   Ollama install with chat-template detection.
 - ✅ **Custom app icon** — purple gradient squircle with graduation cap; PNG
@@ -64,7 +140,7 @@ scope.
   view-bearing file (32 under `Features/` + `App/RootView.swift` = 33), each built
   via `View.previewEnvironment()` from the DEBUG-only scaffold
   [`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift) (in-memory
-  `ModelContainer` for all 6 `@Model` types + seeded samples + the real
+  `ModelContainer` for all 7 `@Model` types + seeded samples + the real
   `PythonRuntime.shared`/`JobRegistry.shared` singletons). **Debug build clean,
   zero warnings, no new crash report.** Canvas rendering is an Xcode-GUI check (no
   headless macOS-preview render exists) — and the bodies now type-check fast enough
@@ -204,6 +280,28 @@ To smoke-test: pick a small model (Llama-3.2-1B or Qwen2.5-Coder-1.5B), seed
 HumanEval, 2 rounds, 4 candidates, 12 problems per round. Should finish in
 ~5 minutes and produce a measurable baseline→R1→R2 pass-at-1 trend.
 
+### Scored Test node ("Score it" / EvalService / EvalRun) — now verified live, moved to working
+
+**Resolved — moved to working.** The earlier "implemented + build-verified; live UI
+smoke in progress" status has been cleared: Main ran the "Score it" flow live in the
+Test node end-to-end (standalone Debug `.app`, `qwen2.5-0.5b-instruct-mlx`, HumanEval,
+Quick=20, base) — the report card rendered (**40%, 3 stars, "First score for this
+model."**), an `EvalRun` + sidecar `evals/<uuid>/eval_run.json` persisted with matching
+fields (`passAtK 0.40`, 8/20), logs were clean, and the engine was additionally
+validated headless against the real 0.5B at k=1 (pass@1 0.375, 3/8) and k=2 (new
+`passes`/`pass_at_k`/`k` fields emitted). See the "Scored Test node" bullet under the
+working section and the newest Recent-session-log entry.
+
+Remaining boundaries (not blocking the working status):
+
+- **Score-delta path build-verified but NOT live-witnessed.** The ▲/▼ "vs your last
+  try" comparison (`EvalService.previousAdapterEval`) needs two evals of the same base
+  with different adapters; no small model with an adapter was available, so only the
+  no-previous "first score for this model" branch was seen live.
+- **Custom suites are on-disk only** (`EvalSuite.custom` +
+  `evals/custom-<uuid>/eval.jsonl` resolve, but there's no authoring UI yet — v1 ships
+  the two built-in coding suites).
+
 ### Code tab (agentic coding assistant) — agent loop verified end-to-end
 
 The Code tab (`MLXServerService` + `OpenAIChatClient` + `AgentTools` +
@@ -300,6 +398,19 @@ frontmatter, not a UI toggle list.
 Works for adjusting `max_rows` per preset before tapping Prepare. But it
 doesn't surface for the `Browse HuggingFace` path — there's a single max-rows
 in the search sheet's options form but no per-result preview of what's reasonable.
+
+### GGUF→MLX importer does not reconstruct a chat template
+
+[`gguf_to_mlx.py`](../LLMPro/Resources/helpers/gguf_to_mlx.py) writes
+`tokenizer_config.json` with only token ids; it copies a `chat_template` only when the
+GGUF carries one in its `tokenizer.ggml.chat_template` metadata, and has no fallback
+when that key is absent. Result: a converted **instruct** model whose GGUF lacks that
+metadata has no chat template, so it fails in chat/Code/eval with
+"tokenizer.chat_template is not set" until a template is added manually. Found while
+verifying the eval harness — the test model (a Qwen2.5-0.5B GGUF converted on disk)
+needed a hand-injected ChatML template before it would run. A fix is spun off as a
+separate task: extract `tokenizer.chat_template` from the GGUF metadata, or fall back
+to a per-architecture default.
 
 ---
 
@@ -437,6 +548,125 @@ for the full reasoning. Quick reference:
 
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
+
+- **DPO preference loop ("Teach by preference", Feature 2 of 4) — VERIFIED LIVE
+  end-to-end; landed in Working. + Arena local-model inference fix.** The Arena's ③
+  Test node gained a **preference back-edge**: a 👍 "Which answer is better?" capture
+  row (separate from Feature-1's "Score it" report card) → preference pairs accumulate
+  → a **DPO** fine-tune → a normal LoRA adapter that flows back through the loop. New
+  [`PreferenceService.swift`](../LLMPro/Services/PreferenceService.swift) (`@MainActor
+  enum`: `createPreferenceSet` / `findOrCreateActivePreferenceSet` / `appendPair`
+  (atomic, de-dup, bumps `trainRows`) / `splitForTraining` (~10% → `valid.jsonl`));
+  preferences stored as a first-class `DatasetRecord` with a NEW
+  `DatasetSchema.preference` case (**not** a new `@Model` → no SwiftData migration),
+  `{"prompt","chosen","rejected"[,"system"]}` JSONL; `DatasetService.classify()` votes
+  `preference` before `completions`. **DPO engine = the separate `mlx-lm-lora` v2.1.0**
+  (`python -m mlx_lm_lora.train`), installed **on-demand** like mergekit
+  (`PythonRuntime.dpoTrainerInstalled()`/`installDPOTrainer()`; in `bootstrap()` pip
+  list; NOT gating `.ready`) — the installed `mlx-lm` 0.31.3 has no DPO. Swift
+  plumbing: `TrainMode {sft,dpo}` + `dpoBeta`/`dpoLossType` on `TrainingConfig` →
+  `renderDPOYAML()`; `AutoTuner.tuneDPO` (fewer iters, ~half lr, β=0.1, ~2× mem,
+  adamw); `TrainingJob.trainModeRaw` (additive, default "sft"); `TrainingService.start()`
+  branches SFT vs DPO; `LogStreamParser` DPO regex `Iter (\d+): loss ([\d.]+)`
+  (anchored on `: loss ` so it can't match SFT `Train loss`/`Val loss`). Loop wiring:
+  `ArenaView.preferenceBar` + "Teach by preference →" CTA (≥4 prefs);
+  `PreferenceHandoff{model,adapterPath?,datasetID}` + `.openTrainingWithPreferences`
+  (in `Core/LoopHandoff.swift`); `RootView` routes it to Teach; `TrainingConfigView`
+  auto-detects a `.preference` lesson → DPO banner + mode, `launch()` →
+  `splitForTraining` + `tuneDPO` + `job.trainMode = .dpo`. **THREE load-bearing
+  contract gotchas** (now in CONTRACTS): (1) `mlx_lm_lora.train` merges `-c config.yaml`
+  ONLY into still-`None` argparse args, so its non-`None`-default args (incl.
+  `--train-mode` default `"sft"`, `--beta`, `--dpo-cpo-loss-type`,
+  `--gradient-accumulation-steps`) IGNORE the YAML → MUST be **CLI flags**; `-c` is for
+  None-default/nested keys (`lora_parameters`, `lr_schedule`, **`fuse: false`**). (2)
+  `fuse: false` is REQUIRED (fuse defaults true → dumps a ~1.3 GB `model.safetensors`
+  per adapter dir). (3) `--batch-size` MUST be clamped to `min(trainRows, validRows)`
+  — `iterate_dpo_batches` HANGS (infinite 100%-CPU spin) when batch > rows. The exit
+  handler was hardened so abnormal termination → `.failed` (not stuck `.running`).
+  **Verified live** through the UI on `qwen2.5-0.5b-instruct-mlx`: 4 prefs captured
+  (de-dup + running count), CTA enabled at 4 → Teach auto-detected DPO; a Quick DPO run
+  trained **66/66 iters** (real DPO loss lines, batch clamped **4→1** for a 3-train/
+  1-valid split), wrote `adapters.safetensors` (22 MB) + checkpoints, `job.json`
+  `status: completed`, Progress 100% + star rating, completion CTAs shown. **Logs
+  clean** (zero ERROR/FAULT, no new `.ips`). **Honest caveats:** (1) DPO on 4 prefs
+  **overfits** (low star rating) — quality needs more prefs; the PLUMBING is verified.
+  (2) The CTA switches tabs but the model/dataset **pre-fill has a notification-timing
+  bug** being fixed separately (sibling agent). **Also fixed:** `InferenceService.stream`
+  now resolves a bare local-model name to its absolute path before `mlx_lm generate`
+  (HF repo ids unchanged) — local custom models previously failed with "exited with
+  code 1" in the Arena (found while exercising DPO captures). Docs updated (CONTRACTS /
+  ARCHITECTURE / CONCEPT / CONVENTIONS / EXTENDING / STATE / CLAUDE). **Source files
+  were NOT touched by this docs pass.**
+
+- **Scored Test node — VERIFIED LIVE end-to-end; moved from Half-done to working.**
+  Follow-up to the entry below. Main built a fresh standalone Debug `.app`
+  (`xcodebuild … BUILD SUCCEEDED`, run NOT under Xcode's debugger) and ran the
+  "Score it" flow live in the Try-it-out (Arena) Test node:
+  `qwen2.5-0.5b-instruct-mlx` (a small model converted on disk from a Qwen2.5-0.5B
+  GGUF for fast testing), suite HumanEval, depth Quick=20, base/no-adapter. The UI
+  streamed a live "Grading N of 20 — N passed" status, then rendered the report card
+  — **40%, ★★★☆☆ (3 stars), "HumanEval (164 problems) · 20 problems", "First score
+  for this model."** + a Details disclosure. **Persistence verified**: an `EvalRun`
+  record + sidecar `evals/2FB34179-…/eval_run.json` were written with `passAtK 0.40`,
+  `passedCount 8`, `totalCount 20`, `problemCount 20`, suite `humaneval`, baseModel
+  `qwen2.5-0.5b-instruct-mlx`, status `completed`, sourceLabel `Test`, k 1,
+  `elapsedMs ~36392`, `lastError null` — matching the UI exactly. **Logs clean**: zero
+  ERROR/FAULT in `logs/llmpro.log` since launch, no new
+  `~/Library/Logs/DiagnosticReports/LLMPro-*.ips`. The engine was **also validated
+  headless against a real model** (impossible in the prior pass — no small model
+  existed): `eval_pass_rate.py` on the 0.5B at **k=1 → pass@1 0.375 (3/8)** with real
+  generations + both pass/fail sandbox paths exercised, and at **k=2** it emitted the
+  new `start.k` / `row.passes`+`row.k` / `done.pass_at_k`+`done.k` fields correctly (a
+  passing-greedy row failing at temp>0 is expected small-model variance, not a bug).
+  **Honest caveat:** the score-**delta** path (▲/▼ "vs your last try", via
+  `EvalService.previousAdapterEval`) was **build-verified but NOT live-witnessed** — it
+  needs two evals of the same base with different adapters, and no small model with an
+  adapter was available; the "first score for this model" no-previous branch WAS
+  verified live. Moved the eval-harness item from Half-done to "Working end-to-end
+  (verified)". **Surfaced a separate bug** (now a spun-off task, logged under Half-done):
+  the GGUF→MLX importer doesn't reconstruct a chat template, so the on-disk-converted
+  test model needed a hand-injected ChatML template before it would run.
+- **Scored Test node — new `EvalService` + `EvalRun` @Model turn ③ "Test" into a
+  tracked pass@k score; "Score it" (Arena) + "Grade it" (Progress) wired; BUILD-GREEN,
+  live UI smoke handed to Main.** The loop's Test node now emits a quantitative,
+  comparable **pass@k** per `(model + adapter)` that feeds the ⑤ retrain back-edge
+  ("did the score go up vs the previous fine-tune?"). New
+  [`EvalService`](../LLMPro/Services/EvalService.swift) (singleton) +
+  [`EvalRun`](../LLMPro/Models/EvalRun.swift) `@Model` (blob-in-model + sidecar, like
+  `SelfImproveRun`; `adapterRelativePath == ""` = base model, else ==
+  `TrainingJob.adapterRelativePath`). It **reuses the existing eval engine** —
+  `eval_pass_rate.py` + `humaneval_pull.py` + the Practice sandbox — NOT a new daemon
+  (deliberately not `MLXServerService`: re-implementing sandboxed test exec + fighting
+  the Code tab for the daemon). [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift)'s
+  old unscored "Mini-eval" → a **"Score it"** action (suite HumanEval/MBPP; depth
+  Quick=20/Standard=40/Thorough=all; Advanced k stepper 1–8) + a friendly-first report
+  card (pass% + 1–5 stars + a **delta vs the previous fine-tune** + per-task Details);
+  the same delta feeds the decision bar.
+  [`TrainingMonitorView`](../LLMPro/Features/Monitor/TrainingMonitorView.swift) gained
+  a **"Grade it"** CTA (`.openChatWithModel` + `ModelHandoff.autoScore: true` → Test
+  node auto-scores). Additive plumbing: `ModelHandoff.autoScore` (default false, stays
+  `Sendable`, dual-decode unchanged); `PathResolver.evalsDir`/`evalSuiteDir(for:)`
+  (`evals/<suiteID>/eval.jsonl`, `evals/custom-<uuid>/eval.jsonl`,
+  `evals/<run-uuid>/eval_run.json`); `EvalRun.self` registered in **both** the
+  `LLMProApp` schema list and `PreviewSupport` (+ `sampleEvalRun`).
+  `eval_pass_rate.py` gained `--k`/`--temperature` — **`k==1` byte-for-byte unchanged**
+  (greedy, still emits `pass_at_1`, so `SelfImproveService` is unaffected); `k>1` →
+  `row` gains `passes`+`k`, `done` gains `pass_at_k`+`k` (no `pass_at_1`). 5 design
+  decisions: (1) score in a NEW `EvalRun`, not on `TrainingJob` (base models + Practice
+  adapters need scoring + comparability); (2) grow the EXISTING Test node, NOT a new
+  "Grades" tab; (3) eval engine = one-shot helper + sandbox, NOT the persistent server;
+  (4) pass@1 default, pass@k an Advanced knob; (5) v1 = built-in suites only, custom
+  suites on-disk-but-no-UI.
+  **Verification (honest boundary):** ✅ BUILD green — `xcodegen` + Debug `xcodebuild`
+  → BUILD SUCCEEDED, 0 warnings in touched files, 0 expr/bodies >80 ms on the
+  diagnostic build. ✅ Python `--k` verified via `py_compile` + a monkeypatched
+  `main()` over a real 2-row fixture using the REAL sandbox (k==1 unchanged incl.
+  `pass_at_1`; k>1 emits `passes`/`pass_at_k`/`k`) — **not yet run against a real model
+  through the engine**. ⏳ **A live end-to-end UI run (Score it → report card +
+  persisted EvalRun + sidecar + score delta) is IN PROGRESS by Main and has NOT been
+  witnessed here — do not claim a live pass until Main confirms.** Docs updated
+  (ARCHITECTURE / CONTRACTS / CONCEPT / CONVENTIONS / EXTENDING / WORKFLOWS / STATE +
+  CLAUDE).
 
 - **Hardened SwiftUI preview type-checking — lifted inline `Binding(get:set:)` out of
   view bodies + split long `.alert`/`.sheet`/`.onReceive` chains into `ViewModifier`

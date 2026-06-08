@@ -73,13 +73,17 @@ the destination view).
    TrainingMonitorView narrates phases + stars; on job.status == .completed it
    shows the COMPLETION CTA CARD:
      • "Try it out"  → .openChatWithModel(ModelHandoff{model, adapterURL})
+     • "Grade it"    → .openChatWithModel(ModelHandoff{…, autoScore: true})  # → ③, auto-scores
      • "Use in Code" → .openCodeWithModel(ModelHandoff)
      • "Save & Use"  → .switchSidebar(.export)
         │
-        ▼ (user clicks "Try it out")
-③ TEST (Try it out, §6)
+        ▼ (user clicks "Try it out" or "Grade it")
+③ TEST (Try it out, §6 + the scored "Score it", §6b)
    ArenaView .openChatWithModel receiver pre-fills BOTH model + adapter, enables
-   compare (base vs fine-tune). Once an adapter is loaded, the DECISION BAR appears:
+   compare (base vs fine-tune); if autoScore it runs "Score it" immediately.
+   "Score it" → EvalService.runEval → eval_pass_rate.py → an EvalRun (pass@k) +
+   the report card. Once an adapter is loaded, the DECISION BAR appears (with the
+   pass@k delta vs the previous fine-tune):
      • "Train again"  → .openTrainingWithModel(String)  ── back-edge to ② ──┐
      • "Use in Code"  → .openCodeWithModel(ModelHandoff)                    │
      • "Save & Use"   → .switchSidebar(.export)                            (loop again)
@@ -365,6 +369,7 @@ When training finishes:
   The Monitor view shows 🎉 "All done!"
   + the COMPLETION CTA CARD (the loop's hand-off to the next stage):
     "Try it out" → .openChatWithModel(ModelHandoff{model, adapterURL.path})
+    "Grade it"   → .openChatWithModel(ModelHandoff{…, autoScore: true})  # auto-scores in ③ (§6b)
     "Use in Code"→ .openCodeWithModel(ModelHandoff)
     "Save & Use" → .switchSidebar(.export)
     (user-driven — completion does NOT auto-switch tabs; see §0b)
@@ -409,6 +414,7 @@ ArenaView .task / .onAppear:
 Loop hand-off IN (.openChatWithModel receiver):
   if note.object is a ModelHandoff → pre-fill BOTH modelText + adapterText,
      turn arena compare ON (base vs the fine-tune just produced)
+     if handoff.autoScore → auto-run "Score it" (see §6b) on arrival
   else if it's a bare String → pre-fill modelText only (back-compat)
 
 user fills in:
@@ -418,7 +424,7 @@ user fills in:
   - temperature slider, max-tokens stepper
 clicks Apply → both sessions update their model/adapter/params
 
-user types prompt + Send (or Mini-eval button picks a random coding probe)
+user types prompt + Send  (or clicks "Score it" → the scored eval, §6b)
   → arenaMode: send the same prompt to BOTH sessions in parallel
   → single mode: send only to adapterSession
   
@@ -434,7 +440,7 @@ ChatSession.send(prompt):
     set isStreaming = false
 
 Loop decision OUT (the DECISION BAR, shown once an adapter is loaded — the
-"is it good enough?" fork):
+"is it good enough?" fork; now carries the pass@k delta from the latest EvalRun, §6b):
   "Train again" → .openTrainingWithModel(modelText)        # back-edge to Teach (§5)
   "Use in Code" → .openCodeWithModel(ModelHandoff{model, adapter})   # → Code (§13)
   "Save & Use"  → .switchSidebar(.export)                  # → Save & Use (§7)
@@ -444,6 +450,75 @@ Loop decision OUT (the DECISION BAR, shown once an adapter is loaded — the
 [`ChatView.swift`](../LLMPro/Features/Chat/ChatView.swift),
 [`ChatModels.swift`](../LLMPro/Features/Chat/ChatModels.swift),
 [`InferenceService.swift`](../LLMPro/Services/InferenceService.swift).
+
+---
+
+## 6b. Score a model (the Test node's "Score it" + Progress "Grade it")
+
+The Test node turns ③ into a **tracked pass@k score** per `(model + adapter)`. The
+"Score it" action runs the same eval engine Practice uses (one-shot
+`eval_pass_rate.py` + the sandbox), persists an `EvalRun`, and feeds the ⑤ back-edge
+decision ("did the score go up vs the previous fine-tune of the same base?").
+
+```
+ArenaView (Try it out) — once a model (± adapter) is loaded:
+
+user clicks "Score it"
+  picks: suite   = HumanEval | MBPP            (suite picker)
+         depth   = Quick(20) | Standard(40) | Thorough(all)   (limit)
+         k       = 1 (default) … 8             (Advanced DisclosureGroup; pass@k)
+  → EvalService.shared.runEval(model:, adapterPath:, suite:, customID:, k:, limit:,
+                               sourceLabel:, sourceJobID:, context:)
+
+EvalService.runEval():                          (@MainActor)
+  1. ensureSuite(suite, customID:)              # lazily caches the suite's eval.jsonl:
+       built-in  → spawn humaneval_pull.py <suite.pullPreset> <evals/<suiteID>/>
+       custom    → evals/custom-<uuid>/eval.jsonl already on disk (no UI to author it)
+  2. insert EvalRun(status: .running, …) → modelContext              # status flips to running
+  3. modelArg = resolveModelArg(model)          # bare folder → absolute path (same resolver)
+  4. spawn eval_pass_rate.py --eval <eval.jsonl> --model <abs>
+            [--adapter <adapterPath>] --limit <limit> --k <k> [--temperature 0.2]
+     ProcessRunner streams JSON events:
+       {"event":"start", "k":k, …}              → status.phase = grading
+       {"event":"row",   "i":i, "task_id":…, "passed":bool, "reason":…
+                          [, "passes":m, "k":k  when k>1]}            → status: graded i of M, passedSoFar
+       {"event":"done",  "pass_at_k":F, "k":k, "passed":N, "total":M, "ms":T
+                          [, "pass_at_1":F     when k==1]}
+  5. re-fetch the EvalRun by UUID via FetchDescriptor              # never capture the @Model into the Task
+     set passAtK / passedCount / totalCount / elapsedMs, setTasks([EvalTaskResult]),
+         status = .completed
+     context.save(); writeSidecar()             # evals/<run-uuid>/eval_run.json
+
+ArenaView renders the friendly-first REPORT CARD (evalReportCard):
+  big pass% + 1–5 star rating + suite + problem count
+  + DELTA vs the previous fine-tune of the same base:
+      EvalService.previousAdapterEval(forBase:excludingAdapter:context:)
+      → "▲ +12% vs your last fine-tune" / "▼ −5%" / "first score"
+  + "Details" DisclosureGroup: per-task pass/fail table + raw counts + elapsed + k
+The same delta is wired into the DECISION BAR (§6) — the ⑤ "did the score go up?" fork.
+```
+
+**Progress "Grade it" (auto-score on arrival):**
+
+```
+TrainingMonitorView completionCard(job:) — when job.status == .completed:
+  "Grade it" button → .openChatWithModel( ModelHandoff{ model, adapterURL.path,
+                                                         autoScore: true } )
+  RootView → selects .chat; ArenaView pre-fills model + adapter AND, because
+  autoScore == true, immediately runs "Score it" (the EvalService.runEval flow above).
+  (The other completion CTAs — "Try it out" / "Use in Code" / "Save & Use" — are
+   unchanged, autoScore defaults false.)
+```
+
+**Files involved**: [`ArenaView.swift`](../LLMPro/Features/Chat/ArenaView.swift),
+[`EvalService.swift`](../LLMPro/Services/EvalService.swift),
+[`EvalRun.swift`](../LLMPro/Models/EvalRun.swift),
+[`TrainingMonitorView.swift`](../LLMPro/Features/Monitor/TrainingMonitorView.swift),
+[`LoopHandoff.swift`](../LLMPro/Core/LoopHandoff.swift),
+[`PathResolver.swift`](../LLMPro/Core/PathResolver.swift),
+[`eval_pass_rate.py`](../LLMPro/Resources/helpers/eval_pass_rate.py),
+[`humaneval_pull.py`](../LLMPro/Resources/helpers/humaneval_pull.py),
+[`RootView.swift`](../LLMPro/App/RootView.swift).
 
 ---
 

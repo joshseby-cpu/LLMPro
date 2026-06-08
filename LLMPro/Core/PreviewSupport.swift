@@ -41,6 +41,7 @@ enum PreviewSupport {
             AppSettings.self,
             SelfImproveRun.self,
             AgentProfile.self,
+            EvalRun.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: config)
@@ -57,6 +58,7 @@ enum PreviewSupport {
         context.insert(makeSettings())
         context.insert(makeRun())
         context.insert(makeAgent())
+        context.insert(makeEvalRun())
         try? context.save()
     }
 
@@ -183,6 +185,31 @@ enum PreviewSupport {
         return run
     }()
 
+    /// A completed scored-evaluation run — HumanEval, 40 problems, ~0.78 pass@1,
+    /// with a few per-task results so the score view and task list have data.
+    static let sampleEvalRun: EvalRun = {
+        let run = EvalRun(
+            baseModelRepoID: "mlx-community/Llama-3.2-3B-Instruct-4bit",
+            adapterRelativePath: UUID().uuidString,
+            suite: .humaneval,
+            k: 1,
+            problemCount: 40,
+            passAtK: 0.78,
+            passedCount: 31,
+            totalCount: 40,
+            status: .completed,
+            sourceLabel: "Test")
+        run.elapsedMs = 92_000
+        run.setTasks([
+            EvalTaskResult(taskID: "HumanEval/0", passed: true,  reason: ""),
+            EvalTaskResult(taskID: "HumanEval/1", passed: true,  reason: ""),
+            EvalTaskResult(taskID: "HumanEval/2", passed: false, reason: "AssertionError"),
+            EvalTaskResult(taskID: "HumanEval/3", passed: true,  reason: ""),
+            EvalTaskResult(taskID: "HumanEval/4", passed: false, reason: "timeout"),
+        ])
+        return run
+    }()
+
     static let sampleAgent = AgentProfile(
         name: "Careful Coder",
         emoji: "🧑‍💻",
@@ -276,6 +303,7 @@ enum PreviewSupport {
     private static func makeSettings() -> AppSettings { sampleSettings }
     private static func makeRun() -> SelfImproveRun { sampleRun }
     private static func makeAgent() -> AgentProfile { sampleAgent }
+    private static func makeEvalRun() -> EvalRun { sampleEvalRun }
 
     private static let sampleConfigYAML = """
     model: mlx-community/Qwen2.5-7B-Instruct-4bit

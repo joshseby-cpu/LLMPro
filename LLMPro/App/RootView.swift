@@ -46,6 +46,13 @@ struct RootView: View {
     @State private var selection: SidebarSection = .dashboard
     @AppStorage("firstRunComplete") private var firstRunComplete: Bool = false
 
+    // A Teach pre-fill captured here (RootView is always alive) so it survives the
+    // detail pane not having instantiated `TrainingConfigView` yet — the first-ever-
+    // visit race that dropped `.openTrainingWithPreferences` / `.openTrainingWithModel`
+    // when the user arrived straight from another tab. Set on notification receipt
+    // alongside `selection = .training`; consumed and cleared by `TrainingConfigView`.
+    @State private var pendingTrainingHandoff: PendingTrainingHandoff?
+
     var body: some View {
         Group {
             if !firstRunComplete {
@@ -73,7 +80,9 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom) {
             runtimeStatusFooter
         }
-        .modifier(SidebarNotificationRouter(selection: $selection))
+        .modifier(SidebarNotificationRouter(
+            selection: $selection,
+            pendingTrainingHandoff: $pendingTrainingHandoff))
     }
 
     @ViewBuilder
@@ -82,7 +91,7 @@ struct RootView: View {
         case .dashboard:   DashboardView()
         case .models:      ModelsBrowserView()
         case .datasets:    DatasetsView()
-        case .training:    TrainingConfigView()
+        case .training:    TrainingConfigView(pendingHandoff: $pendingTrainingHandoff)
         case .monitor:     TrainingMonitorView()
         case .chat:        ArenaView()
         case .code:        CodeView()
@@ -120,6 +129,9 @@ struct RootView: View {
 /// is unchanged — the same notifications drive the same selection.
 private struct SidebarNotificationRouter: ViewModifier {
     @Binding var selection: SidebarSection
+    // Stash the Teach hand-off payload here so it survives `TrainingConfigView` not
+    // existing yet on a first-ever visit; the view consumes it once it mounts.
+    @Binding var pendingTrainingHandoff: PendingTrainingHandoff?
 
     func body(content: Content) -> some View {
         content
@@ -129,7 +141,16 @@ private struct SidebarNotificationRouter: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .switchToMonitor)) { _ in
                 selection = .monitor
             }
-            .onReceive(NotificationCenter.default.publisher(for: .openTrainingWithModel)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .openTrainingWithModel)) { note in
+                if let repo = note.object as? String {
+                    pendingTrainingHandoff = PendingTrainingHandoff(payload: .model(repo))
+                }
+                selection = .training
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openTrainingWithPreferences)) { note in
+                if let handoff = note.object as? PreferenceHandoff {
+                    pendingTrainingHandoff = PendingTrainingHandoff(payload: .preference(handoff))
+                }
                 selection = .training
             }
             .onReceive(NotificationCenter.default.publisher(for: .openChatWithModel)) { _ in

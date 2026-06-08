@@ -17,6 +17,21 @@ enum FineTuneType: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Which training algorithm a job runs. `.sft` is mlx-lm's supervised fine-tune
+/// (the default for every existing flow); `.dpo` is preference tuning via the
+/// separate `mlx-lm-lora` trainer. Used by both `TrainingConfig` (to pick the
+/// YAML schema) and `TrainingJob` (to pick the launch argv).
+enum TrainMode: String, Codable, CaseIterable, Identifiable {
+    case sft, dpo
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .sft: "Supervised"
+        case .dpo: "Preference (DPO)"
+        }
+    }
+}
+
 @Model
 final class TrainingJob {
     @Attribute(.unique) var id: UUID
@@ -48,6 +63,12 @@ final class TrainingJob {
     /// Set by `ModelApplyService` after the auto-fuse finishes (or fails), so the
     /// UI can show the outcome. nil = not attempted.
     var applyOutcome: String?
+    /// Which training algorithm produced this job: "sft" (default) or "dpo".
+    /// A non-optional String with a default is an additive SwiftData change —
+    /// old jobs read as "sft", no migration needed. Read/written via the
+    /// `trainMode` computed accessor below; `TrainingService.start()` branches on
+    /// it to pick the launch argv (mlx_lm vs mlx_lm_lora).
+    var trainModeRaw: String = "sft"
 
     init(
         id: UUID = UUID(),
@@ -74,6 +95,11 @@ final class TrainingJob {
     var status: JobStatus {
         get { JobStatus(rawValue: statusRaw) ?? .queued }
         set { statusRaw = newValue.rawValue }
+    }
+
+    var trainMode: TrainMode {
+        get { TrainMode(rawValue: trainModeRaw) ?? .sft }
+        set { trainModeRaw = newValue.rawValue }
     }
 
     var adapterURL: URL { PathResolver.adaptersDir.appendingPathComponent(adapterRelativePath, isDirectory: true) }

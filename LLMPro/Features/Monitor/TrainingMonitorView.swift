@@ -167,6 +167,10 @@ struct TrainingMonitorView: View {
                 } label: { Label("Try it out", systemImage: "bubble.left.and.bubble.right") }
                     .buttonStyle(.borderedProminent)
                 Button {
+                    NotificationCenter.default.post(name: .openChatWithModel, object: scoringHandoff(job))
+                } label: { Label("Grade it", systemImage: "checklist") }
+                    .help("Open Test and immediately score it on a coding suite.")
+                Button {
                     NotificationCenter.default.post(name: .openCodeWithModel, object: handoff(job))
                 } label: { Label("Use in Code", systemImage: "chevron.left.forwardslash.chevron.right") }
                 Button {
@@ -181,6 +185,13 @@ struct TrainingMonitorView: View {
 
     private func handoff(_ job: JobRegistry.LiveJob) -> ModelHandoff {
         ModelHandoff(model: job.baseModelRepoID, adapterPath: job.adapterURL.path)
+    }
+
+    /// Same artifact as `handoff` but flagged to auto-score on arrival, so the
+    /// "Grade it" CTA lands the user in the pre-filled Test node with the scored
+    /// eval already running.
+    private func scoringHandoff(_ job: JobRegistry.LiveJob) -> ModelHandoff {
+        ModelHandoff(model: job.baseModelRepoID, adapterPath: job.adapterURL.path, autoScore: true)
     }
 
     // MARK: - Technical disclosure

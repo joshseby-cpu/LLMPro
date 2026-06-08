@@ -122,6 +122,128 @@ Appended by **two** paths in [`TrainingService.swift`](../LLMPro/Services/Traini
   exact config keeps the LoRA architecture resume-compatible. When `nil` (the
   default, a fresh fine-tune) no flag is appended.
 
+### `mlx_lm_lora.train` — DPO preference training (separate package)
+
+Used by [`TrainingService.swift`](../LLMPro/Services/TrainingService.swift) when a
+job's `trainMode == .dpo` (the **"Teach by preference"** loop — see the
+`DatasetSchema.preference` and `PreferenceHandoff` entries below). **Verified live
+end-to-end** on `qwen2.5-0.5b-instruct-mlx` (a Quick DPO run, 66/66 iters, real DPO
+loss lines, `adapters.safetensors` 22 MB + checkpoints written, `job.json`
+`status: completed`).
+
+**The installed `mlx-lm` (0.31.3) has NO DPO trainer.** DPO runs through a *separate*
+package, **`mlx-lm-lora` (v2.1.0)**, installed **on-demand** like mergekit
+(`PythonRuntime.dpoTrainerInstalled()` / `installDPOTrainer()`; it's also in the
+`bootstrap()` pip list, but its absence does **not** gate the `.ready` state — a DPO
+launch installs it lazily if missing). Invoked as a module, not a subcommand:
+
+```
+python -m mlx_lm_lora.train \
+  --train-mode dpo \
+  --model <HF-repo-id-or-absolute-path> \
+  --data <dataset-directory> \           # contains train.jsonl + valid.jsonl
+  --adapter-path <absolute-dir> \
+  --iters N --batch-size B \
+  --beta 0.1 --dpo-cpo-loss-type sigmoid \
+  --gradient-accumulation-steps 1 \
+  -c <config.yaml>                        # None-default / nested keys only — see gotcha
+```
+
+#### ⚠️ CRITICAL gotcha: CLI flags vs `-c config.yaml` (NOT interchangeable)
+
+`mlx_lm_lora.train` merges a `-c config.yaml` into argparse **only for args that are
+still `None`**:
+
+```python
+if getattr(args, k, None) is None:
+    setattr(args, k, yaml_value)
+```
+
+So any arg whose argparse default is **non-`None`** silently **IGNORES the YAML** and
+keeps the argparse default. The DPO-controlling args all have non-`None` defaults —
+notably **`--train-mode` (default `"sft"`)**, **`--beta`**,
+**`--dpo-cpo-loss-type`**, and **`--gradient-accumulation-steps`**. Putting
+`train_mode: dpo` (etc.) in the YAML does nothing — the run trains **SFT**.
+Therefore `TrainingService` passes the DPO-controlling hyperparameters as **CLI
+flags** AND still passes `-c config.yaml` for the keys that *do* have `None`/nested
+defaults (`lora_parameters`, `lr_schedule`, learning rate, layers, seq length, and
+`fuse: false`). Treat this as the rule: **DPO knobs → CLI flag; LoRA-shape / schedule
+/ nested keys → YAML.**
+
+**`fuse: false` is REQUIRED.** `mlx_lm_lora`'s `fuse` defaults **true**, which would
+fuse the adapter and dump a full **~1.3 GB `model.safetensors`** into every
+`adapter_path` dir on completion. We want a plain LoRA adapter that flows back
+through the loop, so the generated YAML sets `fuse: false`.
+
+#### DPO dataset schema + `--data` convention
+
+The DPO dataset directory holds `train.jsonl` + `valid.jsonl` (the same
+`datasets/<uuid>/` dir as any lesson), but each line is a **preference pair**, not a
+chat row:
+
+```jsonc
+{"prompt": "<user prompt>", "chosen": "<preferred answer>", "rejected": "<worse answer>"}
+{"prompt": "…", "chosen": "…", "rejected": "…", "system": "<optional system prompt>"}
+```
+
+`system` is optional. This is the on-disk form of the new `DatasetSchema.preference`
+case (see §7); the rows are written by
+[`PreferenceService.swift`](../LLMPro/Services/PreferenceService.swift)
+(`appendPair(prompt:chosen:rejected:system:to:context:)`, atomic append + de-dup,
+bumps `DatasetRecord.trainRows`) and `splitForTraining(dataset:)` carves ~10% of
+`train.jsonl` into `valid.jsonl` at launch.
+
+#### ⚠️ Batch-size MUST be clamped to `min(trainRows, validRows)`
+
+`mlx_lm_lora`'s `iterate_dpo_batches` **HANGS** (infinite 100%-CPU spin, the process
+never exits) when `batch_size > number-of-rows` in either split. `TrainingService`
+reads the on-disk row counts of `train.jsonl`/`valid.jsonl` and clamps
+`--batch-size` to `max(1, min(trainRows, validRows))` before launching (verified
+live: a 4→1 clamp on a 3-train/1-valid split). Never pass an unclamped AutoTuner
+batch size to the DPO trainer.
+
+#### Output + memory
+
+Output under `adapter_path` is a standard **`adapters.safetensors`** (+
+`adapter_config.json` + periodic `NNNNNNN_adapters.safetensors` checkpoints) — the
+exact shape an `mlx_lm lora` job produces, so the adapter is interchangeable in
+Progress / Try-it-out / Save & Use with no special-casing. The DPO trainer holds a
+**second full frozen reference copy** of the model, so peak memory is **~2× the base
+model** (AutoTuner's `tuneDPO` accounts for this in its memory estimate).
+
+#### DPO stdout / loss-line format
+
+The DPO training line differs from the SFT `Iter N: Train loss …` line:
+
+```
+# DPO training line:
+Iter N: loss X.XXX, chosen_r …, acc …, margin …, lr …, tok/s …, peak_mem …GB
+
+# DPO eval line (same shape as SFT's val line):
+Iter N: Val loss F, Val took Ts
+```
+
+`LogStreamParser` gained a DPO regex anchored on `: loss ` (so it can NOT match the
+SFT `Train loss` / `Val loss` lines):
+
+```regex
+# DPO train:
+Iter (\d+): loss ([\d.]+)
+
+# DPO eval reuses the existing SFT val regex:
+Iter\s+(\d+):\s+Val\s+loss\s+([\d.]+)
+```
+
+This drives the Progress chart + star rating for DPO runs exactly as the SFT train
+line does for ordinary fine-tunes.
+
+#### Abnormal-exit hardening
+
+The training exit handler was hardened so abnormal termination (signal / crash /
+stdout-stream close) always transitions the job to `.failed` rather than leaving it
+stuck `.running` — relevant because the `iterate_dpo_batches` hang above was the
+original way a DPO job could wedge.
+
 ### `mlx_lm generate` — inference
 
 Used by [`InferenceService.swift`](../LLMPro/Services/InferenceService.swift).
@@ -150,6 +272,16 @@ Peak memory: F GB
 ```
 
 We yield lines between the `==========` markers as streaming tokens.
+
+**`--model` is resolved to an absolute path for local models (Arena fix).**
+`InferenceService.stream` now resolves a **bare local-model name** (a custom
+`models/<name>` from GGUF import / strip-vision / abliterate / trained-and-saved) to
+its **absolute on-disk path** before invoking `mlx_lm generate` — mirroring the
+training (`TrainingConfigView.resolveModelArg`), eval (`EvalService`), and server
+(`MLXServerService`) resolvers. Previously the Arena passed the bare name through, and
+because mlx-lm treats a string with no `/` as an HF repo id, any local custom model
+failed with "exited with code 1". **HF repo ids (containing `/`) still pass through
+unchanged.** See [`CONVENTIONS.md`](CONVENTIONS.md#local-model-paths-must-be-resolved-before-being-passed-to-mlx-lm).
 
 ### `mlx_lm fuse` — merge LoRA + GGUF export
 
@@ -349,8 +481,10 @@ Every helper emits at least these three event types:
  "seed": 132, "eval": 32,
  // self_improve_round:
  "kept": 18, "rows": 20, "pass_rate": 0.41, "train": 17, "valid": 1, "test": 1,
- // eval_pass_rate:
- "pass_at_1": 0.31, "passed": 10, "total": 32, "ms": 124400}
+ // eval_pass_rate (k==1; pass_at_1 == pass_at_k):
+ "pass_at_1": 0.31, "pass_at_k": 0.31, "k": 1, "passed": 10, "total": 32, "ms": 124400
+ // eval_pass_rate (k>1; pass_at_1 absent, pass_at_k present): "pass_at_k": 0.44, "k": 4, …
+ }
 
 {"event": "error", "message": "human-readable, sourced from the exception"}
 ```
@@ -374,11 +508,49 @@ progress without polling. Consumed by
 // eval_pass_rate only — one event per held-out problem:
 {"event": "row", "i": 5, "task_id": "HumanEval/89", "passed": true,  "reason": ""}
 {"event": "row", "i": 6, "task_id": "HumanEval/90", "passed": false, "reason": "TimeoutError"}
+// eval_pass_rate with --k > 1 — the row also reports how many of the k candidates passed:
+{"event": "row", "i": 6, "task_id": "HumanEval/90", "passed": true, "reason": "", "passes": 2, "k": 4}
 ```
 
 These helpers also re-emit a `start` event with `rows / candidates / model / adapter`
 fields and a `done` event with `pass_at_1` (eval) or `pass_rate / kept / train / valid / test` (round).
 The contracts of `start / done / error` are unchanged — see above.
+
+#### `eval_pass_rate.py` — `--k` / `--temperature` (pass@k)
+
+[`eval_pass_rate.py`](../LLMPro/Resources/helpers/eval_pass_rate.py) takes two
+optional flags so the Test node ([`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift)
+"Score it") and Practice can score a `(model + adapter)` at pass@k. Consumed by
+both [`EvalService.swift`](../LLMPro/Services/EvalService.swift) and
+[`SelfImproveService.swift`](../LLMPro/Services/SelfImproveService.swift):
+
+```
+python <helpers>/eval_pass_rate.py --eval <eval.jsonl> --model <ABS-PATH>
+  [--adapter <adapter-dir>] [--limit N] [--k 1] [--temperature 0.2]
+```
+
+- **`--k`** (default `1`): candidates generated per problem. A row passes if **any**
+  of its `k` candidates passes the row's `tests`.
+- **`--temperature`** (default `0.2`, used only when `k > 1`): sampling temperature
+  for the `k` candidates.
+
+**`--k 1` is byte-for-byte unchanged** — greedy (`temperature=0.0`), deterministic,
+one candidate, and the `done` event still carries `pass_at_1`. This keeps the
+existing `SelfImproveService` caller (which never passes `--k`) unaffected.
+
+Event-field deltas by `k`:
+
+| Event | Field | `k == 1` | `k > 1` |
+|---|---|---|---|
+| `start` | `k` | present (`1`) | present |
+| `row` | `passes`, `k` | absent | present (`passes` of `k` candidates passed) |
+| `done` | `pass_at_k`, `k` | present (`pass_at_k` == `pass_at_1`) | present |
+| `done` | `pass_at_1` | present (the canonical field) | **present only as an alias when k==1** |
+
+So at `k == 1` the `done` event has **both** `pass_at_1` and `pass_at_k` (equal); at
+`k > 1` it has `pass_at_k` + `k` but **no** `pass_at_1`. `EvalService` reads
+`pass_at_k` (falling back to `pass_at_1`); the legacy `SelfImproveService` path reads
+`pass_at_1` and only ever runs at `k == 1`.
 
 ### `inspect_attention.py` — Inspect tab attention capture
 
@@ -607,7 +779,9 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 │
 ├── datasets/<dataset-uuid>/        ← prepared lessons
 │   ├── train.jsonl                 ← chat schema: {"messages":[...]}
-│   ├── valid.jsonl
+│   │                                  OR preference schema: {"prompt","chosen","rejected"[,"system"]}
+│   │                                  (DatasetSchema.preference — DPO sets; PreferenceService)
+│   ├── valid.jsonl                 ← preference sets: ~10% carved from train.jsonl by splitForTraining
 │   └── test.jsonl
 │
 ├── models/<custom-name>/           ← user-modified models (strip-vision, abliterate, manual imports)
@@ -633,6 +807,13 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 │           └── test.jsonl
 │   # Note: per-round adapters live under adapters/<round-job-uuid>/, NOT here,
 │   # so they show up alongside ordinary training adapters in the Arena & Save & Use views.
+│
+├── evals/                         ← scored-eval harness (EvalService); see §7 EvalRun
+│   ├── <suiteID>/eval.jsonl       ← cached built-in suite (humaneval / mbpp-sanitized),
+│   │                                 pulled lazily via humaneval_pull.py on first use
+│   ├── custom-<uuid>/eval.jsonl   ← user-supplied custom suite (on-disk only this version;
+│   │                                 no authoring UI yet — drop the file in by hand)
+│   └── <run-uuid>/eval_run.json   ← per-run sidecar (one per EvalRun; same pattern as job.json)
 │
 ├── skills/<skill-id>/             ← one folder per Code-tab Agent Skill (SkillStore — LIVE); folder name = stable skill id
 │   ├── SKILL.md                   ← YAML frontmatter (name + description) + markdown instructions body
@@ -684,15 +865,22 @@ lastIter: Int
 lastLoss: Double?
 lastEvalLoss: Double?
 metricsBlob: Data        // JSON-encoded [TrainingStep], appended on every step
+trainModeRaw: String     // TrainMode rawValue: sft (default) | dpo — additive, no migration
 createdAt: Date
 ```
+
+**`trainModeRaw`** is **additive** (defaults `"sft"`, so existing records load with no
+migration). A `.dpo` job was trained via `mlx_lm_lora.train` (see the DPO trainer
+section in §1) instead of `mlx_lm lora`; `TrainingService.start()` branches SFT vs DPO
+on it. Its output adapter is the same shape, so a DPO job is interchangeable with an
+SFT job everywhere downstream.
 
 ### `DatasetRecord` (`@Model`)
 
 ```swift
 id: UUID @Attribute(.unique)
 name: String
-schemaRaw: String        // DatasetSchema rawValue: chat|completions|tools|text|unknown
+schemaRaw: String        // DatasetSchema rawValue: chat|completions|tools|text|preference|unknown
 trainRows: Int
 validRows: Int
 testRows: Int
@@ -700,6 +888,15 @@ relativePath: String     // = id.uuidString, relative to PathResolver.datasetsDi
 createdAt: Date
 notes: String
 ```
+
+**`DatasetSchema.preference`** (the new case) is how the **DPO preference loop**
+stores its data — preferences are a **first-class `DatasetRecord`, NOT a new
+`@Model`** (so there is **no SwiftData migration**). On disk the rows are
+`{"prompt","chosen","rejected"[,"system"]}` JSONL in `datasets/<uuid>/train.jsonl`
+(+ `valid.jsonl`), written by
+[`PreferenceService`](../LLMPro/Services/PreferenceService.swift). `DatasetService.classify()`
+gained a **`preference` vote** (a row with `prompt`+`chosen`+`rejected` keys), checked
+**before `completions`** so a preference file is never misread as a completions set.
 
 ### `SelfImproveRun` (`@Model`)
 
@@ -742,6 +939,61 @@ notes: String
 
 A `run.json` sidecar is written at `selfimprove/<uuid>/run.json` for crash
 inspection (same pattern as `TrainingJob.writeSidecar`).
+
+### `EvalRun` (`@Model`)
+
+One per scored eval of a `(model + adapter)`. Mirrors `SelfImproveRun`'s
+blob-in-model + sidecar pattern. Owned by
+[`EvalService.swift`](../LLMPro/Services/EvalService.swift); written when the Test
+node's "Score it" (or Progress's "Grade it") action runs. A **base model** is
+`adapterRelativePath == ""`; a fine-tune's value equals the source
+`TrainingJob.adapterRelativePath`, so scores are comparable across retrains.
+
+```swift
+id: UUID @Attribute(.unique)
+createdAt: Date
+baseModelRepoID: String      // friendly identifier; absolute path resolved at run time
+adapterRelativePath: String  // "" = base model; else == TrainingJob.adapterRelativePath
+suiteRaw: String             // EvalSuite rawValue: humaneval | mbpp-sanitized | custom
+customSuiteID: String        // the custom-<uuid> suite id when suite == .custom (else "")
+k: Int                       // pass@k (default 1)
+problemCount: Int            // how many problems were requested (the depth limit; 0 = all)
+passAtK: Double              // the score
+passedCount: Int
+totalCount: Int
+elapsedMs: Int
+statusRaw: String            // EvalStatus rawValue: queued | running | completed | failed | cancelled
+sourceLabel: String          // human-readable provenance ("Coding fine-tune", "Base", …)
+sourceJobID: UUID?           // the TrainingJob/SelfImproveRun this adapter came from, if any
+perTaskBlob: Data            // JSON-encoded [EvalTaskResult]
+lastError: String?
+```
+
+Embedded `EvalTaskResult` (JSON inside `perTaskBlob`, NOT a `@Model`):
+
+```swift
+struct EvalTaskResult: Codable, Identifiable, Hashable {
+    var taskID: String       // e.g. "HumanEval/42"
+    var passed: Bool
+    var reason: String       // "" on pass; the failure reason otherwise
+    var id: String { taskID }
+}
+```
+
+Enums and helpers:
+
+- **`EvalSuite`** (`humaneval` / `mbpp-sanitized` / `custom`) with `displayName`,
+  `oneLine`, and `pullPreset: String?` (the `humaneval_pull.py` preset name for
+  built-in suites; `nil` for `.custom`).
+- **`EvalStatus`** (`queued` / `running` / `completed` / `failed` / `cancelled`).
+- `adapterURL`, `suite` / `status` get-set bridges, `passPercent`,
+  `decodedTasks()` / `setTasks(_:)`, and `writeSidecar()` →
+  `evals/<run-uuid>/eval_run.json` (§6).
+
+**Schema registration**: `EvalRun.self` is registered in **both** schema arrays —
+`LLMProApp`'s `.modelContainer(for:)` list **and** `Core/PreviewSupport.swift`'s
+in-memory container (with a `sampleEvalRun`) — per the "register a new `@Model` in
+both places" rule (see [`ARCHITECTURE.md`](ARCHITECTURE.md) `PreviewSupport`).
 
 ### `AgentProfile` (`@Model`)
 
@@ -795,6 +1047,7 @@ Notification.Name("LLMPro.openTrainingWithModel") // object: String (repoID)
 Notification.Name("LLMPro.openChatWithModel")    // object: ModelHandoff OR String (see below)
 // LoopHandoff.swift
 Notification.Name("LLMPro.openCodeWithModel")    // object: ModelHandoff OR String (see below)
+Notification.Name("LLMPro.openTrainingWithPreferences") // object: PreferenceHandoff (see below)
 ```
 
 These carry the **feedback-loop hand-off** — moving a fine-tuned model (+adapter)
@@ -810,27 +1063,64 @@ Declared in [`LoopHandoff.swift`](../LLMPro/Core/LoopHandoff.swift):
 struct ModelHandoff: Sendable {
     let model: String          // base model repo ID or local name
     let adapterPath: String?   // absolute path to the LoRA adapter dir, if any
+    var autoScore: Bool = false // Test node auto-runs the eval on arrival when true
 }
 ```
 
-**Dual-payload contract.** Receivers of `.openChatWithModel` and
-`.openCodeWithModel` accept **either** a `ModelHandoff` (model + adapter) **or** a
-bare `String` (model only), so older posters that send just a repo ID keep working:
+**`autoScore`** (additive, default `false`, struct stays `Sendable`): when a poster
+sets it `true`, the Test node ([`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift))
+**auto-runs "Score it"** on arrival instead of waiting for the user to click it.
+Progress's **"Grade it"** CTA posts `.openChatWithModel` with this flag set, so the
+fine-tune lands in the Test node and scores immediately. The default-`false` posters
+(Try-it-out, Practice, the other completion CTAs) are unaffected.
+
+**Dual-payload contract (unchanged).** Receivers of `.openChatWithModel` and
+`.openCodeWithModel` still accept **either** a `ModelHandoff` (now with the optional
+`autoScore`) **or** a bare `String` (model only), so older posters that send just a
+repo ID keep working — adding `autoScore` did **not** change the
+`as? ModelHandoff ?? as? String` decode:
 
 ```swift
 if let h = note.object as? ModelHandoff { /* model + adapter */ }
 else if let model = note.object as? String { /* model only */ }
 ```
 
+#### `PreferenceHandoff` (the DPO "Teach by preference" hand-off)
+
+Declared in [`LoopHandoff.swift`](../LLMPro/Core/LoopHandoff.swift), carried by the
+**new** `.openTrainingWithPreferences` notification. It is the ③ → ② back-edge for the
+**preference loop**: the Arena's **"Teach by preference →"** CTA posts it after the
+user has marked enough answers, and `RootView` routes it to the Teach tab.
+
+```swift
+struct PreferenceHandoff: Sendable {
+    let model: String          // base model repo ID or local name
+    let adapterPath: String?   // absolute path to a LoRA adapter dir, if any
+    let datasetID: UUID        // the .preference DatasetRecord to fine-tune on
+}
+```
+
+Unlike `ModelHandoff`, it carries the **preference `datasetID`** (not just a
+model+adapter). On arrival, [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift)
+pre-fills the model + the `.preference` dataset, **auto-detects the `.preference`
+schema → shows a "teach by preference (DPO)" banner + sets DPO mode**, and `launch()`
+branches to `PreferenceService.splitForTraining` + `AutoTuner.tuneDPO` +
+`job.trainMode = .dpo`. The produced adapter lands under `adapters/<uuid>/` like any
+job, so the ordinary Progress / Try-it-out / Save & Use completion CTAs carry it back
+into the loop unchanged.
+
 Posters & receivers (all user-driven CTAs — completion never auto-switches tabs):
 
 | Notification | Posted by (CTA) | Object | Received by |
 |---|---|---|---|
-| `.openChatWithModel` | Progress completion card / Arena decision bar / Practice "Use this fine-tune" / `ModelDetailView` "Open in Chat" | `ModelHandoff` (the new posters) or `String` (`ModelDetailView`) | `RootView` → `.chat`; `ArenaView` pre-fills model + adapter |
+| `.openChatWithModel` | Progress completion card ("Try it out") + Progress **"Grade it"** (`autoScore: true`) / Arena decision bar / Practice "Use this fine-tune" / `ModelDetailView` "Open in Chat" | `ModelHandoff` (the new posters; "Grade it" sets `autoScore`) or `String` (`ModelDetailView`) | `RootView` → `.chat`; `ArenaView` pre-fills model + adapter, and auto-runs "Score it" when `autoScore` |
 | `.openCodeWithModel` | Progress completion card / Arena decision bar / Practice "Use this fine-tune" | `ModelHandoff` (or `String`) | `RootView` → `.code`; `CodeView.applyHandoff` pre-fills model + adapter |
+| `.openTrainingWithPreferences` | Arena **"Teach by preference →"** CTA (enabled at ≥4 captured preferences) | `PreferenceHandoff` | `RootView` → `.training`; `TrainingConfigView` pre-fills model + the `.preference` dataset, sets DPO mode + banner |
 
 `.openCodeWithModel` is the edge that lets the Code tab load a **fine-tuned** adapter
 (previously its `MLXServerService` was started with `--adapter-path nil`).
+`.openTrainingWithPreferences` is the **preference back-edge** — the Arena's
+👍-capture feeds a DPO fine-tune (see [`CONCEPT.md`](CONCEPT.md#the-preference-back-edge-the-arena-also-produces-fuel)).
 
 The coding agent (Code tab) otherwise talks to its services directly. Its persisted
 state is the `@AppStorage("codeWorkspacePath")`, `@AppStorage("codeOrchestratorModel")`

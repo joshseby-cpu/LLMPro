@@ -105,6 +105,11 @@ struct AutoTunedConfig {
     /// Warmup steps for a warmup→cosine-decay LR schedule (0 = constant LR).
     /// AutoTuner sets ~5% of iters — steadier early training, better final minimum.
     var warmupSteps: Int = 0
+    /// Which trainer this config targets. `.sft` (default) renders the mlx-lm SFT
+    /// YAML; `.dpo` renders the mlx-lm-lora preference-tuning YAML.
+    var trainMode: TrainMode = .sft
+    /// DPO temperature (β). Only meaningful when `trainMode == .dpo`.
+    var dpoBeta: Double = 0.1
 }
 
 enum AutoTuner {
@@ -160,6 +165,59 @@ enum AutoTuner {
         if model.isMoE {
             cfg.loraTargetKeys = moeLoraTargetKeys(architecture: model.architecture, repoID: model.repoID)
         }
+        return cfg
+    }
+
+    /// DPO-tuned hyperparameters, derived from the SFT recipe for the same
+    /// model + duration then adjusted for preference tuning:
+    ///   • fewer iters — preference sets are tiny (~1/3 of SFT, clamped 60–300),
+    ///   • a smaller LR — DPO is sensitive and easily over-optimizes (~half SFT),
+    ///   • β = 0.1 (the trainer's default),
+    ///   • ~2× the peak-memory estimate — DPO loads a second full frozen copy of
+    ///     the base as the reference model.
+    /// LoRA rank/scale/target-keys and the warmup schedule carry over from SFT.
+    static func tuneDPO(repoID: String,
+                        dataPath: String,
+                        adapterPath: String,
+                        duration: TrainingDuration) -> AutoTunedConfig {
+        let sft = tune(repoID: repoID, dataPath: dataPath,
+                       adapterPath: adapterPath, duration: duration)
+        return applyDPOAdjustments(to: sft)
+    }
+
+    /// Architecture-aware DPO overload — uses MoE target keys when the base is MoE.
+    static func tuneDPO(model: ModelRegistry.DetectedModel,
+                        dataPath: String,
+                        adapterPath: String,
+                        duration: TrainingDuration) -> AutoTunedConfig {
+        let sft = tune(model: model, dataPath: dataPath,
+                       adapterPath: adapterPath, duration: duration)
+        return applyDPOAdjustments(to: sft)
+    }
+
+    /// Shared SFT→DPO adjustment so both `tuneDPO` overloads stay consistent.
+    private static func applyDPOAdjustments(to sft: AutoTunedConfig) -> AutoTunedConfig {
+        var cfg = sft
+        cfg.trainMode = .dpo
+        cfg.dpoBeta = 0.1
+        // Fewer iters: preference datasets are small. ~1/3 of SFT, clamped to a
+        // sane floor/ceiling so a Quick run still does enough and a Thorough run
+        // doesn't overfit the tiny set.
+        cfg.iters = min(300, max(60, sft.iters / 3))
+        // Smaller LR — DPO is sensitive; roughly half the SFT rate.
+        cfg.learningRate = sft.learningRate * 0.5
+        // Warmup tracks the (now shorter) iters — ~5%, clamped like the SFT path.
+        cfg.warmupSteps = max(5, min(cfg.iters / 20, 50))
+        // The reference model is a second full copy of the base (~2× weights),
+        // so roughly double the peak-memory estimate the UI warns with.
+        cfg.estimatedPeakMemoryGB = sft.estimatedPeakMemoryGB * 2
+        // Re-estimate wall-clock for the new iter count (load overhead is the
+        // bulk of a short DPO run; keep it proportional to the SFT estimate).
+        let iterRatio = sft.iters > 0 ? Double(cfg.iters) / Double(sft.iters) : 1.0
+        cfg.estimatedMinutes = max(1, Int((Double(sft.estimatedMinutes) * iterRatio).rounded()))
+        // DPO isn't supported by the SGD safe-mode path in mlx-lm-lora (its
+        // optimizer choices are adam/adamw/muon); keep AdamW for preference runs.
+        if cfg.optimizer == "sgd" { cfg.optimizer = "adamw" }
         return cfg
     }
 
@@ -450,6 +508,10 @@ enum AutoTuner {
         cfg.optimizer = tuned.optimizer
         cfg.maskPrompt = tuned.maskPrompt
         cfg.lrScheduleWarmupSteps = tuned.warmupSteps
+        // Preference-tuning fields. When .sft (the default) these are ignored by
+        // TrainingConfig.renderYAML(), so the SFT output stays byte-identical.
+        cfg.trainMode = tuned.trainMode
+        cfg.dpoBeta = tuned.dpoBeta
         // Scale validation cadence to the run length: a Quick run (~50 iters) at the
         // TrainingConfig default of 100 would emit ZERO "Val loss" lines, leaving the
         // friendly Progress chart + 5-star rating empty on exactly the runs new users

@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 enum DatasetSchema: String, Codable, CaseIterable {
-    case chat, completions, tools, text, unknown
+    case chat, completions, tools, text, preference, unknown
 
     var displayName: String {
         switch self {
@@ -10,6 +10,7 @@ enum DatasetSchema: String, Codable, CaseIterable {
         case .completions: "Completions (prompt/completion)"
         case .tools:       "Tools (function calls)"
         case .text:        "Text (raw)"
+        case .preference:  "Preferences (chosen/rejected)"
         case .unknown:     "Unknown"
         }
     }

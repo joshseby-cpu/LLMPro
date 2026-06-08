@@ -190,10 +190,71 @@ If a new mlx-lm flag becomes important and you want users to be able to set it
 
 ---
 
+## Add another preference method (ORPO / CPO, alongside DPO)
+
+The **"Teach by preference"** loop already trains with DPO via the separate
+`mlx-lm-lora` package (`python -m mlx_lm_lora.train --train-mode dpo`, see
+[`CONTRACTS.md`](CONTRACTS.md#mlx_lm_loratrain--dpo-preference-training-separate-package)).
+`mlx_lm_lora` **already supports `orpo` and `cpo`** as `--train-mode` values over the
+same `{prompt, chosen, rejected}` dataset, so adding one is mostly Swift plumbing:
+
+1. **Add a case to `TrainMode`** (on `TrainingConfig` /
+   [`TrainingJob.swift`](../LLMPro/Models/TrainingJob.swift)):
+
+   ```swift
+   enum TrainMode: String { case sft, dpo, orpo, cpo }
+   ```
+
+   `trainModeRaw` is already additive (defaults `"sft"`), so no SwiftData migration.
+
+2. **Branch the trainer** in
+   [`TrainingService.start()`](../LLMPro/Services/TrainingService.swift). The DPO
+   branch is the template: pass `--train-mode <orpo|cpo>` as a **CLI flag** (NOT in
+   the YAML — the [CLI-flags-not-YAML gotcha](CONTRACTS.md#-critical-gotcha-cli-flags-vs--c-configyaml-not-interchangeable)
+   applies to *every* non-`None`-default arg), keep `-c config.yaml` for the
+   None-default / nested keys incl. **`fuse: false`**, and keep the **batch-size
+   clamp** to `min(trainRows, validRows)` (the `iterate_dpo_batches` hang isn't
+   DPO-specific). Note: **ORPO is reference-model-free**, so its memory profile is
+   *not* the ~2× of DPO/CPO — adjust the estimate accordingly (next step).
+
+3. **Add an AutoTuner variant** beside
+   [`tuneDPO`](../LLMPro/Services/AutoTuner.swift) (e.g. `tuneORPO`) — pick its
+   iters / lr / β / loss-type and the right memory estimate (ORPO: ~1× base; CPO:
+   ~2× like DPO). ORPO also takes a `--orpo-lambda`/loss weight rather than a pure
+   β — check `mlx_lm_lora.train --help` for the exact flag names and route the
+   method-specific ones through CLI flags too.
+
+4. **Surface the choice (only if needed).** The preference loop currently picks the
+   method for the user (DPO). If you want a chooser, it belongs in the Teach
+   **Advanced settings** disclosure, **not** the primary 3-card UI — same rule as
+   [AutoTuner picks hyperparameters](CONVENTIONS.md#autotuner-picks-hyperparameters).
+   `LogStreamParser` already matches the `Iter N: loss …` line `mlx_lm_lora` emits for
+   all these modes, so the Progress chart needs no change.
+
+5. **Verify** by capturing ≥4 preferences in the Arena, launching the new method at
+   Quick depth, and confirming a real `Iter N: loss …` curve, an
+   `adapters.safetensors` under `adapters/<uuid>/`, and `job.json` `status: completed`.
+   Then read the logs (zero ERROR/FAULT, no new `.ips`).
+
+---
+
 ## Add a new source schema for dataset auto-detection
 
 If a HuggingFace dataset uses a shape you haven't seen (e.g. `prompt + chosen +
 rejected` for DPO data):
+
+> **Don't confuse this with `DatasetSchema.preference`.** This recipe is for the **HF
+> importer** turning an arbitrary source into a **chat** lesson for an ordinary SFT
+> run — so the `"dpo"`-shaped example below **collapses the pair to one chat row**
+> (keep `chosen`, drop `rejected`). The DPO **"Teach by preference"** loop is a
+> *different* path: it **keeps the full `{prompt, chosen, rejected[, system]}` pair**
+> as a `DatasetSchema.preference` `DatasetRecord` (written by
+> [`PreferenceService`](../LLMPro/Services/PreferenceService.swift), trained by
+> `mlx_lm_lora.train`). If you want HF preference datasets to feed the **DPO** loop
+> (not be flattened to SFT), normalize them to the `preference` shape instead and set
+> `DatasetSchema.preference` — see
+> [`CONTRACTS.md`](CONTRACTS.md#mlx_lm_loratrain--dpo-preference-training-separate-package)
+> and ["DPO preference loop"](CONVENTIONS.md#dpo-preference-loop-via-on-demand-mlx-lm-lora).
 
 1. **Add detection** to `detect_schema()` in
    [`download_hf_dataset.py`](../LLMPro/Resources/helpers/download_hf_dataset.py):
@@ -259,7 +320,7 @@ Don't do this lightly — we have a dozen already. But the recipe:
 
 Every SwiftUI view-bearing file under `Features/` (and `App/RootView.swift`) ends
 in a `#Preview` so the Xcode canvas isn't empty. The scaffold — one in-memory
-`ModelContainer` for all 6 `@Model` types + seeded samples + the
+`ModelContainer` for all 7 `@Model` types + seeded samples + the
 `View.previewEnvironment()` modifier — lives in
 [`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift) behind `#if DEBUG`.
 To add one:
@@ -428,6 +489,76 @@ The Practice loop ships with two seed datasets (HumanEval and MBPP). To add a th
    Plus a `displayName` and a `oneLine` blurb. The case's rawValue must match the key in PRESETS.
 
 That's it — `SelfImproveView`'s picker uses `SelfImproveSeed.allCases`, so the new option appears automatically.
+
+---
+
+## Add an eval suite (the scored Test node)
+
+The Test node's **"Score it"** action ([`EvalService`](../LLMPro/Services/EvalService.swift))
+ships two built-in suites (HumanEval / MBPP). There are two ways to add another,
+depending on whether it's a built-in (pulled from HF) or a one-off local file.
+
+**A local, on-disk custom suite (no code — already supported):** drop an
+`eval.jsonl` at `evals/custom-<uuid>/eval.jsonl`
+([`PathResolver.evalSuiteDir(for:)`](../LLMPro/Core/PathResolver.swift)). Each row is
+the same shape the eval engine expects — `{prompt, tests, entry_point}` (plus the
+optional `canonical_solution` / `messages` the seed format carries):
+
+```jsonc
+{"task_id": "mine/1", "prompt": "def add(a, b):\n    \"\"\"…\"\"\"\n",
+ "tests": "assert add(2, 3) == 5", "entry_point": "add"}
+```
+
+`tests` must be Python that passes (no exception) or raises once the candidate's code
+is in scope — same contract as `humaneval_pull.py` rows (see "Add a new seed
+preset"). `EvalRun.customSuiteID` points at the `custom-<uuid>` folder. **There is no
+authoring UI yet**, so this is hand-authored for now.
+
+**A new built-in suite (pulled from HF, picker-visible):**
+
+1. **Add a puller adapter to [`humaneval_pull.py`](../LLMPro/Resources/helpers/humaneval_pull.py)**
+   and a `PRESETS` entry, exactly as in "Add a new seed preset to the Practice tab"
+   above — the same `eval.jsonl` rows back both Practice's held-out set and a Test-node
+   suite, so one adapter serves both.
+
+2. **Add a case to `EvalSuite`** in [`EvalRun.swift`](../LLMPro/Models/EvalRun.swift):
+
+   ```swift
+   case bigcodebench = "bigcodebench"
+   ```
+
+   Give it a `displayName`, a `oneLine` blurb, and — critically — a
+   **`pullPreset`** that returns the `humaneval_pull.py` PRESETS key for this suite
+   (`nil` only for `.custom`). `EvalService.ensureSuite(_:)` uses `pullPreset` to
+   lazily cache the suite's `eval.jsonl` under `evals/<suiteID>/` on first use.
+
+3. **Surface it in the picker** in
+   [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift)'s "Score it" suite picker
+   (it iterates `EvalSuite`'s built-in cases). No other wiring — the report card,
+   delta, and persistence are suite-agnostic.
+
+4. **Verify** by clicking "Score it", picking the new suite at Quick depth, and
+   confirming an `EvalRun` is written (the report card shows pass% + the per-task
+   table; `evals/<run-uuid>/eval_run.json` is the sidecar).
+
+### Score an artifact from a new surface
+
+To add scoring to another view (e.g. a future "score this Practice run" button), call
+the engine directly — don't re-implement eval:
+
+```swift
+let run = await EvalService.shared.runEval(
+    model: repoID, adapterPath: adapterDirPath,   // adapterPath nil/"" ⇒ score the base
+    suite: .humaneval, customID: "", k: 1, limit: 20,
+    sourceLabel: "Practice R3", sourceJobID: someUUID,
+    context: modelContext)
+```
+
+It inserts a `.running` `EvalRun`, spawns `eval_pass_rate.py`, re-fetches the @Model by
+UUID before persisting the score + per-task blob + sidecar, and returns it. Read
+`EvalService.previousAdapterEval(forBase:excludingAdapter:context:)` if you want the
+score-delta. (Registering a new `@Model`? `EvalRun` is already in both schema arrays —
+this recipe needs no schema change.)
 
 ---
 

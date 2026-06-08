@@ -227,7 +227,7 @@ Every SwiftUI view-bearing file (each tab root + every sheet/sub-view under
 `#if DEBUG`, and that preview's view is built via the
 [`View.previewEnvironment()`](../LLMPro/Core/PreviewSupport.swift) modifier as its
 **last** modifier. The preview-only sample data and the single in-memory
-`ModelContainer` (registered for all 6 `@Model` types,
+`ModelContainer` (registered for all 7 `@Model` types,
 `ModelConfiguration(isStoredInMemoryOnly: true)`, seeded once) live in
 [`Core/PreviewSupport.swift`](../LLMPro/Core/PreviewSupport.swift) behind `#if DEBUG`
 — don't scatter ad-hoc sample structs into individual view files.
@@ -448,6 +448,19 @@ let modelArg: String = repo.contains("/") ? repo : (localModel?.directory.path ?
 Symptom of forgetting this: mlx-lm exits 1 immediately after "Loading pretrained
 model" with no helpful stderr. We fixed this once; don't reintroduce it.
 
+**Every surface that hands a model to mlx-lm goes through this resolver pattern** —
+training (`TrainingConfigView.resolveModelArg`), Practice/eval
+(`SelfImproveService` / `EvalService`), and the Code server
+(`MLXServerService.start`). The Arena (`InferenceService.stream`) was the **one
+that didn't** — it passed the bare local name straight to `mlx_lm generate`, so any
+**custom local model** (a `models/<name>` from GGUF import / strip-vision /
+abliterate / trained-and-saved) failed with "exited with code 1" while HF repos
+worked. **Fixed (2026-06-07):** `InferenceService.stream` now resolves a bare local
+name to its absolute path (registry hit → `directory.path`) the same way, leaving HF
+repo ids (with `/`) untouched. Doing this in Swift — not by adding a Python shim — is
+the **Swift-first rule** in action (it's plain path logic). If you add another mlx-lm
+entry-point, route its model arg through the same resolver.
+
 ---
 
 ## Process management
@@ -473,7 +486,7 @@ We considered three other shapes before landing on rejection-sampling:
 
 | Considered | Why we passed |
 |---|---|
-| **DPO / preference fine-tuning** | Requires a reliable judge for *every* generated pair. mlx-lm's DPO support is newer and the judge bottleneck (LLM-as-judge is noisy, slow, reward-hackable) is harder than the training. Full RLHF ([OpenRLHF](https://github.com/OpenRLHF/OpenRLHF), see [`REFERENCES.md`](REFERENCES.md)) is heavier still — a future direction, not used today. |
+| **DPO / preference fine-tuning** *(for the automated Practice loop)* | For an **automated** loop, DPO needs a reliable judge for *every* generated pair, and the judge bottleneck (LLM-as-judge is noisy, slow, reward-hackable) is harder than the training. Full RLHF ([OpenRLHF](https://github.com/OpenRLHF/OpenRLHF), see [`REFERENCES.md`](REFERENCES.md)) is heavier still. **NOTE:** DPO *is* now shipped — but as a **separate, human-judged loop** (the Arena's "Teach by preference", where the *user* is the judge so there is no automated-judge bottleneck), not inside Practice. See ["DPO preference loop"](#dpo-preference-loop-via-on-demand-mlx-lm-lora) below. Practice deliberately stays rejection-sampling because its judge is automated. |
 | **autoresearch-style code mutation** (Karpathy's loop) | Improves the *training recipe*, not the model's capability. AutoTuner already picks good defaults — we'd be optimizing in a small, well-understood search space. And it requires an editable training script, which breaks our "AutoTuner is the only knob" principle. |
 | **Self-judging via the same model** | Drifts. Without an external ground-truth signal the model rewards its own confident-sounding mistakes. |
 
@@ -500,6 +513,154 @@ Each round produces a real LoRA adapter that the user might want to chat with or
 ### The loop is a single big `Task { @MainActor in }` block
 
 `SelfImproveService.start(run:, context:)` runs the entire end-to-end pipeline in one Task. That's intentional — the loop has long ordering dependencies (round N's adapter is the input to round N+1's generation) and threading the state machine through callbacks or NotificationCenter would be miserable. The trade-off: cancellation has to be done by killing the active subprocess (`cancel()` sets phase to `.cancelled` and SIGTERMs `activeProcess`), and we have to be careful never to capture `@Model` instances into nested closures (we use the `Self.fetchRun(id:context:)` pattern, mirroring TrainingService).
+
+---
+
+## DPO preference loop (via on-demand `mlx-lm-lora`)
+
+The **"Teach by preference"** loop lets the user mark which Arena answer is better;
+the preferences accumulate, a DPO fine-tune turns them into a normal LoRA adapter, and
+that adapter flows back through the loop. It is a *human-judged* sibling to Practice's
+*automated* rejection-sampling loop (the user is the judge, so there is no
+automated-judge bottleneck — which is exactly the reason DPO was passed over for
+Practice; see ["Why rejection-sampling…"](#why-rejection-sampling-self-distillation-not-dpo--rlaif--agent-rewriting-code)).
+Five decisions shaped it:
+
+### DPO trains via the *separate* `mlx-lm-lora` package, installed on-demand (mergekit pattern)
+
+The installed `mlx-lm` (0.31.3) has **no DPO trainer**. Rather than pin a whole
+different `mlx-lm` or vendor a trainer, DPO runs through the separate
+**`mlx-lm-lora` (v2.1.0)** package, invoked as `python -m mlx_lm_lora.train`. It is
+installed **on-demand** — the exact pattern as mergekit: `PythonRuntime`'s
+`dpoTrainerInstalled()` / `installDPOTrainer()` install it lazily on the first DPO
+launch (it's also in the `bootstrap()` pip list, but its absence does **not** gate the
+`.ready` state — so a first run that never touches DPO doesn't pay for it). Keep this
+shape for any future trainer that isn't part of stock `mlx-lm`; don't bloat the
+critical-path bootstrap.
+
+### Preferences are a `DatasetRecord` (`DatasetSchema.preference`), NOT a new `@Model`
+
+A preference set is just another dataset — `{prompt, chosen, rejected[, system]}` JSONL
+under `datasets/<uuid>/`. So it's stored as a first-class
+[`DatasetRecord`](../LLMPro/Models/DatasetRecord.swift) with a **new
+`DatasetSchema.preference` case**, *not* a new `@Model`. That's deliberate: a new
+`@Model` would force a SwiftData migration (we're additive-only, see
+[`EXTENDING.md`](EXTENDING.md#migrate-swiftdata-schema)), whereas a new enum case is
+free. [`PreferenceService`](../LLMPro/Services/PreferenceService.swift) owns the I/O
+(`appendPair` atomic-append + de-dup + bump `trainRows`; `splitForTraining` carves
+`valid.jsonl`), and `DatasetService.classify()` votes `preference` **before**
+`completions` so a preference file is never misread. The same reasoning as the scored
+Test node *not* being on `TrainingJob`: pick the smallest schema change that fits.
+
+### `mlx_lm_lora.train` ignores YAML for its non-`None`-default args — pass DPO knobs as CLI flags
+
+This is the **load-bearing gotcha** (full detail in
+[`CONTRACTS.md`](CONTRACTS.md#mlx_lm_loratrain--dpo-preference-training-separate-package)).
+`mlx_lm_lora.train` merges a `-c config.yaml` into argparse **only for args that are
+still `None`** (`if getattr(args,k,None) is None: setattr(...)`). Its DPO-controlling
+args have **non-`None` defaults** — notably `--train-mode` (default `"sft"`!), plus
+`--beta`, `--dpo-cpo-loss-type`, `--gradient-accumulation-steps` — so putting them in
+the YAML does **nothing** and the run silently trains SFT. `TrainingService` therefore
+passes those as **CLI flags** and still passes `-c config.yaml` for the None-default /
+nested keys (`lora_parameters`, `lr_schedule`, lr, layers, seq length, and
+**`fuse: false`** — required, since `fuse` defaults true and would dump a ~1.3 GB
+`model.safetensors` into every adapter dir). Rule of thumb: **DPO knob → CLI flag;
+LoRA-shape / schedule / nested → YAML.** This is a per-package quirk; do not assume
+mlx-lm's "YAML wins" semantics carry over.
+
+### Clamp `--batch-size` to `min(trainRows, validRows)` (it hangs otherwise)
+
+`mlx_lm_lora`'s `iterate_dpo_batches` **hangs** (infinite 100%-CPU spin, never exits)
+when `batch_size > rows` in a split. Because a freshly-captured preference set is tiny
+(the verified live run had 3 train / 1 valid), `TrainingService` reads the on-disk row
+counts and clamps `--batch-size` to `max(1, min(trainRows, validRows))` before
+launching (verified live: a 4→1 clamp). Never feed an unclamped AutoTuner batch size
+to the DPO trainer. The training exit handler was also hardened so abnormal
+termination (signal / crash / stream-close) always lands the job in `.failed` rather
+than wedged at `.running` — the hang above was the original way a DPO job could get
+stuck.
+
+### Same artifact, same loop discipline (no new tab)
+
+A DPO job produces the **same** `adapters/<uuid>/adapters.safetensors` shape an
+`mlx_lm lora` job does, carries `TrainingJob.trainMode = .dpo` (additive field, no
+migration), and is parsed by the same `LogStreamParser` (a DPO-specific `Iter N: loss …`
+regex, anchored on `: loss ` so it can't collide with SFT's `Train loss`/`Val loss`).
+So Progress / Try-it-out / Save & Use handle it unchanged, and the capture→train→loop
+flow lives entirely inside the **existing** Arena (capture) → Teach (train) edge — it
+is **not a new sidebar tab** (same "the sidebar is a loop, not a menu" rule the scored
+Test node followed). The CTA is user-driven (enabled at ≥4 preferences); completion
+never auto-switches tabs.
+
+> **Honest status (2026-06-07):** the **plumbing is verified live** end-to-end
+> (capture → DPO train → adapter → Progress). Two caveats, both recorded in
+> [`STATE.md`](STATE.md): (1) DPO on a 4-preference set **overfits** (the star rating
+> was low) — quality needs many more preferences; the plumbing, not the quality, is
+> what's proven. (2) The "Teach by preference" CTA switches tabs but the model/dataset
+> **pre-fill had a notification-timing bug** being fixed separately.
+
+---
+
+## The scored Test node (EvalService / EvalRun)
+
+The loop's ③ Test node ([`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift)) gained
+a **"Score it"** action that turns testing from a subjective eyeball into a tracked
+**pass@k** number, owned by [`EvalService`](../LLMPro/Services/EvalService.swift) and
+persisted in an [`EvalRun`](../LLMPro/Models/EvalRun.swift). Five decisions shaped it:
+
+### The score lives in a NEW `EvalRun` @Model — not fields on `TrainingJob`
+
+A `TrainingJob` is one fine-tune; a score is one *measurement* of a
+`(model + adapter)`, and we need to measure things that aren't `TrainingJob`s at all:
+**base models** (no adapter) and **Practice adapters** (`SelfImproveRun`). We also
+want **many** scores per artifact over time (re-score after a retrain, at different
+k/suite) and to compare them. So the score is its own entity, keyed by
+`(baseModelRepoID, adapterRelativePath)` — `adapterRelativePath == ""` is the base
+model; otherwise it equals the source `TrainingJob.adapterRelativePath`, so the same
+adapter's scores line up across retrains. Bolting `passAtK` onto `TrainingJob` would
+have covered none of those cases.
+
+### Grow the EXISTING Test node — do NOT add a "Grades" tab
+
+Per "the sidebar is a loop, not a menu" (above) and CONCEPT.md's *don't bolt on a
+sibling tool* rule: the score **grew ArenaView**, which already owns the artifact
+hand-off and the ⑤ keep/retrain back-edge decision. A separate "Grades" tab would
+split the decision (score in one tab, the "Train again / Use in Code / Save & Use"
+buttons in another) and re-introduce the copy-a-path seam the loop wiring closed. The
+report card + the decision-bar delta sit where the decision is made.
+
+### Eval engine = the one-shot `eval_pass_rate.py` + the Practice sandbox — NOT `MLXServerService`
+
+`EvalService` reuses Practice's machinery: the one-shot
+[`eval_pass_rate.py`](../LLMPro/Resources/helpers/eval_pass_rate.py) (model loaded
+once per run, loops over problems) + [`humaneval_pull.py`](../LLMPro/Resources/helpers/humaneval_pull.py)
+for suites + the existing RLIMIT_AS+SIGALRM subprocess sandbox. It deliberately does
+**not** route through the Code tab's persistent `MLXServerService` daemon: that would
+mean re-implementing sandboxed unit-test execution behind the server, and it would
+**fight the Code tab for the one daemon**. The safety model is the same as Practice —
+"trusted-ish output from a model the user just fine-tuned," not a hardened generic
+sandbox (see "Why the test runner is a subprocess sandbox" above). The one-shot
+shape is right here (a scoring batch, like Practice's eval pass), the daemon is right
+for the agent's many low-latency turns — don't mix them.
+
+### pass@1 is the default; pass@k is an Advanced knob
+
+The default is **pass@1** — greedy, deterministic, fast, and `eval_pass_rate.py`'s
+`--k 1` path is byte-for-byte the legacy behavior (so `SelfImproveService` is
+unaffected). **pass@k (k=2–8)** lives behind an Advanced `DisclosureGroup` (a k
+stepper), consistent with "friendly first, technical disclosed": most users want one
+honest deterministic number, not a sampling-temperature discussion. At k>1 a row
+passes if **any** of its k candidates passes.
+
+### v1 ships built-in suites only; custom suites are on-disk-but-no-UI
+
+`EvalSuite` has a `.custom` case and `PathResolver` resolves
+`evals/custom-<uuid>/eval.jsonl`, so a hand-dropped custom suite already works — but
+**there is no authoring UI this version**. We shipped the two built-in coding suites
+(HumanEval / MBPP, pulled lazily via `humaneval_pull.py`) first because they're the
+ones that match the app's coding focus and need zero authoring. A custom-suite editor
+is a clean later addition (the on-disk shape is already there); see
+[`EXTENDING.md`](EXTENDING.md#add-an-eval-suite-the-scored-test-node).
 
 ---
 

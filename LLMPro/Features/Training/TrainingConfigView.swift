@@ -9,6 +9,24 @@ struct TrainingConfigView: View {
     @Query(sort: \TrainingJob.createdAt, order: .reverse) private var jobs: [TrainingJob]
     @State private var registry = ModelRegistry.shared
 
+    // A pending Teach pre-fill owned by `RootView` (which is always alive, so it
+    // doesn't miss the cross-tab hand-off notification the way this lazily-mounted
+    // view would). We apply it on appear (first-ever visit, after RootView stashed
+    // it) or on change (this view was already mounted when it arrived), then nil it
+    // out so it can't re-apply on the next redraw. Defaults to a constant-nil binding
+    // so callers / previews that don't route hand-offs keep working unchanged.
+    @Binding var pendingHandoff: PendingTrainingHandoff?
+
+    init(pendingHandoff: Binding<PendingTrainingHandoff?> = .constant(nil)) {
+        self._pendingHandoff = pendingHandoff
+    }
+
+    /// Token of the last hand-off we applied — so the `.onReceive` belt-and-suspenders
+    /// path can't re-apply the same request the `pendingHandoff` binding already
+    /// delivered (and vice-versa). The `.onReceive` posts get a fresh token each time
+    /// via `PendingTrainingHandoff`, so a genuinely new notification still applies.
+    @State private var lastAppliedHandoffToken: UUID?
+
     // Step state
     @State private var jobName: String = ""           // empty = use derivedDefaultName
     @State private var selectedModelRepoID: String?
@@ -18,6 +36,11 @@ struct TrainingConfigView: View {
     // When set, training continues from that job's adapter weights, reusing its
     // exact LoRA config so the resume is architecture-compatible.
     @State private var continueFromJobID: UUID? = nil
+    // Preference (DPO) mode. Set by an `.openTrainingWithPreferences` hand-off from
+    // "Try it out". It also follows automatically from the dataset type (see
+    // `usePreferenceMode`) — there's no manual toggle in the primary UI per the
+    // AutoTuner-picks-everything rule; DPO mode is implied by a `.preference` lesson.
+    @State private var dpoMode = false
 
     /// Auto-default name derived from current selection. Used as the textfield
     /// placeholder, AND substituted into the saved job when the user hasn't typed
@@ -64,11 +87,33 @@ struct TrainingConfigView: View {
         return registry.localModels.first(where: { $0.repoID == id })
     }
 
+    /// The currently-selected dataset record, if any.
+    private var selectedDataset: DatasetRecord? {
+        guard let id = selectedDatasetID else { return nil }
+        return datasets.first(where: { $0.id == id })
+    }
+
+    /// True when the chosen lesson is a preferences set. DPO mode follows from this
+    /// (a chat lesson trains the normal supervised way).
+    private var selectedDatasetIsPreference: Bool {
+        selectedDataset?.schema == .preference
+    }
+
+    /// The effective "teach by preference" decision: the hand-off flag OR a
+    /// `.preference` lesson. Drives the banner and the `launch()` branch so the UI
+    /// and the run always agree, even if the user picks a preferences lesson by hand.
+    private var usePreferenceMode: Bool {
+        dpoMode || selectedDatasetIsPreference
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     headline
+                    if usePreferenceMode {
+                        preferenceModeBanner
+                    }
                     step1ModelPicker
                     step2DatasetPicker
                     step3DurationPicker
@@ -81,9 +126,23 @@ struct TrainingConfigView: View {
             }
             .navigationTitle("Teach your model")
             .task { await registry.scan() }
+            // Consume a hand-off RootView stashed before this view existed (the
+            // first-ever-visit case the `.onReceive` paths below physically can't
+            // catch). Runs every time the view appears; the token guard makes a
+            // repeat appearance a no-op.
+            .onAppear { consumePendingHandoffIfNeeded() }
+            // Consume a hand-off that arrived while this view was already mounted:
+            // RootView updates the binding, this fires. (The `.onReceive` paths cover
+            // the same case directly — this is the belt to their suspenders.)
+            .onChange(of: pendingHandoff) { _, _ in consumePendingHandoffIfNeeded() }
             .onReceive(NotificationCenter.default.publisher(for: .openTrainingWithModel)) { note in
                 if let repo = note.object as? String {
-                    selectedModelRepoID = repo
+                    apply(PendingTrainingHandoff(payload: .model(repo)))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openTrainingWithPreferences)) { note in
+                if let handoff = note.object as? PreferenceHandoff {
+                    apply(PendingTrainingHandoff(payload: .preference(handoff)))
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .openTrainingForCoding)) { note in
@@ -104,6 +163,35 @@ struct TrainingConfigView: View {
         }
     }
 
+    // MARK: - Hand-off pre-fill
+
+    /// Apply the hand-off RootView stashed for us, if there is one we haven't already
+    /// applied, then clear the binding so it can't re-apply on a later redraw.
+    private func consumePendingHandoffIfNeeded() {
+        guard let handoff = pendingHandoff else { return }
+        apply(handoff)
+        pendingHandoff = nil
+    }
+
+    /// Pre-fill the picker state from a hand-off. Idempotent per request: a hand-off
+    /// whose token we already applied is ignored, so the `pendingHandoff` binding and
+    /// the `.onReceive` notification paths can't double-apply the same request. Sets
+    /// `selectedModelRepoID` to the exact `ModelRegistry.repoID` the model cards match
+    /// on, and (for preferences) `selectedDatasetID` to the lesson's id + DPO mode, so
+    /// both cards show selected on arrival.
+    private func apply(_ handoff: PendingTrainingHandoff) {
+        guard lastAppliedHandoffToken != handoff.token else { return }
+        lastAppliedHandoffToken = handoff.token
+        switch handoff.payload {
+        case .model(let repo):
+            selectedModelRepoID = repo
+        case .preference(let pref):
+            selectedModelRepoID = pref.model
+            selectedDatasetID = pref.datasetID
+            dpoMode = true
+        }
+    }
+
     // MARK: - Sections
 
     private var headline: some View {
@@ -114,6 +202,17 @@ struct TrainingConfigView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// Read-only heads-up shown when the selected lesson is a preferences set: the
+    /// run will teach by preference (DPO). No toggle — the mode follows the lesson.
+    private var preferenceModeBanner: some View {
+        Label("🧭 This is a preferences lesson — LLMPro will teach by preference (DPO).",
+              systemImage: "hand.thumbsup")
+            .font(.callout)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
     }
 
     @ViewBuilder
@@ -692,15 +791,30 @@ struct TrainingConfigView: View {
         defer { launching = false }
         error = nil
 
+        // Teach-by-preference when the lesson is a preferences set (or a DPO hand-off
+        // flipped the flag). DPO needs a non-empty validation set, so carve one off the
+        // train rows first (a no-op once a holdout exists), then tune + render via the
+        // DPO path. A normal chat lesson stays on the supervised path below, unchanged.
+        let isDPO = usePreferenceMode
+        if isDPO {
+            PreferenceService.splitForTraining(dataset: ds)
+        }
+
         let jobID = UUID()
         let adapterURL = PathResolver.adapterDir(for: jobID)
         let tuned: AutoTunedConfig = {
             if let m = registry.localModels.first(where: { $0.repoID == repo }) {
-                return AutoTuner.tune(model: m, dataPath: ds.directoryURL.path,
-                                      adapterPath: adapterURL.path, duration: duration)
+                return isDPO
+                    ? AutoTuner.tuneDPO(model: m, dataPath: ds.directoryURL.path,
+                                        adapterPath: adapterURL.path, duration: duration)
+                    : AutoTuner.tune(model: m, dataPath: ds.directoryURL.path,
+                                     adapterPath: adapterURL.path, duration: duration)
             }
-            return AutoTuner.tune(repoID: repo, dataPath: ds.directoryURL.path,
-                                  adapterPath: adapterURL.path, duration: duration)
+            return isDPO
+                ? AutoTuner.tuneDPO(repoID: repo, dataPath: ds.directoryURL.path,
+                                    adapterPath: adapterURL.path, duration: duration)
+                : AutoTuner.tune(repoID: repo, dataPath: ds.directoryURL.path,
+                                 adapterPath: adapterURL.path, duration: duration)
         }()
 
         // mlx_lm interprets `model:` as either a HuggingFace repo ID (has `/`) or a local
@@ -709,9 +823,11 @@ struct TrainingConfigView: View {
         // instead so mlx-lm loads from disk rather than trying to fetch a nonexistent repo.
         let modelArg = resolveModelArg(repo)
 
-        // Build YAML: prefer advanced overrides if user opened the disclosure AND changed values.
+        // Build YAML. For DPO, always render from the auto-tuned config — the Advanced
+        // form is the SFT schema (no preference fields) and DPO follows the
+        // AutoTuner-picks-everything rule. For SFT, honor the advanced overrides as before.
         let yaml: String
-        if showAdvanced {
+        if showAdvanced && !isDPO {
             var cfg = advanced
             cfg.model = modelArg
             cfg.data = ds.directoryURL.path
@@ -733,6 +849,8 @@ struct TrainingConfigView: View {
             adapterRelativePath: jobID.uuidString,
             applyToModelInPlace: applyToModelInPlace
         )
+        // Record the algorithm so TrainingService picks the DPO launch argv.
+        if isDPO { job.trainMode = .dpo }
         modelContext.insert(job)
         do { try modelContext.save() } catch {
             self.error = error.localizedDescription

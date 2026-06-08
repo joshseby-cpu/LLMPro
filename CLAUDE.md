@@ -164,14 +164,15 @@ it's the doc that explains *why* the app is shaped this way.
 │    TrainingService · InferenceService · FuseService ·                    │
 │    ModelRegistry · DatasetService · DatasetEditorService ·               │
 │    DatasetPrepService · ModelModifyService · JobRegistry ·               │
-│    SystemMetrics · AutoTuner · TrainingNarrator ·                        │
-│    SelfImproveService · MLXServerService · CodingAgentService ·          │
-│    AgentRoles · WebSearch · SkillStore                                   │
+│    SystemMetrics · AutoTuner · TrainingNarrator · PreferenceService ·    │
+│    SelfImproveService · EvalService · MLXServerService ·                 │
+│    CodingAgentService · AgentRoles · WebSearch · SkillStore              │
 │                  ↑                                                       │
 │  Core/ProcessRunner (Foundation.Process → AsyncStream<String>)          │
 │                  ↑                                                       │
 └──────────── Python subprocesses (uv-managed venv on disk) ──────────────┘
-        python -m mlx_lm lora -c config.yaml          (training)
+        python -m mlx_lm lora -c config.yaml          (SFT training)
+        python -m mlx_lm_lora.train --train-mode dpo  (DPO "Teach by preference" — separate mlx-lm-lora pkg, on-demand)
         python -m mlx_lm generate --adapter-path ...  (inference)
         python -m mlx_lm server --port <free> ...     (Code tab: long-lived agent server)
         python -m mlx_lm fuse  --export-gguf ...      (export)
@@ -182,7 +183,7 @@ it's the doc that explains *why* the app is shaped this way.
         python abliterate.py             (uncensor via refusal-direction projection)
         python humaneval_pull.py         (Practice seed: HumanEval/MBPP → seed + eval JSONL)
         python self_improve_round.py     (Practice round: gen K candidates, sandbox-test, write dataset)
-        python eval_pass_rate.py         (Practice eval: pass@1 with optional adapter)
+        python eval_pass_rate.py         (Practice eval + Test-node "Score it": pass@k with optional adapter)
 ```
 
 Disk layout under `~/Library/Application Support/LLMPro/`:
@@ -191,10 +192,11 @@ runtime/.venv/          uv-managed Python 3.11 venv with mlx-lm installed
 runtime/helpers/        copy of helper scripts from app bundle
 hf/                     HuggingFace cache (HF_HOME) — models AND datasets
 adapters/<job-uuid>/    one folder per training job: config.yaml + adapters.safetensors + job.json + training.log
-datasets/<ds-uuid>/     train.jsonl + valid.jsonl + test.jsonl (chat schema)
+datasets/<ds-uuid>/     train.jsonl + valid.jsonl + test.jsonl (chat schema; OR a preference set {prompt,chosen,rejected[,system]} for DPO)
 models/<custom-name>/   modified models: text-only strips, abliterated copies, manual imports
 exports/<job-uuid>/     GGUF / fused safetensors output from the Save & Use flow
 selfimprove/<run-uuid>/ Practice run: seed.jsonl, eval.jsonl, run.json, round_N/dataset/, results.jsonl
+evals/                  Scored Test-node harness (EvalService): <suiteID>/eval.jsonl (built-in suites), custom-<uuid>/eval.jsonl (user suites, on-disk only), <run-uuid>/eval_run.json (per-EvalRun sidecar)
 skills/<skill-id>/      Code-tab Agent Skills (live): one SKILL.md package per folder (use_skill, 3-stage progressive disclosure)
 ```
 
@@ -269,15 +271,16 @@ previously verified behaviour.
 LLMPro/
 ├── App/          LLMProApp.swift (entry point), AppDelegate, RootView (sidebar shell)
 ├── Core/         Low-level utilities: ProcessRunner, PathResolver, LogStreamParser, SyntaxHighlighter
-├── Models/       SwiftData @Model types: TrainingJob, LocalModel, DatasetRecord, AppSettings, AgentProfile
+├── Models/       SwiftData @Model types: TrainingJob, LocalModel, DatasetRecord, AppSettings, SelfImproveRun, EvalRun, AgentProfile
 ├── Services/     The heart of the app — every business action lives in a service:
 │                 PythonRuntime, HuggingFaceClient, DownloadService, TrainingService,
+│                 PreferenceService (DPO "Teach by preference"),
 │                 InferenceService, FuseService, ModelRegistry, DatasetService,
 │                 DatasetEditorService, DatasetPrepService, ModelModifyService,
 │                 JobRegistry, SystemMetrics, AutoTuner, TrainingNarrator,
 │                 ConversionService, CodingDatasetCatalog, SelfImproveService,
-│                 MLXServerService, OpenAIChatClient, AgentTools, AgentRoles,
-│                 WebSearch, CodingAgentService, SkillStore (Agent Skills)
+│                 EvalService (scored Test node), MLXServerService, OpenAIChatClient,
+│                 AgentTools, AgentRoles, WebSearch, CodingAgentService, SkillStore (Agent Skills)
 ├── Features/     One folder per sidebar tab:
 │   ├── Dashboard/  (Home) — DashboardView
 │   ├── Models/     ModelsBrowserView, ModelDetailView, ModelModifyView
@@ -313,6 +316,9 @@ The app uses friendly names that don't always match the code. Keep both in mind:
 | Teach | TrainingConfigView |
 | Progress | TrainingMonitorView · JobRegistry |
 | Try it out | ArenaView · InferenceService |
+| "Score it" / the "Report card" (the scored Test node) | EvalService · EvalRun · eval_pass_rate.py (pass@k) · evals/ — comparable score per (model+adapter), drives the retrain back-edge |
+| "Grade it" (the Progress completion CTA) | TrainingMonitorView CTA → `.openChatWithModel` with `ModelHandoff.autoScore: true` (lands in the Test node + auto-scores) |
+| "Which answer is better?" 👍 / "Teach by preference" (the DPO loop) | ArenaView `preferenceBar` · `PreferenceService` · `DatasetSchema.preference` · `TrainMode.dpo` · `mlx_lm_lora.train` · `PreferenceHandoff`/`.openTrainingWithPreferences` — preference pairs → a DPO fine-tune, the second back-edge |
 | Code (the "Orchestrator team") | CodeView · CodingAgentService · AgentRoles · MLXServerService |
 | The five team roles (🧭🗺️🔬💻🎨) | TeamRole.orchestrator / planner / researcher / coder / ui |
 | Editing a team agent ("Edit team agents…") | Resources/agents/<role>.md + AgentStore + AgentsManagerView (raw-markdown editor via MarkdownEditor; the editable form of the 5 roles; NOT the dead AgentProfile) |

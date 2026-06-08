@@ -37,8 +37,8 @@ the next stage so the user never copies a disk path by hand.
    │           │      │   pick data) │      │          │      │                │
    └──────────┘      └──────────────┘      └────┬─────┘      └────────────────┘
         model              model + adapter      │  adapter
-        (repo ID)          (TrainingJob)        │
-                                                │ ⑤ "not good enough?"
+        (repo ID)          (TrainingJob)        │  (+ a pass@k EvalRun)
+                                                │ ⑤ "did the score go up?"
                                                 └──────────────────────┐
                                                   retrain back-edge →   │
                                                   ("Train again" CTA)   │
@@ -99,7 +99,7 @@ so older posters that send just a repo ID keep working — see the dual-decode i
 | — | **Pick the data** | Lessons | [`DatasetsView`](../LLMPro/Features/Datasets/DatasetsView.swift), [`DatasetService`](../LLMPro/Services/DatasetService.swift) / [`DatasetPrepService`](../LLMPro/Services/DatasetPrepService.swift), [`DatasetRecord`](../LLMPro/Models/DatasetRecord.swift) | (nothing) → a chat-JSONL **dataset** (the fuel, not the artifact) |
 | ② | **Fine-tune** it | Teach | [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift), [`AutoTuner`](../LLMPro/Services/AutoTuner.swift), [`TrainingService`](../LLMPro/Services/TrainingService.swift), [`TrainingJob`](../LLMPro/Models/TrainingJob.swift) | model + dataset → **model + adapter** (`TrainingJob`) |
 | — | **Watch** it learn | Progress | [`TrainingMonitorView`](../LLMPro/Features/Monitor/TrainingMonitorView.swift), [`JobRegistry`](../LLMPro/Services/JobRegistry.swift), [`TrainingNarrator`](../LLMPro/Services/TrainingNarrator.swift) | the running `TrainingJob` → a **completed** one (then offers the CTAs) |
-| ③ | **Test** it | Try it out | [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift) (base vs fine-tuned side-by-side), `ChatSession`, [`InferenceService`](../LLMPro/Services/InferenceService.swift) | model + adapter → a judgement (keep / retrain) |
+| ③ | **Test** it | Try it out | [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift) (base vs fine-tuned side-by-side), `ChatSession`, [`InferenceService`](../LLMPro/Services/InferenceService.swift); **"Score it"** → [`EvalService`](../LLMPro/Services/EvalService.swift) → an [`EvalRun`](../LLMPro/Models/EvalRun.swift) | model + adapter → a **tracked pass@k score** (an `EvalRun`) + a subjective read → keep / retrain |
 | ④ | **Use** it (coding) | Code | [`CodeView`](../LLMPro/Features/Code/CodeView.swift), [`CodingAgentService`](../LLMPro/Services/CodingAgentService.swift), [`MLXServerService`](../LLMPro/Services/MLXServerService.swift) | model + adapter → the loaded Orchestrator-team server |
 | ⑤ | **Iterate** (the back-edge) | back to Teach | the decision CTAs in Progress / Try-it-out → [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift) | model + adapter → a *new* `TrainingJob`, optionally resuming from the prior weights |
 
@@ -107,6 +107,53 @@ Two stages (**Lessons**, **Progress**) are marked with `—` because they aren't
 distinct artifact transforms: Lessons produces the *fuel* (a dataset) and Progress
 *observes* the ② transform in flight. They're real tabs, just not their own loop
 nodes.
+
+### ③ Test now emits a tracked score (the back-edge is score-delta-driven)
+
+The Test node used to produce only a *subjective* read (eyeball the two panes). It
+now also produces a **quantitative, tracked score**: the **"Score it"** action runs
+the eval engine ([`EvalService`](../LLMPro/Services/EvalService.swift) →
+[`eval_pass_rate.py`](../LLMPro/Resources/helpers/eval_pass_rate.py)) over a coding
+suite (HumanEval / MBPP) and writes a **pass@k** result into an
+[`EvalRun`](../LLMPro/Models/EvalRun.swift), keyed by `(base model + adapter)` so it
+is **comparable across retrains** (a base model is the empty-adapter case; Practice
+adapters score too). This sharpens the ⑤ back-edge decision from "does it *feel*
+better?" to a concrete **"did pass@k go up vs the previous fine-tune of the same
+base?"** — the report card and the decision bar both surface that delta, and
+Progress's **"Grade it"** CTA lands a fresh fine-tune in the Test node and scores it
+immediately (`ModelHandoff.autoScore`).
+
+Per the **"don't bolt on a sibling tool"** rule below, the score **grew the existing
+Test node** — it is *not* a new "Grades" tab. The Test node already owns the
+artifact hand-off and the back-edge decision, so the score lives where the keep/
+retrain choice is made. (It reuses Practice's eval engine + sandbox rather than the
+Code tab's persistent server — see
+[`CONVENTIONS.md`](CONVENTIONS.md#the-scored-test-node-evalservice--evalrun).)
+
+### The preference back-edge (the Arena also produces fuel)
+
+The Test node (③) now has a **second** back-edge to ② alongside "Train again": the
+**DPO preference loop**. While comparing the two panes, the user marks **which answer
+is better** (a 👍 "Which answer is better?" capture row, separate from the "Score it"
+report card). Each judgment becomes a **preference pair** —
+`{prompt, chosen, rejected}` — accumulated into a `.preference`
+[`DatasetRecord`](../LLMPro/Models/DatasetRecord.swift) by
+[`PreferenceService`](../LLMPro/Services/PreferenceService.swift). At ≥4 pairs, a
+**"Teach by preference →"** CTA hands them to Teach (a `PreferenceHandoff`), which
+runs a **DPO fine-tune** ([`AutoTuner.tuneDPO`](../LLMPro/Services/AutoTuner.swift) +
+`mlx_lm_lora.train`, see [`CONTRACTS.md`](CONTRACTS.md#mlx_lm_loratrain--dpo-preference-training-separate-package))
+and emits **a normal LoRA adapter** under `adapters/<uuid>/`.
+
+So testing now yields **two kinds of output**: the loop's familiar **artifact** (a
+model + adapter to keep/retrain) *and* **fuel** (a preference set that drives the next
+fine-tune) — the same way Lessons produces the dataset-fuel for an ordinary SFT run.
+Crucially this **stayed inside the existing Test → Teach loop** — it is **not a new
+tab**. The artifact discipline is unchanged: the DPO adapter is `TrainingJob`-shaped,
+lands under `adapters/`, and travels the rest of the loop (Progress / Try-it-out /
+Save & Use) through the **same user-driven CTAs** — completion never auto-switches
+tabs. (Rejection-sampling Practice uses an *automated* unit-test judge; this loop uses
+the *human's* preference as the signal — see
+[`CONVENTIONS.md`](CONVENTIONS.md#dpo-preference-loop-via-on-demand-mlx-lm-lora).)
 
 ---
 
@@ -123,9 +170,11 @@ destination view (which pre-fills its fields).
 | ① → ② (download → teach) | "Train for coding" on each local-model row, [`ModelsBrowserView`](../LLMPro/Features/Models/ModelsBrowserView.swift) / [`ModelDetailView`](../LLMPro/Features/Models/ModelDetailView.swift) | `.openTrainingWithModel` → `String` (repoID) | Teach pre-fills `selectedModelRepoID` |
 | ② → Progress | "Start Teaching", [`TrainingConfigView.launch()`](../LLMPro/Features/Training/TrainingConfigView.swift) | `.switchToMonitor` → (no payload) | switches to the Progress tab |
 | Progress → ③ | **completion CTA card** ("Try it out"), [`TrainingMonitorView`](../LLMPro/Features/Monitor/TrainingMonitorView.swift) | `.openChatWithModel` → `ModelHandoff` | Arena pre-fills **model + adapter**, enables compare |
+| Progress → ③ (auto-score) | **completion CTA card** ("Grade it") | `.openChatWithModel` → `ModelHandoff{autoScore: true}` | Arena pre-fills model + adapter **and auto-runs "Score it"** (writes an `EvalRun`) |
 | Progress → ④ | **completion CTA card** ("Use in Code") | `.openCodeWithModel` → `ModelHandoff` | Code selects the tab + the adapter, loads the server |
 | Progress → Save & Use | **completion CTA card** ("Save & Use") | `.switchSidebar` → `SidebarSection.export` | switches to the Export tab |
 | ③ → ② (test → retrain) | **decision bar** "Train again", [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift) | `.openTrainingWithModel` → `String` | Teach pre-fills the model (the back-edge) |
+| ③ → ② (preference back-edge) | **"Teach by preference →"** (≥4 👍 captures), [`ArenaView`](../LLMPro/Features/Chat/ArenaView.swift) | `.openTrainingWithPreferences` → `PreferenceHandoff` | Teach pre-fills model + the `.preference` dataset, switches to **DPO mode** |
 | ③ → ④ | **decision bar** "Use in Code" | `.openCodeWithModel` → `ModelHandoff` | Code loads model + adapter |
 | ③ → Save & Use | **decision bar** "Save & Use" | `.switchSidebar` → `SidebarSection.export` | switches to the Export tab |
 | Practice → ③ / ④ | **"Use this fine-tune" menu** per completed run, [`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift) | `.openChatWithModel` / `.openCodeWithModel` → `ModelHandoff` | Arena / Code pre-fill model + adapter |

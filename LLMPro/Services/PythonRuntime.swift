@@ -82,7 +82,13 @@ final class PythonRuntime {
                 "mlx-lm", "huggingface_hub", "datasets", "safetensors", "sentencepiece", "protobuf",
                 // `gguf` is the tiny pure-python reader used by gguf_to_mlx.py to
                 // read GGUF metadata/vocab for the GGUF→MLX importer (no PyTorch).
-                "gguf"
+                "gguf",
+                // `mlx-lm-lora` is the separate preference-tuning trainer (DPO etc.)
+                // launched as `python -m mlx_lm_lora.train -c config.yaml`. It's a
+                // small add-on on top of mlx-lm, so it ships in the base install for
+                // fresh venvs; an older venv installs it on-demand via
+                // installDPOTrainer() (it's NOT part of the Ready gate).
+                "mlx-lm-lora"
             ])
 
             // mergekit powers the Fusion tab. It pulls in torch + transformers
@@ -188,6 +194,42 @@ final class PythonRuntime {
                 "pip", "install",
                 "--python", PathResolver.venvPython.path,
                 "mergekit"
+            ])
+            return true
+        } catch {
+            await MainActor.run { progress("Install failed: \(error.localizedDescription)") }
+            return false
+        }
+    }
+
+    /// Returns true if `mlx_lm_lora` (the DPO / preference-tuning trainer) is
+    /// importable in the venv. Cheap (~50 ms). It's an optional add-on (like
+    /// mergekit), so it's intentionally NOT part of verifyMLXLM / the Ready gate.
+    func dpoTrainerInstalled() async -> Bool {
+        guard let python = pythonURL else { return false }
+        do {
+            try await ProcessRunner.runCapturing(
+                executable: python,
+                arguments: ["-c", "import mlx_lm_lora"]
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Install the DPO trainer on-demand. Fresh first-launch bootstraps already
+    /// include `mlx-lm-lora`, but a venv created before the preference-loop
+    /// feature shipped needs a way to add it without recreating the whole
+    /// runtime. Called by TrainingService before launching a DPO job.
+    func installDPOTrainer(progress: @escaping @MainActor (String) -> Void) async -> Bool {
+        do {
+            let uv = try await resolveUV()
+            await MainActor.run { progress("Installing the DPO trainer (mlx-lm-lora)…") }
+            try await runUV(uv, [
+                "pip", "install",
+                "--python", PathResolver.venvPython.path,
+                "mlx-lm-lora"
             ])
             return true
         } catch {
