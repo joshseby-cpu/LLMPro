@@ -128,45 +128,77 @@ scope.
   name, mlx-lm treated it as an HF repo id, and any local custom model failed with
   "exited with code 1". HF repo ids (with `/`) pass through unchanged. (Found while
   verifying the DPO loop, since DPO captures run against a local model in the Arena.)
-- ✅ **DiffusionGemma (inference-only "guest" model) — verified live end-to-end.**
-  Google's `google/diffusiongemma-26B-A4B-it` is a **masked/block-diffusion** LM
-  (`model_type: diffusion_gemma`, decodes by iteratively unmasking a fixed canvas) —
-  **not** autoregressive, so mlx-lm's `generate`/`server` can't run it and mlx-lm
-  LoRA/AutoTuner **can't fine-tune** it. So in LLMPro it's an **inference-only guest**:
-  download + chat (Try-it-out), **excluded from Teach/Practice/DPO**. It runs the
-  prebuilt `mlx-community/diffusiongemma-26B-A4B-it-OptiQ-4bit` (~15 GB). The decoder is
+- ✅ **DiffusionGemma (non-fine-tunable "guest" model) — chat AND Code, both verified
+  live end-to-end.** Google's `google/diffusiongemma-26B-A4B-it` is a
+  **masked/block-diffusion** LM (`model_type: diffusion_gemma`, decodes by iteratively
+  unmasking a fixed canvas) — **not** autoregressive, so mlx-lm's `generate`/`server`
+  can't run it and mlx-lm LoRA/AutoTuner **can't fine-tune** it. So in LLMPro it's a
+  **non-fine-tunable guest**: download + chat (Try-it-out) **+ the Code tab's agentic
+  loop** (experimental), **excluded only from Teach/Practice/DPO**. It runs the prebuilt
+  `mlx-community/diffusiongemma-26B-A4B-it-OptiQ-4bit` (~15 GB). The decoder is
   **vendored, not pip-installed** — the MIT `optiq.vlm` subset of `mlx-optiq` v0.2.3,
   copied into [`Resources/helpers/diffusion_vendor/`](../LLMPro/Resources/helpers/diffusion_vendor/)
   (~34 `.py` + `VENDORED.md`; the package's network/subprocess/agent subtrees were
   deliberately left out; self-contained on `mlx`/`mlx-lm`/`transformers`/`numpy`/`Pillow`
-  — **no torch**). Helper [`diffusion_generate.py`](../LLMPro/Resources/helpers/diffusion_generate.py)
+  — **no torch**). **Chat path:** helper [`diffusion_generate.py`](../LLMPro/Resources/helpers/diffusion_generate.py)
   adds the vendor dir to `sys.path`, imports `optiq.vlm.diffusion_gemma`, **applies the
   Gemma chat template** (+ pre-tokenizes with `add_special_tokens=False`), self-pins
   MLX memory (bypasses `mlx_run.py`), and streams the standard JSON-event protocol
-  (`start`/`progress`/`token`/`done`/`error`). Swift: `ModelRegistry.DetectedModel.isDiffusion`
+  (`start`/`progress`/`token`/`done`/`error`). **Code path:** helper
+  [`diffusion_server.py`](../LLMPro/Resources/helpers/diffusion_server.py) is a
+  long-lived **OpenAI-compatible HTTP server** (Python stdlib `http.server`
+  `ThreadingHTTPServer`, **no Flask**) around the same vendored decoder — the model
+  loads ONCE on a single dedicated **MLX worker thread** (the vendored decode binds a
+  thread-local `mx` stream at import; HTTP threads submit jobs via a queue), exposes
+  `GET /health` / `GET /v1/models` / `POST /v1/chat/completions` (non-stream + SSE in
+  the exact shape `OpenAIChatClient` decodes), prints `LLMPRO_DIFFUSION_SERVER_READY
+  port=<port>` when ready, and **translates** DiffusionGemma's native tool grammar
+  `<|tool_call>call:NAME{…}<tool_call|>` into OpenAI `tool_calls` (tolerant, fail-open
+  to plain `content`). Swift: `ModelRegistry.DetectedModel.isDiffusion`
   (config `model_type == "diffusion_gemma"` / `DiffusionGemma*` arch); `InferenceService.stream`
-  routes diffusion models to `diffusion_generate.py` (direct spawn, self-pinned mem);
+  routes diffusion models to `diffusion_generate.py` (chat, direct spawn, self-pinned
+  mem); **`MLXServerService.start` branches on `isDiffusion` to launch
+  `diffusion_server.py` (via `mlx_run.py`) instead of `mlx_lm server` — `adapterPath` is
+  ignored (no LoRA) — reusing the same free-port / `/health` / warm-up / state
+  machine, so `OpenAIChatClient` + `CodingAgentService` are unchanged**;
   `PythonRuntime.installHelpers()` recursively copies the `diffusion_vendor/` subtree +
-  `diffusion_generate.py`, `bootstrap()` adds `pillow`; Teach + Practice pickers exclude
-  `isDiffusion`; Models rows show a "Diffusion · chat only" badge. **Verified live**
-  through the UI on `mlx-community/diffusiongemma-26B-A4B-it-OptiQ-4bit` (~15 GB
-  downloaded): the model shows in Models with the badge; in Try-it-out it generated
-  coherent, correctly-formatted prose (a haiku about Apple Silicon; a 2-sentence "why
-  the ocean is salty"; load ~16.8 GB peak, ~0.6–3 s gen after a cold load); it is absent
-  from the Teach + Practice model pickers; an mlx-lm regression check (a normal qwen
-  model in the Arena) still streams correctly after the streaming-contract change; all
-  13 sidebar tabs swept with no crash; `llmpro.log` had zero ERROR/FAULT after launch
-  and no new `DiagnosticReports/LLMPro-*.ips`. **Two bugs found and fixed during
-  testing, both re-verified:** (1) the chat template wasn't applied (un-templated prompt
-  → garbage) — the helper now templates + pre-tokenizes; (2) a per-token-newline
-  rendering bug — `InferenceService` now yields ready-to-append chunks (mlx_lm re-adds
-  its line `\n`, diffusion yields raw token segments) and `ChatSession.send` appends
-  `chunk` **raw** (was `chunk + "\n"`). The (already-known) GGUF→MLX chat-template gap
-  is unrelated and **still open** (see Half-done — a separately-converted test model
-  still needs a manual template). Contract in
-  [`CONTRACTS.md`](CONTRACTS.md#diffusion_generatepy--diffusiongemma-inference-non-mlx-lm);
-  decisions in [`CONVENTIONS.md`](CONVENTIONS.md#vendoring-the-diffusiongemma-decoder-copy-not-pip);
-  loop framing in [`CONCEPT.md`](CONCEPT.md#inference-only-guest-models-diffusiongemma--on--test-off-the-fine-tune-loop).
+  stages both `diffusion_generate.py` and `diffusion_server.py`, `bootstrap()` adds
+  `pillow`; Teach + Practice pickers exclude `isDiffusion`; Models rows show a
+  "Diffusion · chat only" badge (now slightly stale — Code works too); CodeView shows a
+  "Diffusion model — chat works; agentic tool-use is experimental." caption and keeps
+  native tool-calling on. **Verified live (chat)** through the UI on the 4-bit OptiQ
+  model (~15 GB downloaded): coherent, correctly-formatted prose (a haiku about Apple
+  Silicon; a 2-sentence "why the ocean is salty"; load ~16.8 GB peak, ~0.6–3 s gen
+  after a cold load); absent from the Teach + Practice pickers; an mlx-lm regression
+  check (a normal qwen model in the Arena) still streams correctly after the
+  streaming-contract change; all 13 tabs swept, no crash; `llmpro.log` zero ERROR/FAULT,
+  no new `.ips`. **Verified live (Code)** with DiffusionGemma-8bit served in the Code
+  tab: the Orchestrator team drove the full agentic loop (Orchestrator → Coder →
+  `write_file` → `list_dir`) and created a file on disk; logs clean, no crash;
+  tool-calling works, with an occasional unusable diffusion turn that the Orchestrator
+  recovers from (a canvas-256 reliability caveat). **Two chat bugs found and fixed
+  during the first pass, both re-verified:** (1) the chat template wasn't applied
+  (un-templated prompt → garbage) — the helper now templates + pre-tokenizes; (2) a
+  per-token-newline rendering bug — `InferenceService` now yields ready-to-append chunks
+  (mlx_lm re-adds its line `\n`, diffusion yields raw token segments) and
+  `ChatSession.send` appends `chunk` **raw** (was `chunk + "\n"`). Contracts in
+  [`CONTRACTS.md`](CONTRACTS.md#diffusion_generatepy--diffusiongemma-inference-non-mlx-lm)
+  (chat) + [`CONTRACTS.md`](CONTRACTS.md#diffusion_serverpy--long-lived-openai-compatible-diffusion-server-code-tab)
+  (Code); decisions in [`CONVENTIONS.md`](CONVENTIONS.md#vendoring-the-diffusiongemma-decoder-copy-not-pip);
+  loop framing in [`CONCEPT.md`](CONCEPT.md#non-fine-tunable-guest-models-diffusiongemma--on--test---use-off-the-fine-tune-edges).
+- ✅ **GGUF→MLX chat-template fallback.** [`gguf_to_mlx.py`](../LLMPro/Resources/helpers/gguf_to_mlx.py)
+  now writes a **per-architecture default** chat template when the source GGUF carries
+  none in its `tokenizer.ggml.chat_template` metadata (ChatML for qwen2/qwen2moe/qwen3,
+  Gemma turn format, Llama-3 headers, Phi-3, Mistral), so a converted **INSTRUCT**
+  model chats out of the box. Previously such a model had no template and failed in
+  chat/Code/eval with "tokenizer.chat_template is not set" until one was hand-injected
+  (this was the gap found while verifying the eval harness — the on-disk-converted
+  Qwen2.5-0.5B test model needed a manual ChatML template). Metadata-present
+  conversions are unchanged; the `done` event gained `chat_template_source`
+  (`metadata` | `fallback-<arch>` | `none`). This **resolves** the former Half-done
+  "GGUF→MLX importer does not reconstruct a chat template" item (the spun-off task is
+  done). Contract:
+  [`CONTRACTS.md`](CONTRACTS.md#gguf_to_mlxpy--gguf--mlx-import-chat-template-fallback).
 - ✅ **Save & Use (Export)** — adapter zip / fused safetensors / GGUF, one-click
   Ollama install with chat-template detection.
 - ✅ **Custom app icon** — purple gradient squircle with graduation cap; PNG
@@ -438,18 +470,19 @@ Works for adjusting `max_rows` per preset before tapping Prepare. But it
 doesn't surface for the `Browse HuggingFace` path — there's a single max-rows
 in the search sheet's options form but no per-result preview of what's reasonable.
 
-### GGUF→MLX importer does not reconstruct a chat template
+### GGUF→MLX importer does not reconstruct a chat template — RESOLVED
 
-[`gguf_to_mlx.py`](../LLMPro/Resources/helpers/gguf_to_mlx.py) writes
-`tokenizer_config.json` with only token ids; it copies a `chat_template` only when the
-GGUF carries one in its `tokenizer.ggml.chat_template` metadata, and has no fallback
-when that key is absent. Result: a converted **instruct** model whose GGUF lacks that
-metadata has no chat template, so it fails in chat/Code/eval with
-"tokenizer.chat_template is not set" until a template is added manually. Found while
-verifying the eval harness — the test model (a Qwen2.5-0.5B GGUF converted on disk)
-needed a hand-injected ChatML template before it would run. A fix is spun off as a
-separate task: extract `tokenizer.chat_template` from the GGUF metadata, or fall back
-to a per-architecture default.
+**Fixed — moved to working** (the spun-off task is done). `gguf_to_mlx.py` now writes
+a **per-architecture default** chat template when the GGUF carries none in its
+`tokenizer.ggml.chat_template` metadata (ChatML for qwen2/qwen2moe/qwen3, Gemma turn
+format, Llama-3 headers, Phi-3, Mistral), so a converted INSTRUCT model whose GGUF
+lacked that metadata now chats out of the box instead of failing with
+"tokenizer.chat_template is not set". Metadata-present conversions are unchanged; the
+`done` event gained `chat_template_source` (`metadata` | `fallback-<arch>` | `none`).
+See the "GGUF→MLX chat-template fallback" bullet under the working section, the
+`gguf_to_mlx.py` contract in
+[`CONTRACTS.md`](CONTRACTS.md#gguf_to_mlxpy--gguf--mlx-import-chat-template-fallback),
+and the Recent-session-log entry.
 
 ---
 
@@ -548,22 +581,38 @@ back-and-forth on the first submission. Document any caveats here once done.
 
 ## Tests
 
-Currently there are **no tests**. The `Tests/LLMProTests/` target exists in
-`project.yml` but the source folder is empty.
+There is now a **37-test XCTest suite** in `Tests/LLMProTests/` (the `LLMProTests`
+XcodeGen target). `xcodebuild … test` → **TEST SUCCEEDED**. All pure-logic, no model
+loads or subprocesses. Run with:
 
-First targets that would pay off:
+```bash
+xcodebuild -project LLMPro.xcodeproj -scheme LLMPro \
+           -destination 'platform=macOS' test
+```
 
-| File | What to test |
+Current coverage:
+
+| File | What it tests |
 |---|---|
-| `Core/LogStreamParser.swift` | Regex against captured fixtures of real mlx-lm output (use the `training.log` files we've collected) |
-| `Services/DatasetService.swift` (`classify`) | Each of 4 source schemas + a malformed file |
-| `Services/DatasetEditorService.swift` (`parseRow`) | Each of 6 source row shapes auto-promotes to chat correctly |
-| `Services/AutoTuner.swift` | Per-size bucket: confirm picked hyperparameters are within reasonable ranges; time estimates are positive |
-| `Services/HuggingFaceClient.swift` | Decode recorded JSON responses (curl + save) |
-| `Services/FuseService.swift` (`OllamaChatTemplate`) | `suggestion(forArchitecture:)` for each architecture string we've seen |
+| [`LogStreamParserTests.swift`](../Tests/LLMProTests/LogStreamParserTests.swift) | `LogStreamParser` regexes against real mlx-lm train / eval / DPO stdout lines (and that noise lines don't match) |
+| [`DatasetServiceClassifyTests.swift`](../Tests/LLMProTests/DatasetServiceClassifyTests.swift) | `DatasetService.classify` across the source schemas, including the `preference`-before-`completions` vote |
+| [`AutoTunerTests.swift`](../Tests/LLMProTests/AutoTunerTests.swift) | `AutoTuner.categorize` size buckets + every `(size, duration)` bucket produces a positive, monotonic config (guards against a bucket regressing to zero iters/batch) |
+| [`FuseServiceTemplateTests.swift`](../Tests/LLMProTests/FuseServiceTemplateTests.swift) | `FuseService.OllamaChatTemplate` per-architecture suggestions |
 
-When you add tests, run them via `xcodebuild ... test` and add a section here
-about coverage.
+The stale empty `Tests/MLXStudioTests/` folder was removed.
+
+**One pinned discrepancy (tracked, not fixed):** `AutoTuner.categorize`'s doc comment
+says it "Falls back to `.medium` if no marker is found," but the trailing
+`return .medium` is **dead code** — the patterns table ends with `(0.0, .tiny)` and
+`maxBillion` is 0 when no `<num>B` marker matches, so `maxBillion >= 0.0` always
+returns `.tiny` first. `testCategorizeNoMarkerFallsBackToTiny` **pins the actual
+`.tiny` behavior** and documents the gap (in practice every caller passes a real
+repoID with a size marker; this only bites a custom-renamed model with no size in its
+name, which then gets the most aggressive `.tiny` hyperparameters). Whether the
+intended default is `.tiny` or `.medium` is a product decision left to a future pass.
+
+Good next test targets: `DatasetEditorService.parseRow` (each source row shape
+auto-promotes to chat) and `HuggingFaceClient` decode against recorded JSON responses.
 
 ---
 
@@ -587,6 +636,71 @@ for the full reasoning. Quick reference:
 
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
+
+- **Code tab now serves text-diffusion models (DiffusionGemma) for the agentic loop —
+  VERIFIED LIVE.** DiffusionGemma is **no longer chat-only**: it now also drives the
+  **Code** tab's Orchestrator team (agentic, experimental). New helper
+  [`diffusion_server.py`](../LLMPro/Resources/helpers/diffusion_server.py) — a
+  long-lived **OpenAI-compatible HTTP server** (Python stdlib `http.server`
+  `ThreadingHTTPServer`, **no Flask**) around the vendored diffusion decoder. The model
+  loads ONCE on a single dedicated **MLX worker thread** (the vendored decode binds a
+  thread-local `mx` stream at import → load + all generation must run on one thread;
+  HTTP request threads submit jobs via a queue). Endpoints: `GET /health`,
+  `GET /v1/models`, `POST /v1/chat/completions` (non-stream + SSE in the exact shape
+  `OpenAIChatClient` decodes). Prints `LLMPRO_DIFFUSION_SERVER_READY port=<port>` when
+  ready. **Translates** DiffusionGemma's native tool grammar
+  `<|tool_call>call:NAME{key:value,…}<tool_call|>` (string args quoted `<|"|>…<|"|>`)
+  into OpenAI `tool_calls` (tolerant parser; **fail-open** to plain `content` if nothing
+  parses — the agent's text fallback still runs); tool RESULTS (`role:"tool"`) need no
+  translation (the model's chat template consumes them). Swift:
+  `MLXServerService.start(model:adapterPath:)` now branches on `ModelRegistry`'s
+  `isDiffusion` — for diffusion models it launches `diffusion_server.py` (via
+  `mlx_run.py`, so it's memory-wrapped like `mlx_lm server`; **`adapterPath` is
+  ignored** — diffusion has no LoRA) instead of `python -m mlx_lm server`, reusing the
+  same free-port / `waitForServerUp` (`/health`) / warm-up / state machine, so
+  `OpenAIChatClient` + `CodingAgentService` work unchanged.
+  `PythonRuntime.installHelpers()` now also stages `diffusion_server.py` (the
+  `diffusion_vendor/` subtree was already copied; no new pip deps — stdlib + existing
+  mlx/transformers/pillow/numpy). `CodeView` shows a friendly caption — "Diffusion
+  model — chat works; agentic tool-use is experimental." — and keeps native
+  tool-calling ON (default) so the server's translated `tool_calls` are used.
+  **Verified live:** DiffusionGemma-8bit served in the Code tab; the Orchestrator team
+  drove the full loop (Orchestrator → Coder → `write_file` → `list_dir`) and created a
+  file on disk; logs clean, no crash — with an occasional unusable diffusion turn the
+  Orchestrator recovers from (canvas-256 reliability caveat). **Correctness fix across
+  the docs:** DiffusionGemma is now "chat + Code (experimental); not fine-tunable" —
+  excluded ONLY from Teach/Practice/DPO (the "chat only" framing was updated in
+  CONCEPT / CONVENTIONS / CLAUDE / CONTRACTS / ARCHITECTURE / EXTENDING; the literal
+  Models-tab badge still reads "Diffusion · chat only" in source and is noted as
+  slightly stale). Docs updated (CONTRACTS / ARCHITECTURE / CONCEPT / CONVENTIONS /
+  EXTENDING / STATE / CLAUDE). **Source files were NOT touched by this docs pass.**
+
+- **GGUF→MLX chat-template fallback (already committed) — gap RESOLVED; moved to
+  Working.** `gguf_to_mlx.py` now writes a **per-architecture default** chat template
+  when the source GGUF carries none in its `tokenizer.ggml.chat_template` metadata
+  (ChatML for qwen2/qwen2moe/qwen3, Gemma turn format, Llama-3 headers, Phi-3,
+  Mistral), so converted **INSTRUCT** models chat out of the box (previously they had
+  no template and failed with "tokenizer.chat_template is not set" until one was
+  hand-injected — the gap found while verifying the eval harness). Metadata-present
+  conversions are unchanged; the `done` event gained **`chat_template_source`**
+  (`metadata` | `fallback-<arch>` | `none`). This closes the former Half-done
+  "GGUF→MLX importer does not reconstruct a chat template" item (the spun-off task is
+  resolved). Docs updated (CONTRACTS new `gguf_to_mlx.py` subsection + ARCHITECTURE
+  `GGUFImportService` note + STATE Working/Half-done move).
+
+- **First test suite (already committed) — 37 passing XCTest tests.** Added
+  `Tests/LLMProTests/` (the `LLMProTests` XcodeGen target): `LogStreamParserTests`
+  (mlx-lm train/eval/DPO line regexes), `DatasetServiceClassifyTests`
+  (`classify` per schema incl. the `preference`-before-`completions` vote),
+  `AutoTunerTests` (`categorize` buckets + every `(size, duration)` bucket sane),
+  `FuseServiceTemplateTests` (`OllamaChatTemplate`). `xcodebuild … test` →
+  **TEST SUCCEEDED**. Removed the stale empty `Tests/MLXStudioTests/`. **Minor
+  discrepancy pinned:** `AutoTuner.categorize`'s doc says it falls back to `.medium`
+  for a marker-less id, but the trailing `return .medium` is dead code (the patterns
+  table ends with `(0.0, .tiny)`), so a marker-less id returns `.tiny` —
+  `testCategorizeNoMarkerFallsBackToTiny` pins the actual behavior and flags it as a
+  product decision. Docs updated (STATE Tests section + ARCHITECTURE Tests table +
+  BUILDING `xcodebuild … test` line).
 
 - **DiffusionGemma (inference-only "guest" model) — VERIFIED LIVE end-to-end; landed
   in Working.** Added the ability to run Google's `google/diffusiongemma-26B-A4B-it` —

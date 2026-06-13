@@ -168,21 +168,24 @@ version, license, and the excluded parts the same way (`VENDORED.md`), and keep 
 copy to the minimal closure. Contract details:
 [`CONTRACTS.md`](CONTRACTS.md#vendored-decoder-diffusion_vendor-copied-not-pip-installed).
 
-### DiffusionGemma is an inference-only "guest" model
+### DiffusionGemma is a non-fine-tunable "guest" model
 
 A diffusion LM (`model_type: diffusion_gemma`) **cannot be LoRA-fine-tuned by
 mlx-lm** (it's not autoregressive; AutoTuner / `mlx_lm lora` have no path for it). So
-rather than fake a training flow, DiffusionGemma is **inference-only**: download +
-chat (Try-it-out, via `diffusion_generate.py`), and **excluded from Teach, Practice,
-and DPO**. The single gate is `ModelRegistry.DetectedModel.isDiffusion` (set from
-`config.json`), which the Teach/Practice pickers filter out (`!isDiffusion`) and the
-Models tab badges ("Diffusion · chat only"). Don't add a fine-tune path for it — the
-honest behavior is "joins the loop only where it can" (download + test), which keeps
-the loop's spine intact (see [`CONCEPT.md`](CONCEPT.md#inference-only-guest-models-diffusiongemma--on--test-off-the-fine-tune-loop)).
+rather than fake a training flow, DiffusionGemma is **non-fine-tunable** but otherwise
+a full citizen: download + **chat** (Try-it-out, via `diffusion_generate.py`) + **Code**
+(the agentic loop, via `diffusion_server.py` — tool-use is experimental), and
+**excluded only from Teach, Practice, and DPO**. The single gate is
+`ModelRegistry.DetectedModel.isDiffusion` (set from `config.json`): the Teach/Practice
+pickers filter it out (`!isDiffusion`); `InferenceService` and `MLXServerService`
+**route** on it (to `diffusion_generate.py` / `diffusion_server.py` respectively).
+Don't add a fine-tune path for it — the honest behavior is "joins the loop at every
+node except the fine-tune transform it can't undergo," which keeps the loop's spine
+intact (see [`CONCEPT.md`](CONCEPT.md#non-fine-tunable-guest-models-diffusiongemma--on--test---use-off-the-fine-tune-edges)).
 If you add another non-fine-tunable engine, follow the same recipe
 ([`EXTENDING.md`](EXTENDING.md#add-a-non-mlx-lm-inference-path-eg-a-diffusion-model)):
-one `isDiffusion`-style flag, route in `InferenceService`, exclude from the
-fine-tune pickers.
+one `isDiffusion`-style flag, route in `InferenceService` (+ `MLXServerService` if it
+should serve the agentic loop), exclude from the fine-tune pickers.
 
 ### Apple-Silicon MLX memory tuning runs on every mlx_lm call
 

@@ -108,26 +108,33 @@ distinct artifact transforms: Lessons produces the *fuel* (a dataset) and Progre
 *observes* the ② transform in flight. They're real tabs, just not their own loop
 nodes.
 
-### Inference-only "guest" models (DiffusionGemma) — on ③ Test, off the fine-tune loop
+### Non-fine-tunable "guest" models (DiffusionGemma) — on ③ Test + ④ Use, off the fine-tune edges
 
 Not every model can travel the *whole* loop. Google's **DiffusionGemma**
 (`model_type: diffusion_gemma`) is a **masked / block-diffusion** LM — it decodes by
 iteratively unmasking a fixed canvas, not autoregressively — so mlx-lm's
-`generate`/`server` can't run it and mlx-lm LoRA/AutoTuner **can't fine-tune** it. In
-LLMPro it is therefore an **inference-only "guest"**: it plugs into **① Download**
-(it's a normal HF model on disk) and **③ Test** ("Try it out" routes it to the
-vendored `diffusion_generate.py` decoder instead of `mlx_lm generate`), but it is
-**deliberately excluded from ② Teach, the Practice inner loop, and the DPO preference
-back-edge** — there is no fine-tune transform a diffusion model can undergo here. The
-Models tab flags it with a "Diffusion · chat only" badge, and the Teach/Practice model
-pickers omit it (via `ModelRegistry.DetectedModel.isDiffusion`).
+`generate`/`server` can't run it and mlx-lm LoRA/AutoTuner **can't fine-tune** it.
+LLMPro runs it through a vendored diffusion decoder instead, in **two** modes: a
+one-shot decoder (`diffusion_generate.py`) for chat, and a long-lived
+OpenAI-compatible server (`diffusion_server.py`) for the agentic loop. So it is a
+**non-fine-tunable "guest"** that joins **① Download** (it's a normal HF model on
+disk), **③ Test** ("Try it out" routes it to `diffusion_generate.py` instead of
+`mlx_lm generate`), **and ④ Use** (the Code tab serves it via `diffusion_server.py`
+instead of `mlx_lm server`, so the Orchestrator team can drive it — *agentic
+tool-use is experimental*). It is **deliberately excluded only from ② Teach, the
+Practice inner loop, and the DPO preference back-edge** — there is no fine-tune
+transform a diffusion model can undergo here. The Teach/Practice model pickers omit
+it (via `ModelRegistry.DetectedModel.isDiffusion`).
 
-This **does not bend the loop** — it's the honest shape of the artifact. A guest model
-joins the loop only at the nodes it can support (download + test/chat); the loop's
-spine (download → teach → test → use → retrain) is for fine-tunable models and is
-unchanged. The decision to make it inference-only (rather than fake a fine-tune path)
-is recorded in [`CONVENTIONS.md`](CONVENTIONS.md#diffusiongemma-is-an-inference-only-guest-model); the inference
-contract is in [`CONTRACTS.md`](CONTRACTS.md#diffusion_generatepy--diffusiongemma-inference-non-mlx-lm).
+This **does not bend the loop** — it's the honest shape of the artifact. A guest
+model joins the loop at every node *except* the fine-tune transform it can't undergo
+(② / the back-edges); the loop's spine (download → teach → test → use → retrain) is
+for fine-tunable models and is unchanged. The decision to make it non-fine-tunable
+(rather than fake a fine-tune path) is recorded in
+[`CONVENTIONS.md`](CONVENTIONS.md#diffusiongemma-is-a-non-fine-tunable-guest-model);
+the inference contracts are in
+[`CONTRACTS.md`](CONTRACTS.md#diffusion_generatepy--diffusiongemma-inference-non-mlx-lm)
+(chat) and [`CONTRACTS.md`](CONTRACTS.md#diffusion_serverpy--long-lived-openai-compatible-diffusion-server-code-tab) (Code).
 
 ### ③ Test now emits a tracked score (the back-edge is score-delta-driven)
 

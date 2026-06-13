@@ -168,6 +168,24 @@ Common dev-loop tasks and how to do them quickly.
 Just hit ⌘R in Xcode. If you've added a new file, do
 `xcodegen generate` first so XcodeGen picks it up.
 
+### "I want to run the tests"
+
+There's a 37-test XCTest suite in `Tests/LLMProTests/` (the `LLMProTests` target).
+Run it from the CLI:
+
+```bash
+xcodebuild -project LLMPro.xcodeproj \
+           -scheme LLMPro \
+           -destination 'platform=macOS' \
+           test
+```
+
+A clean run prints `** TEST SUCCEEDED **`. The tests are pure logic (LogStreamParser
+regexes, `DatasetService.classify`, `AutoTuner` buckets, `FuseService.OllamaChatTemplate`)
+— no model loads or subprocesses, so they're fast. If you added a new test file, run
+`xcodegen generate` first so the target picks it up. See
+[`STATE.md`](STATE.md#tests) for what's covered.
+
 ### "I want to use the SwiftUI canvas / previews"
 
 Previews are enabled (`ENABLE_PREVIEWS: YES` in `project.yml`) and every

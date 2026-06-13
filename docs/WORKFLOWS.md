@@ -802,9 +802,11 @@ app stays in the Dock.
 The Code tab runs a **fixed five-role agent team** over the user's local
 (optionally fine-tuned) MLX model. The user talks **only to the Orchestrator**,
 which delegates to the Planner / Researcher / Coder / UI agents. The Researcher does
-**real web research**. **One shared `mlx_lm` model serves all five roles** (one
-server daemon). The builders (Coder / UI) read/edit files and run commands inside a
-user-chosen project folder. (See [`AgentRoles.swift`](../LLMPro/Services/AgentRoles.swift)
+**real web research**. **One shared model serves all five roles** (one server daemon
+— `mlx_lm server` for a normal model, or the vendored `diffusion_server.py` for a
+DiffusionGemma model; agentic tool-use on diffusion is experimental). The builders
+(Coder / UI) read/edit files and run commands inside a user-chosen project folder.
+(See [`AgentRoles.swift`](../LLMPro/Services/AgentRoles.swift)
 for the role definitions and [`CONTRACTS.md#the-orchestrator-team--delegation-tools`](CONTRACTS.md#the-orchestrator-team--delegation-tools)
 for the tool/delegation graph.)
 
@@ -833,9 +835,16 @@ CodeView:
                                             #  MLXServerService --adapter-path (was hardcoded nil)
         MLXServerService.shared.start(model:, adapterPath:)   # one shared daemon
           1. resolveModelArg(model)         # registry hit → directory.path (don't re-download)
-          2. pick a FREE localhost port; spawn `python -m mlx_lm server …`
+          2. pick a FREE localhost port; spawn the server (via mlx_run.py):
+             • normal model     → `python -m mlx_lm server …`
+             • DIFFUSION model  → `python diffusion_server.py …`  (ModelRegistry.isDiffusion;
+               mlx_lm can't serve a diffusion LM → vendored OpenAI-compatible daemon;
+               adapterPath IGNORED — diffusion has no LoRA; same /health + state machine)
           3. poll GET /health; fire a 1-token warm-up; state = .ready(port:)
         seed the Orchestrator convo (its system prompt + the workspace overview)
+        # CodeView shows "Diffusion model — chat works; agentic tool-use is experimental."
+        # for a diffusion model, and keeps native tool-calling on (the server translates
+        # DiffusionGemma's <|tool_call>… grammar into OpenAI tool_calls).
 
 user types a task + Send (⌘-Return) → CodingAgentService.send(text):
   append the user message; runRole(.orchestrator, convo, depth: 0):
@@ -890,6 +899,7 @@ approval/question. The server keeps running until the user stops/restarts.
 [`CodingAgentService.swift`](../LLMPro/Services/CodingAgentService.swift),
 [`AgentTools.swift`](../LLMPro/Services/AgentTools.swift),
 [`MLXServerService.swift`](../LLMPro/Services/MLXServerService.swift),
+[`diffusion_server.py`](../LLMPro/Resources/helpers/diffusion_server.py) (diffusion-model server branch),
 [`OpenAIChatClient.swift`](../LLMPro/Services/OpenAIChatClient.swift),
 [`FileExplorerView.swift`](../LLMPro/Features/Code/FileExplorerView.swift),
 [`CodeEditorView.swift`](../LLMPro/Features/Code/CodeEditorView.swift),

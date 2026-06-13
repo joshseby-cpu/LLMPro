@@ -279,7 +279,9 @@ autoregressive mlx-lm class) is detected by `ModelRegistry.DetectedModel.isDiffu
 and routed by `InferenceService.stream` to the vendored `diffusion_generate.py`
 helper instead of `mlx_lm generate` (see [§3 `diffusion_generate.py`](#diffusion_generatepy--diffusiongemma-inference-non-mlx-lm)).
 `mlx_lm generate`/`server`/`lora` **cannot run a diffusion LM**, so these models are
-chat-only "guests" — inference works, but Teach / Practice / DPO exclude them.
+non-fine-tunable "guests": chat works here, the **Code** tab works via the vendored
+`diffusion_server.py` (agentic, experimental — see that subsection), and only Teach /
+Practice / DPO exclude them.
 
 **`--model` is resolved to an absolute path for local models (Arena fix).**
 `InferenceService.stream` now resolves a **bare local-model name** (a custom
@@ -349,6 +351,14 @@ GET  /health                 ← polled until it listens, then a 1-token warm-up
 
 **Verified against mlx-lm 0.31.3** — `server --help` lists `--model`,
 `--adapter-path`, `--host`, `--port`, `--temp`, `--max-tokens`.
+
+**Diffusion models are NOT served by `mlx_lm server`.** `mlx_lm server` has no class
+for a `model_type: diffusion_gemma` checkpoint, so `MLXServerService.start` branches
+on `ModelRegistry`'s `isDiffusion` flag and launches the vendored
+**[`diffusion_server.py`](#diffusion_serverpy--long-lived-openai-compatible-diffusion-server-code-tab)**
+(also via `mlx_run.py`) instead — same free-port / `/health` / warm-up / state
+machine, so `OpenAIChatClient` + `CodingAgentService` are unchanged. `--adapter-path`
+is dropped for diffusion (no LoRA). See §3 `diffusion_server.py`.
 
 ---
 
@@ -687,9 +697,143 @@ license text, and the deliberately-excluded subtrees are in
 `architectures` entry whose name **starts with `DiffusionGemma`**. (The wrapper's
 top-level `model_type` stays `"diffusion_gemma"` even though the inner text tower is
 `"diffusion_gemma_text"`, so the match is on the wrapper.) This flag is the single
-source of truth that fans out to: `InferenceService` routing (→ `diffusion_generate.py`),
-the Teach + Practice model-picker exclusions (`!isDiffusion`), and the Models-tab
-"Diffusion · chat only" badge.
+source of truth that fans out to: `InferenceService` routing (→ `diffusion_generate.py`,
+chat), `MLXServerService` routing (→ `diffusion_server.py` instead of `mlx_lm server`,
+the Code-tab agentic loop — see below), and the Teach + Practice model-picker
+exclusions (`!isDiffusion`). DiffusionGemma is **not** fine-tunable (mlx-lm has no
+LoRA path for it), so it is excluded ONLY from Teach / Practice / DPO — it now works
+in both **Try-it-out** (chat) and **Code** (agentic, experimental).
+
+### `diffusion_server.py` — long-lived OpenAI-compatible diffusion server (Code tab)
+
+[`diffusion_server.py`](../LLMPro/Resources/helpers/diffusion_server.py) is the
+**daemon** counterpart to the one-shot `diffusion_generate.py`: it serves a
+DiffusionGemma model over an **OpenAI-compatible HTTP API** so the Code tab's
+Orchestrator team can drive a diffusion model through the *same*
+`OpenAIChatClient` + `CodingAgentService` loop as an `mlx_lm server`-backed model.
+`mlx_lm server` **cannot** load a diffusion LM (no autoregressive class), so for a
+diffusion model [`MLXServerService.start`](../LLMPro/Services/MLXServerService.swift)
+launches this helper instead (see `mlx_lm server` in §1 and the `MLXServerService`
+note below). This makes DiffusionGemma usable in **Code** (agentic, experimental) —
+it is no longer chat-only; it remains excluded only from Teach / Practice / DPO.
+
+**Stdlib HTTP, no Flask.** The server is built on Python's
+**`http.server.ThreadingHTTPServer`** — no new pip dependency (stdlib + the existing
+`mlx` / `mlx-lm` / `transformers` / `pillow` / `numpy` the vendored decoder already
+needs). It is launched **via `mlx_run.py`** (like `mlx_lm server`), so it is
+memory-wrapped by the same Apple-Silicon MLX tuner (§3); `mlx_run.py` runs a bare
+script path through `runpy.run_path`. Env: `HF_HOME`, `PYTHONUNBUFFERED`, plus the
+`LLMPRO_MEMORY_LIMIT_BYTES` / `LLMPRO_CACHE_LIMIT_BYTES` overrides `mlx_run.py`
+honors.
+
+**One dedicated MLX worker thread (load-bearing).** The vendored decode binds a
+**thread-local `mx` stream at import**, so the model load **and every generation
+must run on the same thread**. The server loads the model **once** on a single
+dedicated MLX worker thread; the `ThreadingHTTPServer` request threads **submit jobs
+to that worker via a queue** and block on the result. Do not move generation onto the
+HTTP threads — it will use the wrong (or no) stream and fail.
+
+CLI (positional, launched by `MLXServerService`):
+```
+python <helpers>/diffusion_server.py --model <ABS-PATH-or-repo-id> \
+  --host 127.0.0.1 --port <free-port>
+```
+`--adapter-path` is **not** accepted — diffusion has no LoRA adapter, so
+`MLXServerService` **ignores** the selected adapter for diffusion models.
+
+**Readiness line.** When the model is loaded and the socket is listening, the helper
+prints exactly:
+```
+LLMPRO_DIFFUSION_SERVER_READY port=<port>
+```
+to stdout. `MLXServerService` reuses its existing free-port / `waitForServerUp`
+(polls `GET /health`) / 1-token warm-up / state-machine path, so the ready line is
+informational; `/health` is the gate.
+
+Endpoints (the subset `OpenAIChatClient` uses):
+```
+GET  /health                 → 200 {"status":"ok","model":"…"} once loaded
+GET  /v1/models              → {"object":"list","data":[{"id":"…","object":"model"}]}
+POST /v1/chat/completions    → non-streaming OR SSE (stream:true), see below
+```
+
+**`POST /v1/chat/completions` response shapes** are emitted in the **exact form
+`OpenAIChatClient` decodes** (§9):
+
+- **Non-streaming** (`stream:false`): a `chat.completion` object with
+  `choices[0].message` (`role:"assistant"`, `content`, and `tool_calls` when the
+  model called a tool), `finish_reason` (`stop` | `tool_calls`), and a `usage` block.
+- **Streaming** (`stream:true`): `text/event-stream` of `chat.completion.chunk`
+  frames — `choices[0].delta.content` text deltas, accumulated
+  `choices[0].delta.tool_calls` deltas, a final `finish_reason`, terminated by
+  `data: [DONE]`. This is the same frame shape `OpenAIChatClient.stream` parses for
+  `mlx_lm server`.
+
+**Tool-call translation: DiffusionGemma grammar ↔ OpenAI.** DiffusionGemma emits
+tool calls in its **own native grammar**, not OpenAI JSON:
+```
+<|tool_call>call:NAME{key:value,...}<tool_call|>
+```
+with **string argument values wrapped** in the model's special quote token,
+`<|"|>…<|"|>`. The server **translates** these into OpenAI `tool_calls`
+(`{"id","type":"function","function":{"name","arguments":<JSON string>}}`) so the
+agent's native-tool path works unchanged. The parser is **tolerant** and
+**fail-open**: if nothing parses as a tool call, the raw text is returned as plain
+`content` (the agent's `<tool_call>` / fenced-JSON text fallback still runs on top —
+see §9). **Inbound needs no translation:** tool RESULTS (`role:"tool"` messages) are
+consumed by the model's own chat template, so they are passed through as-is.
+
+Because the translation produces clean OpenAI `tool_calls`, **native tool-calling
+stays ON by default** for diffusion models in the Code tab (the Code UI shows the
+caption "Diffusion model — chat works; agentic tool-use is experimental.").
+
+**Verified live:** DiffusionGemma-8bit served in the Code tab drove the full
+Orchestrator loop (Orchestrator → Coder → `write_file` → `list_dir`) and created a
+file on disk; logs clean, no crash. Tool-calling works, with an **occasional
+unusable diffusion turn that the Orchestrator recovers from** (a canvas-256
+reliability caveat of the diffusion decode, not a protocol bug).
+
+### `gguf_to_mlx.py` — GGUF → MLX import (chat-template fallback)
+
+[`gguf_to_mlx.py`](../LLMPro/Resources/helpers/gguf_to_mlx.py) converts a `.gguf`
+file to an MLX `models/<name>/` model via mlx.core's native GGUF loader (no
+PyTorch). Consumed by [`GGUFImportService.swift`](../LLMPro/Services/GGUFImportService.swift)
+with two subcommands: `precheck` (reports arch + quant — F16/Q4_0/Q4_1/Q8_0 are
+convertible, K-quants are not) and `convert`.
+
+**Chat-template fallback (the import now produces a chattable INSTRUCT model).**
+A GGUF carries a chat template in its `tokenizer.ggml.chat_template` metadata only
+*sometimes*. When that key is **present**, the converter copies it verbatim
+(behavior unchanged). When it is **absent**, the converter now **writes a
+per-architecture default chat template** into `tokenizer_config.json` instead of
+leaving none:
+
+| GGUF architecture | Fallback template |
+|---|---|
+| `qwen2`, `qwen2moe`, `qwen3` | ChatML (`<|im_start|>`/`<|im_end|>`) |
+| `gemma`, `gemma2`, `gemma3` | Gemma turn format (`<start_of_turn>`/`<end_of_turn>`) |
+| `llama` (Llama-3) | Llama-3 header format (`<|start_header_id|>` …) |
+| `phi3` | Phi-3 format |
+| `llama` (Mistral) / Mistral | Mistral `[INST]` format |
+
+Previously a converted instruct model whose GGUF lacked the metadata had **no**
+chat template and failed in chat / Code / eval with
+`"tokenizer.chat_template is not set"` until one was hand-injected; the fallback
+makes such models chat **out of the box**.
+
+The `done` event gained a **`chat_template_source`** field reporting which path was
+taken:
+
+```jsonc
+{"event": "done", "path": "/…/models/<name>", "architecture": "qwen3",
+ "chat_template_source": "metadata" | "fallback-<arch>" | "none"}
+```
+
+- `"metadata"` — copied from the GGUF's `tokenizer.ggml.chat_template`.
+- `"fallback-<arch>"` — the GGUF had none; a per-architecture default was written
+  (e.g. `"fallback-qwen3"`, `"fallback-gemma"`).
+- `"none"` — no metadata and no fallback matched the architecture (a base /
+  non-instruct model, or an arch with no default) → no template written.
 
 ### `InferenceService` ↔ `ChatSession` streaming contract (yield-ready-to-append)
 
@@ -876,6 +1020,8 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 │   │   ├── profile_experts.py        ← router top-k activation histogram + cold-expert list
 │   │   ├── mlx_run.py                ← always-on MLX tuner (pin memory/wired/cache to the Metal ceiling → runpy the real cmd)
 │   │   ├── diffusion_generate.py     ← DiffusionGemma (masked/block-diffusion) inference; self-pins mem, streams token events
+│   │   ├── diffusion_server.py       ← DiffusionGemma OpenAI-compatible HTTP daemon (Code tab); stdlib http.server, single MLX worker thread, Gemma↔OpenAI tool translation
+│   │   ├── gguf_to_mlx.py            ← GGUF → MLX import (precheck/convert); writes a per-arch default chat template when the GGUF carries none
 │   │   └── diffusion_vendor/         ← VENDORED (copied, not pip) optiq.vlm DiffusionGemma decoder (MIT, mlx-optiq v0.2.3)
 │   │       ├── optiq/vlm/...         ← the ~34-file inference closure; subtree copied recursively, layout preserved
 │   │       └── VENDORED.md           ← provenance + MIT license + the excluded subtrees

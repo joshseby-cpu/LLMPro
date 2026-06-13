@@ -174,8 +174,9 @@ it's the doc that explains *why* the app is shaped this way.
         python -m mlx_lm lora -c config.yaml          (SFT training)
         python -m mlx_lm_lora.train --train-mode dpo  (DPO "Teach by preference" — separate mlx-lm-lora pkg, on-demand)
         python -m mlx_lm generate --adapter-path ...  (inference)
-        python diffusion_generate.py     (DiffusionGemma masked/block-diffusion inference — NOT mlx_lm; vendored optiq.vlm decoder; chat-only guest)
+        python diffusion_generate.py     (DiffusionGemma masked/block-diffusion chat — NOT mlx_lm; vendored optiq.vlm decoder; non-fine-tunable guest — also works in Code via diffusion_server.py)
         python -m mlx_lm server --port <free> ...     (Code tab: long-lived agent server)
+        python diffusion_server.py --port <free> ...  (Code tab: DiffusionGemma agent server — NOT mlx_lm; stdlib http.server around the vendored decoder; OpenAI-compatible; Gemma↔OpenAI tool translation)
         python -m mlx_lm fuse  --export-gguf ...      (export)
         python hf_download.py            (model download, JSON-event progress)
         python prepare_coding_dataset.py (curated dataset preset → chat JSONL)
@@ -318,7 +319,7 @@ The app uses friendly names that don't always match the code. Keep both in mind:
 | Teach | TrainingConfigView |
 | Progress | TrainingMonitorView · JobRegistry |
 | Try it out | ArenaView · InferenceService |
-| A "Diffusion · chat only" model (DiffusionGemma, a chat-only **guest**) | `model_type: diffusion_gemma` · `ModelRegistry.DetectedModel.isDiffusion` · `diffusion_generate.py` (vendored `optiq.vlm` decoder) · `InferenceService` routes it here — **inference-only**: download + chat, **excluded from Teach/Practice/DPO** (mlx-lm can't run or fine-tune a diffusion LM) |
+| A DiffusionGemma model (a non-fine-tunable **guest**; Models tab still badges it "Diffusion · chat only") | `model_type: diffusion_gemma` · `ModelRegistry.DetectedModel.isDiffusion` · `diffusion_generate.py` (chat, vendored `optiq.vlm` decoder; `InferenceService` routes here) · `diffusion_server.py` (Code tab agentic loop, OpenAI-compatible HTTP daemon; `MLXServerService` routes here when `isDiffusion`) — works in **chat + Code (experimental)**, **excluded only from Teach/Practice/DPO** (mlx-lm can't fine-tune a diffusion LM) |
 | "Score it" / the "Report card" (the scored Test node) | EvalService · EvalRun · eval_pass_rate.py (pass@k) · evals/ — comparable score per (model+adapter), drives the retrain back-edge |
 | "Grade it" (the Progress completion CTA) | TrainingMonitorView CTA → `.openChatWithModel` with `ModelHandoff.autoScore: true` (lands in the Test node + auto-scores) |
 | "Which answer is better?" 👍 / "Teach by preference" (the DPO loop) | ArenaView `preferenceBar` · `PreferenceService` · `DatasetSchema.preference` · `TrainMode.dpo` · `mlx_lm_lora.train` · `PreferenceHandoff`/`.openTrainingWithPreferences` — preference pairs → a DPO fine-tune, the second back-edge |

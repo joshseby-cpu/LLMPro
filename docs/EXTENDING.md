@@ -162,9 +162,10 @@ distill, run an eval harness):
 
 Some models can't run through mlx-lm at all — e.g. Google's **DiffusionGemma**, a
 masked/block-diffusion LM with no autoregressive mlx-lm class. This is the recipe used
-to land DiffusionGemma as an **inference-only "guest"** (download + chat, but excluded
-from Teach/Practice because it can't be LoRA-fine-tuned). Follow it for any new engine
-mlx-lm doesn't cover.
+to land DiffusionGemma as a **non-fine-tunable "guest"** (download + chat + the Code
+tab's agentic loop, but excluded from Teach/Practice/DPO because it can't be
+LoRA-fine-tuned). Follow it for any new engine mlx-lm doesn't cover. (Steps 1–6 are the
+chat path; step 5b adds the agentic-server path if you want it in the Code tab.)
 
 1. **Get a decoder.** If a maintained one exists, **vendor a reviewed subset** under
    `Resources/helpers/<vendor>/` rather than adding a pip dependency — copy *only* the
@@ -206,14 +207,32 @@ mlx-lm doesn't cover.
    line `\n`; a token-streaming path yields raw segments — so `ChatSession.send`
    appends raw (see [the streaming convention](CONVENTIONS.md#streaming-convention-inferenceservice-yields-ready-to-append-chunks)).
 
+   **5b. (Optional) Route in `MLXServerService` to reach the Code tab.** If the engine
+   should drive the agentic loop, write a **long-lived OpenAI-compatible server** helper
+   (stdlib `http.server.ThreadingHTTPServer`, no Flask — e.g.
+   [`diffusion_server.py`](../LLMPro/Resources/helpers/diffusion_server.py)) that exposes
+   `GET /health`, `GET /v1/models`, and `POST /v1/chat/completions` (non-stream + SSE in
+   the **exact** shape [`OpenAIChatClient`](../LLMPro/Services/OpenAIChatClient.swift)
+   decodes), prints a `…_READY port=<port>` line, and **translates** the model's native
+   tool grammar into OpenAI `tool_calls` (fail-open to plain `content`). Then branch
+   `MLXServerService.start` on the same `isDiffusion` flag to launch it (via `mlx_run.py`,
+   reusing the free-port / `/health` / warm-up / state machine) instead of
+   `mlx_lm server`. Two DiffusionGemma gotchas: (a) the vendored decode binds a
+   thread-local `mx` stream at import, so **load + all generation must run on ONE
+   dedicated worker thread** (HTTP threads submit jobs to it via a queue); (b) there's no
+   LoRA, so **ignore `adapterPath`**. Register the helper in `installHelpers()` too. The
+   payoff: `OpenAIChatClient` + `CodingAgentService` work unchanged. Contract:
+   [`CONTRACTS.md`](CONTRACTS.md#diffusion_serverpy--long-lived-openai-compatible-diffusion-server-code-tab).
+
 6. **Exclude from the fine-tune pickers** if the engine can't be trained: filter
    `!isDiffusion` in [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift)
    (Teach) and [`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift)
    (Practice), and badge it in
    [`ModelsBrowserView`](../LLMPro/Features/Models/ModelsBrowserView.swift)
-   ("Diffusion · chat only") so the user knows it's chat-only. Keep the loop framing —
-   a guest model joins only the nodes it can support; don't fake a training flow
-   (see [`CONCEPT.md`](CONCEPT.md#inference-only-guest-models-diffusiongemma--on--test-off-the-fine-tune-loop)).
+   (DiffusionGemma's badge reads "Diffusion · chat only") so the user knows it can't be
+   taught. Keep the loop framing — a guest model joins every node except the transform
+   it can't undergo (here, the fine-tune edges); don't fake a training flow
+   (see [`CONCEPT.md`](CONCEPT.md#non-fine-tunable-guest-models-diffusiongemma--on--test---use-off-the-fine-tune-edges)).
 
 7. **Verify** end-to-end: the model shows in Models with the badge, generates coherent
    text in Try-it-out, is absent from the Teach/Practice pickers, and an ordinary
