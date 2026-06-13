@@ -221,6 +221,17 @@ struct CodeView: View {
                 }
             }
 
+            // Honest heads-up for diffusion models: they chat fine through the
+            // diffusion server, but they're not autoregressive tool-callers, so
+            // agentic tool-use is best-effort. Friendly-first per app convention.
+            if selectedModelIsDiffusion {
+                Label("Diffusion model — chat works; agentic tool-use is experimental.",
+                      systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
             // Options as an inline collapsible section (not a popover) so it
             // pushes the IDE down rather than floating over the transcript. When
             // expanded it reads as part of the header — full-width, no boxed card,
@@ -538,6 +549,15 @@ struct CodeView: View {
         case .stopped: .gray
         default:       .orange
         }
+    }
+
+    /// True when the picked model is a DiffusionGemma checkpoint. Drives the
+    /// "chat works; tool-use is experimental" caption. (Native tool-calling is
+    /// already on by default in AgentSettings, so the diffusion server's
+    /// translated tool_calls are used without any extra wiring.)
+    private var selectedModelIsDiffusion: Bool {
+        !selectedModel.isEmpty
+            && registry.localModels.first(where: { $0.repoID == selectedModel })?.isDiffusion == true
     }
 
     // MARK: Actions

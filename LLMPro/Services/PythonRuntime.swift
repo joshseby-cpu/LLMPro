@@ -248,7 +248,7 @@ final class PythonRuntime {
                      "humaneval_pull", "self_improve_round", "eval_pass_rate",
                      "merge_models", "add_expert", "manage_experts",
                      "mem_probe", "model_memory", "profile_experts", "mlx_run",
-                     "inspect_attention", "gguf_to_mlx", "diffusion_generate"] {
+                     "inspect_attention", "gguf_to_mlx", "diffusion_generate", "diffusion_server"] {
             guard let resourceURL = Bundle.main.url(forResource: name, withExtension: "py", subdirectory: "helpers")
                                   ?? Bundle.main.url(forResource: name, withExtension: "py")
             else { continue }

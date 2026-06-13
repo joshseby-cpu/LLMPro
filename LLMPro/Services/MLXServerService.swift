@@ -86,19 +86,41 @@ final class MLXServerService {
         let port = findFreePort()
         state = .starting("Starting model server…")
 
-        var args = ["-m", "mlx_lm", "server",
+        // DiffusionGemma is a masked/block-diffusion LM with no autoregressive
+        // mlx-lm class, so it can't be served by `mlx_lm server`. When the model
+        // is diffusion, swap ONLY the argv for the vendored diffusion_server.py
+        // (which serves the same OpenAI-compatible /v1/chat/completions + /health
+        // the rest of this lifecycle expects). Diffusion models have no LoRA, so
+        // `adapterPath` is intentionally ignored on this branch. Everything else —
+        // findFreePort, the spawn, waitForServerUp, the warm-up complete(), the
+        // exit-watcher and state machine — is reused unchanged.
+        let isDiffusion = isDiffusionModel(repoOrName: model, resolvedPath: resolved)
+        var args: [String]
+        if isDiffusion {
+            args = [PathResolver.helpersDir.appendingPathComponent("diffusion_server.py").path,
+                    "--model", resolved,
+                    "--host", "127.0.0.1",
+                    "--port", "\(port)"]
+        } else {
+            args = ["-m", "mlx_lm", "server",
                     "--model", resolved,
                     "--host", "127.0.0.1",
                     "--port", "\(port)",
                     "--log-level", "INFO"]
-        if let adapterPath, !adapterPath.isEmpty {
-            args += ["--adapter-path", adapterPath]
+            if let adapterPath, !adapterPath.isEmpty {
+                args += ["--adapter-path", adapterPath]
+            }
         }
 
-        // Apply the optional MLX memory budget from the Memory tab (no-op when off).
+        // Apply the optional MLX memory budget from the Memory tab (no-op when
+        // off). wrap() prepends mlx_run.py, which runs `-m mlx_lm …` via runpy AND
+        // a bare script path via runpy.run_path — so the diffusion_server.py script
+        // argv is launched correctly with the same Apple-Silicon memory tuning.
         let wrapped = MemoryService.wrap(args)
         var env = ["HF_HOME": PathResolver.hfHome.path, "PYTHONUNBUFFERED": "1"]
         for (k, v) in wrapped.env { env[k] = v }
+
+        Log.info("spawn: \(wrapped.arguments.joined(separator: " "))", .server)
 
         let proc: RunningProcess
         do {
@@ -176,6 +198,27 @@ final class MLXServerService {
             return local.directory.path
         }
         return repoOrName
+    }
+
+    /// Decide whether a model must be served by `diffusion_server.py` instead of
+    /// `mlx_lm server`. Mirrors `InferenceService.isDiffusionModel`: prefer the
+    /// registry's `isDiffusion` flag (`ModelRegistry.scan()` derives it from
+    /// config.json for both HF-cache and custom-dir models); fall back to reading
+    /// the resolved directory's own `config.json` `model_type == "diffusion_gemma"`
+    /// (covers a freshly-downloaded model the registry hasn't rescanned yet, as
+    /// long as we resolved to a local path). Both run on the @MainActor, so no hop.
+    private func isDiffusionModel(repoOrName: String, resolvedPath: String) -> Bool {
+        if let flagged = ModelRegistry.shared.localModels.first(where: { $0.repoID == repoOrName })?.isDiffusion {
+            return flagged
+        }
+        let configURL = URL(fileURLWithPath: resolvedPath).appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: configURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        let modelType = (json["model_type"] as? String)?.lowercased() ?? ""
+        let archNames = (json["architectures"] as? [String]) ?? []
+        return modelType == "diffusion_gemma"
+            || archNames.contains { $0.hasPrefix("DiffusionGemma") }
     }
 
     private func tail(_ stream: AsyncStream<String>) {
