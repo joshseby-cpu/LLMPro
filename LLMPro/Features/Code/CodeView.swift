@@ -238,10 +238,11 @@ struct CodeView: View {
             // clean grouped layout without pushing the IDE down.
             Button { showOptions = true } label: {
                 Label("Options", systemImage: "slider.horizontal.3")
-                    .font(.caption)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .tint(.brand)
+            .help("Session options — permissions, team, skills, memory, and advanced settings")
         }
         .padding(10)
     }
