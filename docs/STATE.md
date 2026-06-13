@@ -731,6 +731,20 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-06-13 (cont.) — Full stress test (clean).** Three layers:
+  (1) unit suite 53/53 pass; (2) UI sweep of the live app — rapid all-13-tab
+  init/teardown (no hang), every tab verified rendering after the visual refresh
+  (Home/Models/Lessons/Teach/Progress/Try-it-out/Code/Practice/Fusion/Memory/
+  Inspect/Save&Use/Settings + its Runtime/Paths/Logs/HuggingFace sub-tabs), HF
+  model search (`llama` → 6 mlx-community results), Inspect parsing a real 27B
+  model (851 tensors / 26.9B params via the pure-Swift safetensors reader), and
+  the Code Options **sheet** lifecycle incl. the sheet-from-sheet handoff; the
+  shared metrics poller survived heavy tab-switching (wave-2 fix held).
+  (3) Log/crash audit: zero app-runtime error/fault lines, no new `.ips`, process
+  still alive. One investigated false alarm — a blank HF search on a garbled
+  query; network/query/code/entitlements (app-sandbox=false) all verified and a
+  clean re-search returned results, so not a bug. No code changes; verification only.
+
 - **Session 2026-06-13 (cont.) — Visual/aesthetic UI refresh (`5267406`, `ec3dc77`).**
   Reviewed every tab live (screenshots) then restyled. (1) **Brand identity unified:**
   new `AccentColor` asset (violet ≈ #6B4AFF/#8C78FF) wired app-wide via
