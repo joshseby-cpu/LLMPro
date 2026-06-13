@@ -232,6 +232,109 @@ def _unwrap(x):
     return x
 
 
+# ── Per-architecture fallback chat templates ───────────────────────────────
+# Many instruct GGUFs (notably Qwen's own *-GGUF builds) ship WITHOUT a
+# `tokenizer.ggml.chat_template` key. Without a chat template the converted MLX
+# model can't be chatted with: `apply_chat_template(...)` raises "Cannot use chat
+# template functions because tokenizer.chat_template is not set." When the GGUF
+# carries no template we fall back to the canonical per-family Jinja template
+# below, keyed off the detected arch. These are the HF-Jinja equivalents of the
+# Ollama Go-templates in FuseService.swift's `OllamaChatTemplate.modelfileBody`.
+#
+# Each entry is (jinja_template, special_tokens) where special_tokens is a dict of
+# tokenizer_config keys (bos_token / eos_token / pad_token / add_bos_token) that
+# the family needs and that may be missing from the rebuilt tokenizer_config.
+
+_CHATML_TEMPLATE = (
+    "{% for message in messages %}"
+    "{% if loop.first and messages[0]['role'] != 'system' %}"
+    "{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}"
+    "{% endif %}"
+    "{{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n' }}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+)
+
+_GEMMA_TEMPLATE = (
+    "{{ bos_token }}"
+    "{% for message in messages %}"
+    "{% if message['role'] == 'system' %}"
+    "{{ '<start_of_turn>user\n' + message['content'] | trim + '\n' }}"
+    "{% else %}"
+    "{% set role = 'model' if message['role'] == 'assistant' else 'user' %}"
+    "{{ '<start_of_turn>' + role + '\n' + message['content'] | trim + '<end_of_turn>\n' }}"
+    "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<start_of_turn>model\n' }}{% endif %}"
+)
+
+_LLAMA3_TEMPLATE = (
+    "{{ bos_token }}"
+    "{% for message in messages %}"
+    "{{ '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' "
+    "+ message['content'] | trim + '<|eot_id|>' }}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
+)
+
+_PHI3_TEMPLATE = (
+    "{% for message in messages %}"
+    "{% if message['role'] == 'system' %}"
+    "{{ '<|system|>\n' + message['content'] + '<|end|>\n' }}"
+    "{% elif message['role'] == 'user' %}"
+    "{{ '<|user|>\n' + message['content'] + '<|end|>\n' }}"
+    "{% elif message['role'] == 'assistant' %}"
+    "{{ '<|assistant|>\n' + message['content'] + '<|end|>\n' }}"
+    "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<|assistant|>\n' }}{% endif %}"
+)
+
+_MISTRAL_TEMPLATE = (
+    "{{ bos_token }}"
+    "{% for message in messages %}"
+    "{% if message['role'] == 'user' %}"
+    "{{ '[INST] ' + message['content'] + ' [/INST]' }}"
+    "{% elif message['role'] == 'assistant' %}"
+    "{{ ' ' + message['content'] + eos_token }}"
+    "{% endif %}"
+    "{% endfor %}"
+)
+
+# arch (as detected in `convert`/`precheck`) → (template, special_tokens_to_set).
+# These special tokens are only WRITTEN if the rebuilt config doesn't already have
+# them; they're the minimum a family needs for its template's stop token to work.
+_FALLBACK_TEMPLATES: dict[str, tuple[str, dict]] = {
+    "qwen2":    (_CHATML_TEMPLATE, {"bos_token": "<|endoftext|>", "eos_token": "<|im_end|>",
+                                    "pad_token": "<|endoftext|>", "add_bos_token": False}),
+    "qwen2moe": (_CHATML_TEMPLATE, {"bos_token": "<|endoftext|>", "eos_token": "<|im_end|>",
+                                    "pad_token": "<|endoftext|>", "add_bos_token": False}),
+    "qwen3":    (_CHATML_TEMPLATE, {"bos_token": "<|endoftext|>", "eos_token": "<|im_end|>",
+                                    "pad_token": "<|endoftext|>", "add_bos_token": False}),
+    "gemma":    (_GEMMA_TEMPLATE, {"bos_token": "<bos>", "eos_token": "<end_of_turn>",
+                                   "pad_token": "<pad>", "add_bos_token": True}),
+    "gemma2":   (_GEMMA_TEMPLATE, {"bos_token": "<bos>", "eos_token": "<end_of_turn>",
+                                   "pad_token": "<pad>", "add_bos_token": True}),
+    "gemma3":   (_GEMMA_TEMPLATE, {"bos_token": "<bos>", "eos_token": "<end_of_turn>",
+                                   "pad_token": "<pad>", "add_bos_token": True}),
+    "llama":    (_LLAMA3_TEMPLATE, {"bos_token": "<|begin_of_text|>", "eos_token": "<|eot_id|>",
+                                    "add_bos_token": True}),
+    "phi3":     (_PHI3_TEMPLATE, {"bos_token": "<s>", "eos_token": "<|end|>",
+                                  "pad_token": "<|endoftext|>", "add_bos_token": False}),
+    "mistral":  (_MISTRAL_TEMPLATE, {"bos_token": "<s>", "eos_token": "</s>",
+                                     "pad_token": "</s>", "add_bos_token": True}),
+}
+
+
+def _fallback_chat_template(arch: str) -> tuple[str | None, dict]:
+    """Return (jinja_template, extra_tokenizer_config) for an arch with no GGUF
+    chat template, or (None, {}) if we don't have a safe default for it."""
+    tpl = _FALLBACK_TEMPLATES.get((arch or "").strip().lower())
+    if tpl is None:
+        return None, {}
+    return tpl[0], dict(tpl[1])
+
+
 # GGUF tokenizer model → the transformers GGUF converter class that builds a
 # real `tokenizers` fast tokenizer from it (pure-Python; no torch needed).
 def _tokenizer_converter(tok_model: str, arch: str):
@@ -249,13 +352,18 @@ def _tokenizer_converter(tok_model: str, arch: str):
     return G.GGUFLlamaConverter
 
 
-def _write_tokenizer(gguf_path: str, meta: dict, arch: str, dst: Path) -> bool:
+def _write_tokenizer(gguf_path: str, meta: dict, arch: str, dst: Path) -> str | None:
     """Reconstruct a real HF tokenizer from the GGUF's embedded vocab, using
     transformers' GGUF tokenizer converters (tokens + scores + merges → a
     `tokenizers` fast tokenizer). Pure-Python — does NOT require PyTorch (we feed
     the converter the metadata dict directly, bypassing the torch-gated
     load_gguf_checkpoint). Writes tokenizer.json + tokenizer_config.json.
-    Returns True on success."""
+
+    Returns a `chat_template_source` string describing where the written chat
+    template came from — "metadata" (carried by the GGUF), "fallback-<arch>" (a
+    per-architecture default we injected because the GGUF had none), or "none"
+    (no template available and no safe default) — or None if the GGUF had no
+    embedded vocabulary and no tokenizer could be rebuilt at all."""
     from gguf import GGUFReader
     r = GGUFReader(gguf_path)
 
@@ -279,7 +387,7 @@ def _write_tokenizer(gguf_path: str, meta: dict, arch: str, dst: Path) -> bool:
 
     tokens = strings("tokenizer.ggml.tokens")
     if not tokens:
-        return False
+        return None
     skel = {
         "tokens": tokens,
         "scores": nums("tokenizer.ggml.scores"),
@@ -306,10 +414,25 @@ def _write_tokenizer(gguf_path: str, meta: dict, arch: str, dst: Path) -> bool:
         "pad_token_id": sid("tokenizer.ggml.padding_token_id"),
     }
     if chat_template:
+        # The GGUF shipped its own template — write it through unchanged.
         tok_cfg["chat_template"] = chat_template
+        source = "metadata"
+    else:
+        # No template in the GGUF. Fall back to the canonical per-arch default so
+        # the converted instruct model can actually be chatted with.
+        fallback, extra = _fallback_chat_template(arch)
+        if fallback:
+            tok_cfg["chat_template"] = fallback
+            # Only add special-token strings the rebuilt config doesn't already
+            # carry; don't clobber anything the GGUF vocab gave us.
+            for k, v in extra.items():
+                tok_cfg.setdefault(k, v)
+            source = f"fallback-{(arch or '').strip().lower()}"
+        else:
+            source = "none"
     (dst / "tokenizer_config.json").write_text(
         json.dumps({k: v for k, v in tok_cfg.items() if v is not None}, indent=2))
-    return True
+    return source
 
 
 def convert(gguf_path: str, dst_dir: str, model_name: str = "") -> int:
@@ -362,9 +485,10 @@ def convert(gguf_path: str, dst_dir: str, model_name: str = "") -> int:
     (dst / "config.json").write_text(json.dumps(cfg, indent=2))
 
     emit({"event": "progress", "stage": "tokenizer", "message": "Rebuilding the tokenizer from the GGUF vocab…"})
+    chat_template_source = "none"
     try:
-        ok = _write_tokenizer(gguf_path, meta, arch, dst)
-        if not ok:
+        chat_template_source = _write_tokenizer(gguf_path, meta, arch, dst)
+        if chat_template_source is None:
             emit({"event": "error", "message": "The GGUF had no embedded vocabulary, so a tokenizer couldn't be rebuilt."})
             return 9
     except Exception as exc:
@@ -383,7 +507,8 @@ def convert(gguf_path: str, dst_dir: str, model_name: str = "") -> int:
 
     emit({"event": "done", "dst": dst_dir, "name": model_name or dst.name,
           "arch": arch, "tensors": len(mapped), "dropped": dropped,
-          "quantized": "quantization" in cfg})
+          "quantized": "quantization" in cfg,
+          "chat_template_source": chat_template_source})
     return 0
 
 
