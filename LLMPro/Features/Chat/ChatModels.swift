@@ -21,13 +21,35 @@ final class ChatSession {
     var error: String?
     let label: String
 
+    /// The in-flight generation Task. Cancelling it tears down the InferenceService
+    /// stream, whose `onTermination` terminates the mlx_lm / diffusion subprocess —
+    /// so clearing or closing the session aborts generation instead of leaking the
+    /// child to max-tokens.
+    private var generationTask: Task<Void, Never>?
+
     init(model: String, adapterPath: String?, label: String) {
         self.model = model
         self.adapterPath = adapterPath
         self.label = label
     }
 
-    func clear() { messages.removeAll(); error = nil }
+    // isolated deinit (SE-0371): runs on the main actor so it may touch the
+    // main-actor-isolated generationTask. Cancelling tears down the stream, whose
+    // onTermination kills the subprocess — no leaked child when a session is freed.
+    isolated deinit { generationTask?.cancel() }
+
+    /// Abort any in-flight generation (also kills the backing subprocess).
+    func stop() {
+        generationTask?.cancel()
+        generationTask = nil
+        isGenerating = false
+    }
+
+    func clear() {
+        stop()
+        messages.removeAll()
+        error = nil
+    }
 
     func send(_ prompt: String) {
         guard !isGenerating else { return }
@@ -39,7 +61,7 @@ final class ChatSession {
         error = nil
 
         let fullContext = renderHistoryForModel()
-        Task {
+        generationTask = Task {
             do {
                 let stream = await InferenceService.shared.stream(
                     model: model,
@@ -58,6 +80,12 @@ final class ChatSession {
                 if let i = messages.firstIndex(where: { $0.id == assistantID }) {
                     messages[i].isStreaming = false
                 }
+            } catch is CancellationError {
+                // Deliberate stop()/clear(): the subprocess was already torn down
+                // via the stream's onTermination — nothing to surface to the user.
+                if let i = messages.firstIndex(where: { $0.id == assistantID }) {
+                    messages[i].isStreaming = false
+                }
             } catch {
                 self.error = error.localizedDescription
                 if let i = messages.firstIndex(where: { $0.id == assistantID }) {
@@ -65,6 +93,7 @@ final class ChatSession {
                 }
             }
             self.isGenerating = false
+            self.generationTask = nil
         }
     }
 

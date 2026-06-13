@@ -1,7 +1,9 @@
 """hf_download.py — JSON-progress wrapper around huggingface_hub.snapshot_download.
 
 Invoked by LLMPro as:
-    python hf_download.py <repo_id> <cache_dir> [token_or_empty]
+    HF_TOKEN=<token> python hf_download.py <repo_id> <cache_dir>
+(the token travels via the HF_TOKEN env var so it never appears in argv / `ps`;
+a legacy positional [token_or_empty] is still honored as a fallback)
 
 Emits one JSON object per line on stdout, e.g.:
     {"event": "start",    "repo": "...", "total_bytes": N, "files": N}
@@ -122,7 +124,12 @@ def main() -> int:
 
     repo_id = sys.argv[1]
     cache_dir = sys.argv[2]
-    token = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+    # Token travels via the HF_TOKEN env var (keeps it out of argv / `ps`).
+    # Fall back to the legacy positional arg only if env is unset/empty so a
+    # mid-rollout (old Swift caller) still works. Empty string ⇒ anonymous.
+    token = (os.environ.get("HF_TOKEN") or "").strip() or None
+    if token is None and len(sys.argv) > 3 and sys.argv[3]:
+        token = sys.argv[3]
 
     try:
         from huggingface_hub import snapshot_download

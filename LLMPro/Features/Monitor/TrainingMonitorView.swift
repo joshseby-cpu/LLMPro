@@ -24,8 +24,11 @@ struct TrainingMonitorView: View {
                 }
             }
             .navigationTitle("Progress")
+            // start() is idempotent/self-healing. We deliberately do NOT stop()
+            // on disappear: SystemMetrics.shared is an app-lifecycle-owned
+            // singleton (started in RootView) that Dashboard and others read —
+            // stopping it here would zero the gauges app-wide.
             .task { metrics.start() }
-            .onDisappear { metrics.stop() }
         }
     }
 

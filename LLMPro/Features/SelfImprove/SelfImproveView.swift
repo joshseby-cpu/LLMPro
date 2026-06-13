@@ -24,6 +24,7 @@ struct SelfImproveView: View {
     @State private var name: String = ""
     @State private var showPracticeAdvanced = false
     @State private var showRunTechnical = false
+    @State private var deletionTarget: SelfImproveRun?
 
     var activeRun: SelfImproveRun? {
         guard let id = service.status.runID else { return nil }
@@ -57,12 +58,35 @@ struct SelfImproveView: View {
             .frame(maxWidth: 980, alignment: .topLeading)
         }
         .navigationTitle("Practice")
+        .alert("Delete this practice run?", isPresented: deletionPresented, presenting: deletionTarget) { run in
+            Button("Delete", role: .destructive) { delete(run) }
+            Button("Cancel", role: .cancel) { deletionTarget = nil }
+        } message: { run in
+            Text("Removes \"\(run.name.isEmpty ? "this practice run" : run.name)\" and its saved progress from this Mac. You can't undo this.")
+        }
         .task {
             await registry.scan()
             if pickedModelRepoID.isEmpty {
                 pickedModelRepoID = practiceableModels.first?.repoID ?? ""
             }
         }
+    }
+
+    private var deletionPresented: Binding<Bool> {
+        Binding(get: { deletionTarget != nil },
+                set: { v in if !v { deletionTarget = nil } })
+    }
+
+    /// Snapshot the on-disk dir synchronously, then drop the record and clean up
+    /// its selfimprove/<uuid>/ folder (seed/eval/run.json/round_N). The per-round
+    /// LoRA adapters under adapters/<round-job-id> are left in place — they may
+    /// still be referenced by a hand-off, and removing them is out of scope here.
+    private func delete(_ run: SelfImproveRun) {
+        let dir = run.directory
+        modelContext.delete(run)
+        try? modelContext.save()
+        try? FileManager.default.removeItem(at: dir)
+        deletionTarget = nil
     }
 
     // MARK: – Sections ---------------------------------------------------------
@@ -406,8 +430,7 @@ struct SelfImproveView: View {
                 .controlSize(.small)
             }
             Button(role: .destructive) {
-                modelContext.delete(run)
-                try? modelContext.save()
+                deletionTarget = run
             } label: {
                 Image(systemName: "trash")
             }

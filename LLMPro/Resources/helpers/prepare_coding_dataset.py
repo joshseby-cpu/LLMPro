@@ -2,7 +2,9 @@
 and normalize it into mlx-lm's `chat` JSONL schema (train.jsonl / valid.jsonl / test.jsonl).
 
 Invoked by LLMPro as:
-    python prepare_coding_dataset.py <preset_id> <output_dir> [token]
+    HF_TOKEN=<token> python prepare_coding_dataset.py <preset_id> <output_dir> [max_rows]
+(the token travels via the HF_TOKEN env var so it never appears in argv / `ps`;
+a legacy positional [token] before [max_rows] is still honored as a fallback)
 
 Emits one JSON object per line on stdout:
     {"event": "start",     "preset": "...", "hf_repo": "..."}
@@ -198,7 +200,12 @@ def main() -> int:
         return 2
     preset = sys.argv[1]
     out_dir = Path(sys.argv[2])
-    token = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+    # Token travels via the HF_TOKEN env var (keeps it out of argv / `ps`).
+    # Fall back to the legacy positional arg only if env is unset/empty so a
+    # mid-rollout (old Swift caller) still works. Empty string ⇒ anonymous.
+    token = (os.environ.get("HF_TOKEN") or "").strip() or None
+    if token is None and len(sys.argv) > 3 and sys.argv[3]:
+        token = sys.argv[3]
     if len(sys.argv) > 4:
         try:
             max_rows = int(sys.argv[4])

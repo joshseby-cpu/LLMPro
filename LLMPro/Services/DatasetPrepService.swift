@@ -39,7 +39,7 @@ final class DatasetPrepService {
     /// Prepare ANY HuggingFace dataset (not just a curated preset). The Python helper
     /// auto-detects the schema unless the caller supplies a schema + fields override.
     func prepareArbitrary(request: ArbitraryHFRequest,
-                          onComplete: ((UUID) -> Void)? = nil) {
+                          onComplete: (@Sendable (UUID) -> Void)? = nil) {
         guard PythonRuntime.shared.isReady, let python = PythonRuntime.shared.pythonURL else { return }
         let pseudoPreset = CodingDatasetPreset(
             id: "hf-arbitrary",
@@ -73,16 +73,16 @@ final class DatasetPrepService {
         if let config = request.config { optionsDict["config"] = config }
         let optionsJSON = (try? JSONSerialization.data(withJSONObject: optionsDict)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
 
+        // Token travels via the HF_TOKEN env var so it never appears in argv / `ps`.
+        var env = ["HF_HOME": PathResolver.hfHome.path, "PYTHONUNBUFFERED": "1"]
+        if !token.isEmpty { env["HF_TOKEN"] = token }
+
         Task {
             do {
                 _ = try await ProcessRunner.runCapturing(
                     executable: python,
                     arguments: [helper.path, request.repoID, outDir.path, optionsJSON],
-                    environment: [
-                        "HF_HOME": PathResolver.hfHome.path,
-                        "PYTHONUNBUFFERED": "1",
-                        "HF_TOKEN": token,
-                    ],
+                    environment: env,
                     onStdout: { [weak self] line in
                         Task { @MainActor in self?.handle(line: line, id: entryID) }
                     },
@@ -111,7 +111,7 @@ final class DatasetPrepService {
 
     func prepare(preset: CodingDatasetPreset,
                  maxRows: Int = 20_000,
-                 onComplete: ((UUID) -> Void)? = nil) {
+                 onComplete: (@Sendable (UUID) -> Void)? = nil) {
         guard PythonRuntime.shared.isReady, let python = PythonRuntime.shared.pythonURL else { return }
         var entry = ActivePrep(preset: preset)
         active.append(entry)
@@ -126,13 +126,16 @@ final class DatasetPrepService {
         let datasetID = UUID()
         let outDir = PathResolver.datasetDir(for: datasetID)
         let token = KeychainHelper.readHFToken() ?? ""
+        // Token travels via the HF_TOKEN env var so it never appears in argv / `ps`.
+        var env = ["HF_HOME": PathResolver.hfHome.path, "PYTHONUNBUFFERED": "1"]
+        if !token.isEmpty { env["HF_TOKEN"] = token }
 
         Task {
             do {
                 _ = try await ProcessRunner.runCapturing(
                     executable: python,
-                    arguments: [helper.path, preset.id, outDir.path, token, "\(maxRows)"],
-                    environment: ["HF_HOME": PathResolver.hfHome.path, "PYTHONUNBUFFERED": "1"],
+                    arguments: [helper.path, preset.id, outDir.path, "\(maxRows)"],
+                    environment: env,
                     onStdout: { [weak self] line in
                         Task { @MainActor in self?.handle(line: line, id: entryID) }
                     },

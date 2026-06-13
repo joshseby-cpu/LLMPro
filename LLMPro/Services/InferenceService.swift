@@ -12,6 +12,12 @@ actor InferenceService {
     static let shared = InferenceService()
 
     /// Stream tokens from `mlx_lm.generate`. Spawns one subprocess per turn.
+    ///
+    /// When the consumer cancels the Task awaiting this stream (e.g. the Arena
+    /// session is cleared or closed), `continuation.onTermination` fires: it
+    /// cancels the inner reading Task and terminates the spawned subprocess so the
+    /// mlx_lm / diffusion child doesn't keep generating to max-tokens in the
+    /// background. The read loops also check `Task.isCancelled` and stop the child.
     func stream(
         model: String,
         adapterPath: String?,
@@ -19,7 +25,10 @@ actor InferenceService {
         params: InferenceParams
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            // Holds the spawned process once we have it, so onTermination (set up
+            // front, before the consumer attaches) can reach in and terminate it.
+            let procBox = InferenceProcBox()
+            let work = Task {
                 guard await PythonRuntime.shared.isReady, let python = await PythonRuntime.shared.pythonURL else {
                     continuation.finish(throwing: NSError(domain: "InferenceService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Python runtime not ready"]))
                     return
@@ -48,7 +57,8 @@ actor InferenceService {
                         resolvedModel: resolvedModel,
                         prompt: fullPrompt,
                         params: params,
-                        continuation: continuation
+                        continuation: continuation,
+                        procBox: procBox
                     )
                     return
                 }
@@ -79,8 +89,12 @@ actor InferenceService {
                         arguments: wrapped.arguments,
                         environment: env
                     )
+                    procBox.set(proc)
                     var inOutputBlock = false
                     for await line in proc.stdout {
+                        // Consumer abandoned the stream while the child runs on:
+                        // terminate it and stop yielding rather than burn tokens.
+                        if Task.isCancelled { proc.terminate(); break }
                         // mlx_lm.generate prints model output between ===== markers.
                         if line.contains("==========") {
                             inOutputBlock.toggle()
@@ -94,6 +108,7 @@ actor InferenceService {
                             continuation.yield(line + "\n")
                         }
                     }
+                    if Task.isCancelled { continuation.finish(); return }
                     let exit = try await proc.exit.value
                     if exit.code != 0 {
                         continuation.finish(throwing: NSError(domain: "InferenceService", code: Int(exit.code), userInfo: [NSLocalizedDescriptionKey: "mlx_lm.generate exited with code \(exit.code)"]))
@@ -103,6 +118,12 @@ actor InferenceService {
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            // Set up front (before the consumer attaches): cancelling the Task that
+            // awaits this stream terminates the spawned child and stops the reader.
+            continuation.onTermination = { @Sendable _ in
+                procBox.terminate()
+                work.cancel()
             }
         }
     }
@@ -168,7 +189,8 @@ actor InferenceService {
         resolvedModel: String,
         prompt: String,
         params: InferenceParams,
-        continuation: AsyncThrowingStream<String, Error>.Continuation
+        continuation: AsyncThrowingStream<String, Error>.Continuation,
+        procBox: InferenceProcBox
     ) async {
         let helper = PathResolver.helpersDir.appendingPathComponent("diffusion_generate.py").path
         let args = [
@@ -187,8 +209,11 @@ actor InferenceService {
 
         do {
             let proc = try await ProcessRunner.spawn(executable: python, arguments: args, environment: env)
+            procBox.set(proc)
             var helperError: String?
             for await line in proc.stdout {
+                // Consumer abandoned the stream: terminate the helper and stop.
+                if Task.isCancelled { proc.terminate(); break }
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard trimmed.hasPrefix("{"),
                       let data = trimmed.data(using: .utf8),
@@ -207,6 +232,7 @@ actor InferenceService {
                     break
                 }
             }
+            if Task.isCancelled { continuation.finish(); return }
             let exit = try await proc.exit.value
             if let helperError {
                 Log.error("diffusion_generate: \(helperError)", .model)
@@ -221,5 +247,25 @@ actor InferenceService {
             Log.error("diffusion_generate spawn failed: \(error.localizedDescription)", .model)
             continuation.finish(throwing: error)
         }
+    }
+}
+
+/// Thread-safe holder for the spawned subprocess so the stream's `@Sendable`
+/// `onTermination` closure (set up before the child exists) can terminate it once
+/// it's been spawned. `RunningProcess` is already `@unchecked Sendable` and its
+/// `terminate()` is a no-op when the child isn't running, so this is safe to call
+/// from the termination closure regardless of timing.
+private final class InferenceProcBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var proc: RunningProcess?
+
+    func set(_ p: RunningProcess) {
+        lock.lock(); defer { lock.unlock() }
+        proc = p
+    }
+
+    func terminate() {
+        lock.lock(); let p = proc; lock.unlock()
+        p?.terminate()
     }
 }

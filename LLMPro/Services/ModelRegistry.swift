@@ -238,10 +238,19 @@ final class ModelRegistry {
             PathResolver.hfHome.appendingPathComponent(".locks", isDirectory: true).appendingPathComponent(safe, isDirectory: true),
             PathResolver.hfHome.appendingPathComponent("hub", isDirectory: true).appendingPathComponent(".locks", isDirectory: true).appendingPathComponent(safe, isDirectory: true),
         ]
-        // Custom-models dir uses the bare repoID as a folder name. We always
-        // check it — a HF repoID with a slash won't accidentally match a
-        // folder, since the slash isn't a valid path component here.
-        candidates.append(PathResolver.modelsCustomDir.appendingPathComponent(repoID, isDirectory: true))
+        // Custom-models dir uses the bare repoID as a folder name. Only add it as
+        // a delete candidate when repoID is a single safe path component:
+        // a value containing "/" would nest (or, with "..", traverse) out of the
+        // custom-models dir, so removeItem could delete outside it. Require the
+        // resolved URL to be a DIRECT child of modelsCustomDir.
+        if !repoID.contains("/"), !repoID.contains("..") {
+            let customDir = PathResolver.modelsCustomDir.appendingPathComponent(repoID, isDirectory: true)
+            if customDir.deletingLastPathComponent().standardizedFileURL.path == PathResolver.modelsCustomDir.standardizedFileURL.path {
+                candidates.append(customDir)
+            } else {
+                Log.error("ModelRegistry.delete: rejected unsafe custom-model path for repoID '\(repoID)'", .model)
+            }
+        }
 
         var freed: Int64 = 0
         for url in candidates where FileManager.default.fileExists(atPath: url.path) {

@@ -159,12 +159,14 @@ enum HuggingFaceError: LocalizedError {
     case badURL
     case http(Int)
     case decode
+    case timeout
 
     var errorDescription: String? {
         switch self {
         case .badURL: "Bad HuggingFace URL"
         case .http(let s): "HTTP error \(s)"
         case .decode: "Could not decode HuggingFace response"
+        case .timeout: "HuggingFace request timed out — check your connection and try again"
         }
     }
 }
@@ -248,8 +250,16 @@ actor HuggingFaceClient {
 
     private func get<T: Decodable>(_ type: T.Type, url: URL) async throws -> T {
         var req = URLRequest(url: url)
+        // Bound every metadata/search/preview request so a slow or stalled HF
+        // endpoint can't freeze the UI with no recourse; surface a friendly timeout.
+        req.timeoutInterval = 20
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do {
+            (data, resp) = try await URLSession.shared.data(for: req)
+        } catch let urlError as URLError where urlError.code == .timedOut {
+            throw HuggingFaceError.timeout
+        }
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw HuggingFaceError.http(http.statusCode)
         }

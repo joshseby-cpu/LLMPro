@@ -40,11 +40,14 @@ final class DownloadService {
         }
 
         let token = KeychainHelper.readHFToken() ?? ""
+        // Token travels via the HF_TOKEN env var so it never appears in argv / `ps`.
+        var env = ["HF_HOME": PathResolver.hfHome.path]
+        if !token.isEmpty { env["HF_TOKEN"] = token }
         do {
             let _ = try await ProcessRunner.runCapturing(
                 executable: python,
-                arguments: [helper.path, repoID, PathResolver.hfHome.path, token],
-                environment: ["HF_HOME": PathResolver.hfHome.path],
+                arguments: [helper.path, repoID, PathResolver.hfHome.path],
+                environment: env,
                 onStdout: { [weak self] line in
                     Task { @MainActor in self?.handle(line: line, repoID: repoID) }
                 },
