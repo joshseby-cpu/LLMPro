@@ -2750,9 +2750,17 @@ build + the 39-test suite, commit locally (push is the user's call). Running tal
   now offers a "Resume lesson" card for jobs orphaned by an app restart (see the
   RESOLVED note above). New `TrainingService.latestAdapterCheckpoint(in:)` +
   Monitor `resumeCard`/`attemptResume`. Build green.
-- **Iter 7 — delete dead `AgentTemplate.swift`** (this commit): the 8-preset
+- **Iter 7 — delete dead `AgentTemplate.swift`** (`afebf99`): the 8-preset
   starter-template type for the removed switchable-agent flow was unreferenced
   (grep-confirmed zero external uses) since the team model replaced it. Removed
   the file, regenerated the project, and corrected the current-state doc
   references (ARCHITECTURE/CONVENTIONS/WORKFLOWS/STATE/CLAUDE) that still called
   it "dead code" rather than deleted. Build green.
+- **Iter 8 — low-disk warning banner** (this commit): new pure-Foundation
+  `Core/DiskSpace.swift` (`freeGBForImportantUsage()` + pure `tier(freeGB:)`) and
+  the first `Features/Shared/` view, `LowDiskWarningBanner` (amber <20 GB / red
+  <5 GB / hidden otherwise; polls every 30s), placed atop the Models and Teach
+  tabs — model downloads + training could previously exhaust the disk silently.
+  Also folded in the stale-badge fix: Models-tab diffusion badge now reads
+  "Diffusion · chat + Code" (was "chat only"), with the matching doc references
+  de-staled. Build green (incl. the 80ms type-check gate).

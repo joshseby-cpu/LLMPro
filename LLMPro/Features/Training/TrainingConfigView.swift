@@ -118,6 +118,7 @@ struct TrainingConfigView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    LowDiskWarningBanner()
                     headline
                     if usePreferenceMode {
                         preferenceModeBanner

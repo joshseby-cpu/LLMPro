@@ -38,7 +38,8 @@ struct ModelsBrowserView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            VStack(spacing: 8) {
+                LowDiskWarningBanner()
                 searchBar
                 content
             }
@@ -495,12 +496,12 @@ private struct LocalModelRow: View {
     @ViewBuilder
     private var diffusionBadge: some View {
         if model.isDiffusion {
-            Label("Diffusion · chat only", systemImage: "sparkles")
+            Label("Diffusion · chat + Code", systemImage: "sparkles")
                 .font(.caption2)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(Color.purple.opacity(0.15), in: Capsule())
                 .foregroundStyle(.purple)
-                .help("This is a diffusion model — great for chatting in Try it out, but it can't be fine-tuned in Teach or Practice.")
+                .help("This is a diffusion model — great for chatting in Try it out and using in Code, but it can't be fine-tuned in Teach or Practice.")
         }
     }
 }

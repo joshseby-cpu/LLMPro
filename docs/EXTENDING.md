@@ -229,7 +229,7 @@ chat path; step 5b adds the agentic-server path if you want it in the Code tab.)
    (Teach) and [`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift)
    (Practice), and badge it in
    [`ModelsBrowserView`](../LLMPro/Features/Models/ModelsBrowserView.swift)
-   (DiffusionGemma's badge reads "Diffusion · chat only") so the user knows it can't be
+   (DiffusionGemma's badge reads "Diffusion · chat + Code") so the user knows it can't be
    taught. Keep the loop framing — a guest model joins every node except the transform
    it can't undergo (here, the fine-tune edges); don't fake a training flow
    (see [`CONCEPT.md`](CONCEPT.md#non-fine-tunable-guest-models-diffusiongemma--on--test---use-off-the-fine-tune-edges)).
