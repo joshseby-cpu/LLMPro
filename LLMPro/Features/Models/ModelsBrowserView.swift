@@ -424,6 +424,7 @@ private struct LocalModelRow: View {
                 Text("\(model.architecture) · \(model.quantization) · \(model.humanSize)")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            diffusionBadge
             Spacer()
             if isInUse {
                 Label("In use", systemImage: "lock.fill")
@@ -485,6 +486,22 @@ private struct LocalModelRow: View {
             .help(isInUse ? "Stop the running lesson first" : "Delete from disk to free space")
         }
         .padding(.vertical, 2)
+    }
+
+    /// Small inline tag flagging DiffusionGemma checkpoints, which are
+    /// inference-only — usable in Try it out but not in Teach / Practice
+    /// (mlx-lm can't LoRA-train a diffusion LM). Mirrors the capsule-badge
+    /// style used elsewhere in the app.
+    @ViewBuilder
+    private var diffusionBadge: some View {
+        if model.isDiffusion {
+            Label("Diffusion · chat only", systemImage: "sparkles")
+                .font(.caption2)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.purple.opacity(0.15), in: Capsule())
+                .foregroundStyle(.purple)
+                .help("This is a diffusion model — great for chatting in Try it out, but it can't be fine-tuned in Teach or Practice.")
+        }
     }
 }
 

@@ -87,6 +87,14 @@ struct TrainingConfigView: View {
         return registry.localModels.first(where: { $0.repoID == id })
     }
 
+    /// Models the user can actually fine-tune. DiffusionGemma checkpoints are
+    /// inference-only (mlx-lm LoRA / the AutoTuner don't apply to masked /
+    /// block-diffusion LMs), so they never appear in the "pick a model to teach"
+    /// picker — they stay usable in Try it out, just not here.
+    private var teachableModels: [ModelRegistry.DetectedModel] {
+        registry.localModels.filter { !$0.isDiffusion }
+    }
+
     /// The currently-selected dataset record, if any.
     private var selectedDataset: DatasetRecord? {
         guard let id = selectedDatasetID else { return nil }
@@ -220,15 +228,15 @@ struct TrainingConfigView: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("1. Pick a model to teach", systemImage: "1.circle.fill").font(.headline)
 
-            if registry.localModels.isEmpty {
+            if teachableModels.isEmpty {
                 emptyStateCard(
-                    title: "No models on this Mac yet",
-                    body: "Open the Models tab on the left and download one (Llama 3.2 3B is a great first pick).",
+                    title: "No models to teach yet",
+                    body: "Open the Models tab on the left and download one (Llama 3.2 3B is a great first pick). Diffusion models can't be taught — they're chat-only.",
                     icon: "cube.box"
                 )
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 12)], spacing: 12) {
-                    ForEach(registry.localModels) { model in
+                    ForEach(teachableModels) { model in
                         ModelChoiceCard(
                             model: model,
                             isSelected: selectedModelRepoID == model.repoID,

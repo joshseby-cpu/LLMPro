@@ -273,6 +273,14 @@ Peak memory: F GB
 
 We yield lines between the `==========` markers as streaming tokens.
 
+**Diffusion models do NOT go through this path.** A `model_type: diffusion_gemma`
+checkpoint (Google's DiffusionGemma — a masked/block-diffusion LM with no
+autoregressive mlx-lm class) is detected by `ModelRegistry.DetectedModel.isDiffusion`
+and routed by `InferenceService.stream` to the vendored `diffusion_generate.py`
+helper instead of `mlx_lm generate` (see [§3 `diffusion_generate.py`](#diffusion_generatepy--diffusiongemma-inference-non-mlx-lm)).
+`mlx_lm generate`/`server`/`lora` **cannot run a diffusion LM**, so these models are
+chat-only "guests" — inference works, but Teach / Practice / DPO exclude them.
+
 **`--model` is resolved to an absolute path for local models (Arena fix).**
 `InferenceService.stream` now resolves a **bare local-model name** (a custom
 `models/<name>` from GGUF import / strip-vision / abliterate / trained-and-saved) to
@@ -583,6 +591,124 @@ helper (reuses the live server's `reasoning` SSE delta via `OpenAIChatClient.str
 + `chat_template_kwargs:{enable_thinking:true}`); the **Weights** pane is pure-Swift
 safetensors-header parsing ([`Core/SafetensorsHeader.swift`](../LLMPro/Core/SafetensorsHeader.swift)).
 
+### `diffusion_generate.py` — DiffusionGemma inference (non-mlx-lm)
+
+[`diffusion_generate.py`](../LLMPro/Resources/helpers/diffusion_generate.py) runs
+Google's **DiffusionGemma** (`model_type: diffusion_gemma`) — a **masked / block-
+diffusion** LM that decodes by iteratively unmasking a fixed-size canvas, **not**
+autoregressively. mlx-lm's `generate`/`server`/`lora` have no class for it, so this is
+the **only** path that can run it, and it is **inference-only** (it cannot be
+fine-tuned by mlx-lm LoRA/AutoTuner — it's excluded from Teach/Practice). Consumed by
+[`InferenceService.swift`](../LLMPro/Services/InferenceService.swift) (the Arena routes
+diffusion models here; see [`mlx_lm generate`](#mlx_lm-generate--inference) above). The
+verified target is the prebuilt `mlx-community/diffusiongemma-26B-A4B-it-OptiQ-4bit`
+(~15 GB).
+
+CLI:
+```
+python <helpers>/diffusion_generate.py --model <ABS-PATH-or-repo-id> --prompt <text>
+  [--max-tokens 512] [--temperature 0.0]
+  [--sampler confidence-threshold|entropy-bound]
+```
+
+- **`--sampler`** (default `confidence-threshold`) is the diffusion **unmasking**
+  sampler, not a token sampler — a diffusion-specific knob with no mlx-lm analogue.
+- **`--model`** accepts a local dir (resolved/abs) or an HF repo id (the vendored
+  `dg.load` treats an existing directory as a local path, else an HF repo id).
+
+Env: `LLMPRO_MEM_LIMIT_GB` (default 108 — **self-pins** MLX memory because this
+helper bypasses `mlx_run.py`, exactly like `inspect_attention.py`), `HF_HOME`,
+`PYTHONUNBUFFERED`.
+
+**The helper applies the Gemma chat template (load-bearing).** The model is an
+instruct (`-it`) checkpoint, but the vendored `stream_generate` does **not** template
+a raw string — feeding it an un-templated prompt produced garbage (a bug found and
+fixed during live verification). So the helper calls
+`tokenizer.apply_chat_template([{role:"user",content:prompt}], add_generation_prompt=True)`
+and **pre-tokenizes with `add_special_tokens=False`** (the template already carries
+BOS; the string path would add a second BOS), then passes the token-id list to
+`stream_generate`. It falls back to the raw string only if the tokenizer exposes no
+chat template.
+
+JSON events on stdout (one object per line, standard protocol):
+
+```jsonc
+{"event": "start", "model": "…", "max_tokens": 512, "temperature": 0.0, "sampler": "confidence-threshold"}
+{"event": "progress", "stage": "load" | "generate"}
+{"event": "token", "text": "<revealed text segment>"}   // one per non-draft canvas reveal
+{"event": "done", "text": "<full output>", "ms": 1234,
+ "prompt_tokens": 41, "generation_tokens": 80,
+ "finish_reason": "stop", "peak_memory_gb": 16.8}
+{"event": "error", "message": "<sourced from the exception>"}
+```
+
+Intermediate **draft** frames (partial canvas-unmasking states) are skipped — only
+non-draft revealed segments are emitted as `token` events and accumulated into the
+final `text`. Helper-specific exit codes: **3** (vendored import / model-load
+failure), **4** (generation failure), in addition to the shared `0`/`130`.
+
+#### Vendored decoder: `diffusion_vendor/` (copied, NOT pip-installed)
+
+The DiffusionGemma decoder is **vendored into the repo**, not a pip dependency:
+[`LLMPro/Resources/helpers/diffusion_vendor/`](../LLMPro/Resources/helpers/diffusion_vendor/)
+holds the `optiq/vlm/...` subtree from the MIT-licensed
+[`mlx-optiq`](https://pypi.org/project/mlx-optiq/) package (**v0.2.3**) — ~34 `.py`
+files: the `optiq.vlm.diffusion_gemma` `load`/`stream_generate` closure, the Gemma-4
+backbone, and the `_mlxvlm` masked-diffusion decode loop. Provenance, the full MIT
+license text, and the deliberately-excluded subtrees are in
+[`diffusion_vendor/VENDORED.md`](../LLMPro/Resources/helpers/diffusion_vendor/VENDORED.md).
+
+- **Why vendored, not installed:** copying a *reviewed* subset keeps it pinned and
+  auditable and shrinks the attack surface — the upstream package's
+  network/subprocess/agent machinery (`optiq/{lab,runtime,serve,cli,core,eval,lora,ops}`,
+  `sandbox.py`, `mlx_lm_patches/`, the `*_server.py`/`*_shim.py` modules) is
+  **deliberately not copied**. The two `__init__.py` files that had eager side-effect
+  imports upstream were replaced with docstring-only stubs. See
+  [`CONVENTIONS.md`](CONVENTIONS.md#vendoring-the-diffusiongemma-decoder-copy-not-pip).
+- **Self-contained deps:** the closure imports only `mlx`, `mlx-lm`
+  (`mlx_lm.models.{cache,base,switch_layers}`, `mlx_lm.generate`), `transformers`,
+  `numpy`, `Pillow`, and `huggingface_hub` — **all already in the venv, no torch**.
+  Only `pillow` was newly added to `PythonRuntime.bootstrap()` for it (see §1 / the
+  bootstrap pip list).
+- **Layout matters:** the `optiq/` package layout is preserved so the original
+  relative imports (`from ..gemma4 import …`) resolve once `diffusion_vendor/` is on
+  `sys.path`. `diffusion_generate.py` computes that path relative to its own
+  `__file__` and `sys.path.insert(0, …)`s it, then `import optiq.vlm.diffusion_gemma`.
+- **Bundle copy is recursive:** `PythonRuntime.installHelpers()` (which previously
+  copied only flat `.py` files) now **also recursively copies the whole
+  `diffusion_vendor/` subtree** out of the bundle into
+  `runtime/helpers/diffusion_vendor/`, alongside `diffusion_generate.py` — a flattened
+  copy would break `import optiq.vlm.diffusion_gemma`. See §6 (filesystem layout).
+
+#### `ModelRegistry.DetectedModel.isDiffusion` (config detection)
+
+`ModelRegistry.scan()` sets `DetectedModel.isDiffusion = true` when a repo's
+`config.json` has **top-level `model_type == "diffusion_gemma"`** *or* an
+`architectures` entry whose name **starts with `DiffusionGemma`**. (The wrapper's
+top-level `model_type` stays `"diffusion_gemma"` even though the inner text tower is
+`"diffusion_gemma_text"`, so the match is on the wrapper.) This flag is the single
+source of truth that fans out to: `InferenceService` routing (→ `diffusion_generate.py`),
+the Teach + Practice model-picker exclusions (`!isDiffusion`), and the Models-tab
+"Diffusion · chat only" badge.
+
+### `InferenceService` ↔ `ChatSession` streaming contract (yield-ready-to-append)
+
+`InferenceService.stream` yields **chunks that the consumer appends RAW** — the caller
+no longer adds a separator. The two inference paths now agree on this contract:
+
+- **mlx_lm path** (`mlx_lm generate`) yields each stdout line **with its newline
+  re-added** (`continuation.yield(line + "\n")`), because mlx-lm's output is
+  line-granular.
+- **Diffusion path** (`diffusion_generate.py`) yields the **raw `token` text segment**
+  as it denoises (no added newline) — diffusion output is not line-oriented.
+
+[`ChatSession.send`](../LLMPro/Features/Chat/ChatModels.swift) consumes both with
+`messages[i].text.append(chunk)` — **raw, not `chunk + "\n"`**. This fixed a
+per-token-newline bug where diffusion output rendered **one token per line** (the old
+`chunk + "\n"` append double-spaced the diffusion path). The rule for any future
+inference path: **yield chunks ready to append; whoever produces them adds whatever
+separator they need.** mlx-lm re-adds `\n`; diffusion yields raw tokens.
+
 ### Exit codes
 
 ```
@@ -748,7 +874,11 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 │   │   ├── mem_probe.py              ← Metal working-set ceiling + device facts (JSON, one-shot)
 │   │   ├── model_memory.py           ← expert/non-expert byte breakdown from safetensors HEADERS
 │   │   ├── profile_experts.py        ← router top-k activation histogram + cold-expert list
-│   │   └── mlx_run.py                ← always-on MLX tuner (pin memory/wired/cache to the Metal ceiling → runpy the real cmd)
+│   │   ├── mlx_run.py                ← always-on MLX tuner (pin memory/wired/cache to the Metal ceiling → runpy the real cmd)
+│   │   ├── diffusion_generate.py     ← DiffusionGemma (masked/block-diffusion) inference; self-pins mem, streams token events
+│   │   └── diffusion_vendor/         ← VENDORED (copied, not pip) optiq.vlm DiffusionGemma decoder (MIT, mlx-optiq v0.2.3)
+│   │       ├── optiq/vlm/...         ← the ~34-file inference closure; subtree copied recursively, layout preserved
+│   │       └── VENDORED.md           ← provenance + MIT license + the excluded subtrees
 │   │
 │   │   NOTE: any helper that rewrites weight tensors (strip_vision, manage_experts,
 │   │   add_expert) MUST use mlx.core (mx.load / mx.save_safetensors with

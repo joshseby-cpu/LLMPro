@@ -174,6 +174,7 @@ it's the doc that explains *why* the app is shaped this way.
         python -m mlx_lm lora -c config.yaml          (SFT training)
         python -m mlx_lm_lora.train --train-mode dpo  (DPO "Teach by preference" — separate mlx-lm-lora pkg, on-demand)
         python -m mlx_lm generate --adapter-path ...  (inference)
+        python diffusion_generate.py     (DiffusionGemma masked/block-diffusion inference — NOT mlx_lm; vendored optiq.vlm decoder; chat-only guest)
         python -m mlx_lm server --port <free> ...     (Code tab: long-lived agent server)
         python -m mlx_lm fuse  --export-gguf ...      (export)
         python hf_download.py            (model download, JSON-event progress)
@@ -189,7 +190,7 @@ it's the doc that explains *why* the app is shaped this way.
 Disk layout under `~/Library/Application Support/LLMPro/`:
 ```
 runtime/.venv/          uv-managed Python 3.11 venv with mlx-lm installed
-runtime/helpers/        copy of helper scripts from app bundle
+runtime/helpers/        copy of helper scripts from app bundle (incl. diffusion_vendor/ — the recursively-copied vendored DiffusionGemma decoder)
 hf/                     HuggingFace cache (HF_HOME) — models AND datasets
 adapters/<job-uuid>/    one folder per training job: config.yaml + adapters.safetensors + job.json + training.log
 datasets/<ds-uuid>/     train.jsonl + valid.jsonl + test.jsonl (chat schema; OR a preference set {prompt,chosen,rejected[,system]} for DPO)
@@ -294,7 +295,8 @@ LLMPro/
 │   ├── Export/     (Save & Use) ExportWizardView
 │   └── Settings/   SettingsView, FirstRunView
 └── Resources/
-    ├── helpers/    Python helper scripts (download, prepare-dataset, strip-vision, abliterate, etc.)
+    ├── helpers/    Python helper scripts (download, prepare-dataset, strip-vision, abliterate, diffusion_generate, etc.)
+    │               + diffusion_vendor/ (VENDORED, not pip: the MIT optiq.vlm DiffusionGemma decoder; see CONTRACTS §3)
     ├── recipes/    YAML training recipe presets (coding fine-tunes for various base models)
     └── Assets.xcassets/  AppIcon
 ```
@@ -316,6 +318,7 @@ The app uses friendly names that don't always match the code. Keep both in mind:
 | Teach | TrainingConfigView |
 | Progress | TrainingMonitorView · JobRegistry |
 | Try it out | ArenaView · InferenceService |
+| A "Diffusion · chat only" model (DiffusionGemma, a chat-only **guest**) | `model_type: diffusion_gemma` · `ModelRegistry.DetectedModel.isDiffusion` · `diffusion_generate.py` (vendored `optiq.vlm` decoder) · `InferenceService` routes it here — **inference-only**: download + chat, **excluded from Teach/Practice/DPO** (mlx-lm can't run or fine-tune a diffusion LM) |
 | "Score it" / the "Report card" (the scored Test node) | EvalService · EvalRun · eval_pass_rate.py (pass@k) · evals/ — comparable score per (model+adapter), drives the retrain back-edge |
 | "Grade it" (the Progress completion CTA) | TrainingMonitorView CTA → `.openChatWithModel` with `ModelHandoff.autoScore: true` (lands in the Test node + auto-scores) |
 | "Which answer is better?" 👍 / "Teach by preference" (the DPO loop) | ArenaView `preferenceBar` · `PreferenceService` · `DatasetSchema.preference` · `TrainMode.dpo` · `mlx_lm_lora.train` · `PreferenceHandoff`/`.openTrainingWithPreferences` — preference pairs → a DPO fine-tune, the second back-edge |

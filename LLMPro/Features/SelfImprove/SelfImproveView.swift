@@ -30,6 +30,14 @@ struct SelfImproveView: View {
         return runs.first(where: { $0.id == id })
     }
 
+    /// Models that can practice. Practice fine-tunes each round (LoRA on the
+    /// candidates that pass), so DiffusionGemma checkpoints — which mlx-lm can't
+    /// LoRA-train — are excluded here just like in Teach. They stay usable for
+    /// chat in Try it out.
+    private var practiceableModels: [ModelRegistry.DetectedModel] {
+        registry.localModels.filter { !$0.isDiffusion }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -52,7 +60,7 @@ struct SelfImproveView: View {
         .task {
             await registry.scan()
             if pickedModelRepoID.isEmpty {
-                pickedModelRepoID = registry.localModels.first?.repoID ?? ""
+                pickedModelRepoID = practiceableModels.first?.repoID ?? ""
             }
         }
     }
@@ -79,12 +87,12 @@ struct SelfImproveView: View {
                 Text("Waiting for the Python runtime to finish setting up…")
                     .foregroundStyle(.secondary)
             }
-        } else if registry.localModels.isEmpty {
+        } else if practiceableModels.isEmpty {
             cardBox {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("You don't have any models downloaded yet.")
+                    Text("No models that can practice yet.")
                         .font(.headline)
-                    Text("Open the Models tab, search HuggingFace, and download something coding-capable (Qwen2.5-Coder-1.5B is a fast first try).")
+                    Text("Open the Models tab, search HuggingFace, and download something coding-capable (Qwen2.5-Coder-1.5B is a fast first try). Diffusion models can't practice — they're chat-only.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -96,7 +104,7 @@ struct SelfImproveView: View {
 
                     pickerRow("Which model should practice?", systemImage: "cpu") {
                         Picker("", selection: $pickedModelRepoID) {
-                            ForEach(registry.localModels) { m in
+                            ForEach(practiceableModels) { m in
                                 Text(m.displayName).tag(m.repoID)
                             }
                         }

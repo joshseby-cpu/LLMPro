@@ -83,6 +83,10 @@ final class PythonRuntime {
                 // `gguf` is the tiny pure-python reader used by gguf_to_mlx.py to
                 // read GGUF metadata/vocab for the GGUF→MLX importer (no PyTorch).
                 "gguf",
+                // `pillow` (PIL) is pulled in by the vendored DiffusionGemma
+                // image-processing import path (optiq.vlm.gemma4.image_processing)
+                // that diffusion_generate.py loads. No torch — PIL + numpy only.
+                "pillow",
                 // `mlx-lm-lora` is the separate preference-tuning trainer (DPO etc.)
                 // launched as `python -m mlx_lm_lora.train -c config.yaml`. It's a
                 // small add-on on top of mlx-lm, so it ships in the base install for
@@ -244,7 +248,7 @@ final class PythonRuntime {
                      "humaneval_pull", "self_improve_round", "eval_pass_rate",
                      "merge_models", "add_expert", "manage_experts",
                      "mem_probe", "model_memory", "profile_experts", "mlx_run",
-                     "inspect_attention", "gguf_to_mlx"] {
+                     "inspect_attention", "gguf_to_mlx", "diffusion_generate"] {
             guard let resourceURL = Bundle.main.url(forResource: name, withExtension: "py", subdirectory: "helpers")
                                   ?? Bundle.main.url(forResource: name, withExtension: "py")
             else { continue }
@@ -252,6 +256,23 @@ final class PythonRuntime {
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.copyItem(at: resourceURL, to: dest)
         }
+        try installDiffusionVendor(into: destDir)
+    }
+
+    /// Copy the vendored DiffusionGemma inference subtree out of the app bundle
+    /// into `runtime/helpers/diffusion_vendor/`, preserving its directory
+    /// structure. `diffusion_generate.py` computes the vendor path relative to
+    /// its own `__file__`, so the subtree must sit next to it as a sibling
+    /// `diffusion_vendor/` with `optiq/vlm/...` intact (a flattened group would
+    /// break `import optiq.vlm.diffusion_gemma`). The folder reference in
+    /// project.yml ships it under `LLMPro.app/Contents/Resources/diffusion_vendor/`.
+    /// We blow away any stale copy first so bundle edits propagate on relaunch,
+    /// matching how the flat `.py` helpers above are refreshed.
+    private func installDiffusionVendor(into destDir: URL) throws {
+        guard let src = Bundle.main.url(forResource: "diffusion_vendor", withExtension: nil) else { return }
+        let dest = destDir.appendingPathComponent("diffusion_vendor", isDirectory: true)
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.copyItem(at: src, to: dest)
     }
 
     private func appendLog(_ line: String) {

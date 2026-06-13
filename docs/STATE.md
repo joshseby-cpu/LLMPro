@@ -128,6 +128,45 @@ scope.
   name, mlx-lm treated it as an HF repo id, and any local custom model failed with
   "exited with code 1". HF repo ids (with `/`) pass through unchanged. (Found while
   verifying the DPO loop, since DPO captures run against a local model in the Arena.)
+- ✅ **DiffusionGemma (inference-only "guest" model) — verified live end-to-end.**
+  Google's `google/diffusiongemma-26B-A4B-it` is a **masked/block-diffusion** LM
+  (`model_type: diffusion_gemma`, decodes by iteratively unmasking a fixed canvas) —
+  **not** autoregressive, so mlx-lm's `generate`/`server` can't run it and mlx-lm
+  LoRA/AutoTuner **can't fine-tune** it. So in LLMPro it's an **inference-only guest**:
+  download + chat (Try-it-out), **excluded from Teach/Practice/DPO**. It runs the
+  prebuilt `mlx-community/diffusiongemma-26B-A4B-it-OptiQ-4bit` (~15 GB). The decoder is
+  **vendored, not pip-installed** — the MIT `optiq.vlm` subset of `mlx-optiq` v0.2.3,
+  copied into [`Resources/helpers/diffusion_vendor/`](../LLMPro/Resources/helpers/diffusion_vendor/)
+  (~34 `.py` + `VENDORED.md`; the package's network/subprocess/agent subtrees were
+  deliberately left out; self-contained on `mlx`/`mlx-lm`/`transformers`/`numpy`/`Pillow`
+  — **no torch**). Helper [`diffusion_generate.py`](../LLMPro/Resources/helpers/diffusion_generate.py)
+  adds the vendor dir to `sys.path`, imports `optiq.vlm.diffusion_gemma`, **applies the
+  Gemma chat template** (+ pre-tokenizes with `add_special_tokens=False`), self-pins
+  MLX memory (bypasses `mlx_run.py`), and streams the standard JSON-event protocol
+  (`start`/`progress`/`token`/`done`/`error`). Swift: `ModelRegistry.DetectedModel.isDiffusion`
+  (config `model_type == "diffusion_gemma"` / `DiffusionGemma*` arch); `InferenceService.stream`
+  routes diffusion models to `diffusion_generate.py` (direct spawn, self-pinned mem);
+  `PythonRuntime.installHelpers()` recursively copies the `diffusion_vendor/` subtree +
+  `diffusion_generate.py`, `bootstrap()` adds `pillow`; Teach + Practice pickers exclude
+  `isDiffusion`; Models rows show a "Diffusion · chat only" badge. **Verified live**
+  through the UI on `mlx-community/diffusiongemma-26B-A4B-it-OptiQ-4bit` (~15 GB
+  downloaded): the model shows in Models with the badge; in Try-it-out it generated
+  coherent, correctly-formatted prose (a haiku about Apple Silicon; a 2-sentence "why
+  the ocean is salty"; load ~16.8 GB peak, ~0.6–3 s gen after a cold load); it is absent
+  from the Teach + Practice model pickers; an mlx-lm regression check (a normal qwen
+  model in the Arena) still streams correctly after the streaming-contract change; all
+  13 sidebar tabs swept with no crash; `llmpro.log` had zero ERROR/FAULT after launch
+  and no new `DiagnosticReports/LLMPro-*.ips`. **Two bugs found and fixed during
+  testing, both re-verified:** (1) the chat template wasn't applied (un-templated prompt
+  → garbage) — the helper now templates + pre-tokenizes; (2) a per-token-newline
+  rendering bug — `InferenceService` now yields ready-to-append chunks (mlx_lm re-adds
+  its line `\n`, diffusion yields raw token segments) and `ChatSession.send` appends
+  `chunk` **raw** (was `chunk + "\n"`). The (already-known) GGUF→MLX chat-template gap
+  is unrelated and **still open** (see Half-done — a separately-converted test model
+  still needs a manual template). Contract in
+  [`CONTRACTS.md`](CONTRACTS.md#diffusion_generatepy--diffusiongemma-inference-non-mlx-lm);
+  decisions in [`CONVENTIONS.md`](CONVENTIONS.md#vendoring-the-diffusiongemma-decoder-copy-not-pip);
+  loop framing in [`CONCEPT.md`](CONCEPT.md#inference-only-guest-models-diffusiongemma--on--test-off-the-fine-tune-loop).
 - ✅ **Save & Use (Export)** — adapter zip / fused safetensors / GGUF, one-click
   Ollama install with chat-template detection.
 - ✅ **Custom app icon** — purple gradient squircle with graduation cap; PNG
@@ -548,6 +587,46 @@ for the full reasoning. Quick reference:
 
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
+
+- **DiffusionGemma (inference-only "guest" model) — VERIFIED LIVE end-to-end; landed
+  in Working.** Added the ability to run Google's `google/diffusiongemma-26B-A4B-it` —
+  a **masked/block-diffusion** LM (`model_type: diffusion_gemma`, decodes by unmasking
+  a fixed canvas) — as an **inference-only** model: it can be downloaded + chatted in
+  Try-it-out but is **excluded from Teach/Practice/DPO** because mlx-lm can't run it
+  through `generate`/`server` and can't LoRA-fine-tune it. Runs the prebuilt
+  `mlx-community/diffusiongemma-26B-A4B-it-OptiQ-4bit` (~15 GB). **Decoder is VENDORED,
+  not pip** — the MIT `optiq.vlm` DiffusionGemma subset of `mlx-optiq` v0.2.3 copied
+  into `Resources/helpers/diffusion_vendor/` (~34 `.py` + `VENDORED.md`; the package's
+  network/subprocess/serve/cli/agent subtrees deliberately excluded → smaller attack
+  surface + pinned; self-contained on `mlx`/`mlx-lm`/`transformers`/`numpy`/`Pillow`,
+  no torch). New helper `diffusion_generate.py` adds the vendor dir to `sys.path`,
+  imports `optiq.vlm.diffusion_gemma`, **applies the Gemma chat template** + pre-tokenizes
+  with `add_special_tokens=False`, self-pins MLX memory (bypasses `mlx_run.py`), streams
+  `start`/`progress`/`token`/`done`/`error`. Swift: `ModelRegistry.DetectedModel.isDiffusion`
+  (config `model_type`/arch detect); `InferenceService.stream` routes diffusion →
+  `diffusion_generate.py` (direct spawn); `PythonRuntime.installHelpers()` now
+  **recursively** copies the `diffusion_vendor/` subtree (was flat-`.py`-only) +
+  `diffusion_generate.py`, `bootstrap()` adds `pillow`; `TrainingConfigView` (Teach) +
+  `SelfImproveView` (Practice) filter `!isDiffusion`; `ModelsBrowserView` shows a
+  "Diffusion · chat only" badge. **Streaming-contract change worth noting:**
+  `InferenceService` now yields *ready-to-append* chunks (mlx_lm re-adds its line `\n`,
+  diffusion yields raw token segments) and `ChatSession.send` appends `chunk` **raw**
+  (was `chunk + "\n"`) — fixes a per-token-newline bug that rendered diffusion output
+  one token per line; the mlx_lm path is unchanged in behavior. **Verified live** in
+  the UI on the 4-bit OptiQ model: badge shown in Models; coherent correctly-formatted
+  prose in Try-it-out (haiku about Apple Silicon; 2-sentence "why the ocean is salty";
+  ~16.8 GB peak, ~0.6–3 s gen after cold load); absent from Teach/Practice pickers; a
+  normal qwen model still streams in the Arena (mlx-lm regression check); all 13 tabs
+  swept, no crash; `llmpro.log` zero ERROR/FAULT, no new `.ips`. **Two bugs found +
+  fixed + re-verified:** chat-template-not-applied (garbage output), and the
+  per-token-newline rendering. The (already-known) **GGUF→MLX chat-template gap remains
+  open** (separate task; a converted test model still needs a manual template) — it is
+  unrelated to this work. **Non-bug note:** a 6-day-old temp test model
+  (`models/qwen2.5-0.5b-instruct-mlx`) had vanished from disk; this was **NOT an app
+  bug** — there is no spontaneous model-deletion path in the code (only the explicit
+  user `ModelRegistry.delete(repoID:)`) — and it was simply re-created from its on-disk
+  GGUF for testing. Docs updated (CONTRACTS / ARCHITECTURE / CONCEPT / CONVENTIONS /
+  EXTENDING / STATE / CLAUDE). **Source files were NOT touched by this docs pass.**
 
 - **DPO preference loop ("Teach by preference", Feature 2 of 4) — VERIFIED LIVE
   end-to-end; landed in Working. + Arena local-model inference fix.** The Arena's ③

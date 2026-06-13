@@ -135,6 +135,55 @@ Don't introduce a `lib/` module — it complicates the bundle-copy logic.
 one is permanent bundle weight — only add it for work that truly needs the Python
 ML stack.)
 
+### Vendoring the DiffusionGemma decoder (copy, not pip)
+
+To run Google's **DiffusionGemma** we needed a masked/block-diffusion decoder that
+mlx-lm doesn't have. The decoder we used is the `optiq/vlm` subset of the MIT-licensed
+[`mlx-optiq`](https://pypi.org/project/mlx-optiq/) package — and we **vendored a
+reviewed copy into the repo** ([`Resources/helpers/diffusion_vendor/`](../LLMPro/Resources/helpers/diffusion_vendor/),
+~34 `.py`) rather than `pip install`-ing the package. Why copy, not depend:
+
+- **Smaller attack surface.** `mlx-optiq` also ships network / subprocess / server /
+  agent / runtime-patch machinery (`optiq/{lab,runtime,serve,cli,core,eval,lora,ops}`,
+  `sandbox.py`, `mlx_lm_patches/`, `*_server.py`/`*_shim.py`). **None of that is in the
+  inference closure**, so we copied *only* the closure and left the dangerous subtrees
+  out. The vendor tree was grepped to confirm zero imports from the excluded subtrees
+  and zero `subprocess`/`socket`/`urllib`/`requests`/`os.system`/`pickle`/`exec`
+  usage; the two upstream `__init__.py` files with eager side-effect imports were
+  replaced with docstring-only stubs. Provenance + the full MIT text + the exclusion
+  list live in `diffusion_vendor/VENDORED.md`.
+- **Pinned + auditable.** A vendored copy is a fixed, readable snapshot (pinned to
+  `mlx-optiq` v0.2.3) — a `pip install` of an evolving package on the critical-path
+  bootstrap is exactly what we avoid (it's also why DPO's `mlx-lm-lora` is installed
+  *on-demand*, not at bootstrap — see "DPO trains via the separate `mlx-lm-lora`
+  package").
+- **Self-contained on the existing venv.** The closure imports only `mlx`, `mlx-lm`,
+  `transformers`, `numpy`, `Pillow`, `huggingface_hub` — **no torch**. Only `pillow`
+  was newly added to `bootstrap()`'s pip list for it.
+
+This is **not** a license to vendor things in general. It's the right call here
+because the alternative (a heavy pip dep that drags in network/agent code) is worse
+on both attack-surface and pinning. If you vendor anything else, document the source,
+version, license, and the excluded parts the same way (`VENDORED.md`), and keep the
+copy to the minimal closure. Contract details:
+[`CONTRACTS.md`](CONTRACTS.md#vendored-decoder-diffusion_vendor-copied-not-pip-installed).
+
+### DiffusionGemma is an inference-only "guest" model
+
+A diffusion LM (`model_type: diffusion_gemma`) **cannot be LoRA-fine-tuned by
+mlx-lm** (it's not autoregressive; AutoTuner / `mlx_lm lora` have no path for it). So
+rather than fake a training flow, DiffusionGemma is **inference-only**: download +
+chat (Try-it-out, via `diffusion_generate.py`), and **excluded from Teach, Practice,
+and DPO**. The single gate is `ModelRegistry.DetectedModel.isDiffusion` (set from
+`config.json`), which the Teach/Practice pickers filter out (`!isDiffusion`) and the
+Models tab badges ("Diffusion · chat only"). Don't add a fine-tune path for it — the
+honest behavior is "joins the loop only where it can" (download + test), which keeps
+the loop's spine intact (see [`CONCEPT.md`](CONCEPT.md#inference-only-guest-models-diffusiongemma--on--test-off-the-fine-tune-loop)).
+If you add another non-fine-tunable engine, follow the same recipe
+([`EXTENDING.md`](EXTENDING.md#add-a-non-mlx-lm-inference-path-eg-a-diffusion-model)):
+one `isDiffusion`-style flag, route in `InferenceService`, exclude from the
+fine-tune pickers.
+
 ### Apple-Silicon MLX memory tuning runs on every mlx_lm call
 
 Every mlx_lm invocation (training, inference, the coding-agent server) is routed
@@ -219,6 +268,22 @@ the pattern past a handful of named events.
 
 For more complex shared state, add a service. Cross-tab "open this in another
 tab" is the only legitimate use.
+
+### Streaming convention: `InferenceService` yields ready-to-append chunks
+
+`InferenceService.stream` yields **chunks the consumer appends RAW** — the producing
+path adds whatever separator it needs, the consumer adds nothing. Concretely:
+[`ChatSession.send`](../LLMPro/Features/Chat/ChatModels.swift) does
+`messages[i].text.append(chunk)` (not `chunk + "\n"`), and the two inference paths
+both pre-format: the **mlx_lm** path re-adds the stdout newline (`yield(line + "\n")`,
+because its output is line-granular); the **diffusion** path
+(`diffusion_generate.py`) yields raw `token` text segments (diffusion output isn't
+line-oriented). This convention exists because the old `chunk + "\n"` append in
+`ChatSession` was right for mlx-lm's lines but **double-spaced the diffusion path —
+one token per line**; lifting the newline to the producer fixed it without touching
+the mlx-lm rendering. Rule for any future inference path: **emit ready-to-append
+chunks; don't make the consumer guess the separator.** Contract:
+[`CONTRACTS.md`](CONTRACTS.md#inferenceservice--chatsession-streaming-contract-yield-ready-to-append).
 
 ### Every view carries a `#Preview` ending in `.previewEnvironment()`
 

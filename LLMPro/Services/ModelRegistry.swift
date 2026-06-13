@@ -26,6 +26,12 @@ final class ModelRegistry {
         /// How many experts the router activates per token. For dense models
         /// this is 0; for MoE typically 2 (Mixtral, Qwen-MoE) or 1.
         var expertsPerToken: Int = 0
+        /// True when this is a Google DiffusionGemma checkpoint — a masked /
+        /// block-diffusion LM with no autoregressive mlx-lm class. The Arena
+        /// routes these to the vendored `diffusion_generate.py` helper instead
+        /// of `mlx_lm generate`. Detected from config.json's top-level
+        /// `model_type == "diffusion_gemma"` (or a `DiffusionGemma*` architecture).
+        var isDiffusion: Bool = false
 
         var displayName: String { repoID.split(separator: "/").last.map(String.init) ?? repoID }
         var humanSize: String { ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file) }
@@ -319,6 +325,16 @@ final class ModelRegistry {
         let size = blobsDir.map { blobsDirectorySize(at: $0) } ?? directorySize(at: dir)
         let isMLXReady = mlxFormatLooksValid(in: dir, fm: fm)
 
+        // DiffusionGemma detection: a masked/block-diffusion LM that has no
+        // mlx-lm class, so the Arena must route it to diffusion_generate.py.
+        // Match the wrapper's top-level model_type (it stays "diffusion_gemma"
+        // even though the inner text tower is "diffusion_gemma_text"), or any
+        // architecture whose name starts with "DiffusionGemma".
+        let rawModelType = (json["model_type"] as? String)?.lowercased() ?? ""
+        let archNames = (json["architectures"] as? [String]) ?? []
+        let isDiffusion = rawModelType == "diffusion_gemma"
+            || archNames.contains { $0.hasPrefix("DiffusionGemma") }
+
         // MoE detection: read num_local_experts / num_experts from config.json.
         // Three layouts in the wild today:
         //   1. Flat top-level fields            — Mixtral / Qwen-MoE / OlmoE / Granite-MoE
@@ -356,7 +372,8 @@ final class ModelRegistry {
             sizeBytes: size,
             isMLXReady: isMLXReady,
             numExperts: numExperts,
-            expertsPerToken: expertsPerTok
+            expertsPerToken: expertsPerTok,
+            isDiffusion: isDiffusion
         )
     }
 

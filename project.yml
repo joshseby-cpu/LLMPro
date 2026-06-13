@@ -28,9 +28,17 @@ targets:
       - path: LLMPro
         excludes:
           - "Resources/uv-aarch64-apple-darwin"
+          - "Resources/helpers/diffusion_vendor"
       - path: LLMPro/Resources/uv-aarch64-apple-darwin
         type: file
         optional: true
+      # Bundle the vendored DiffusionGemma inference subtree as a folder
+      # reference so optiq/vlm/... keeps its directory structure inside
+      # LLMPro.app/Contents/Resources/ (PythonRuntime.installHelpers copies it
+      # out, and diffusion_generate.py imports optiq.vlm.diffusion_gemma from a
+      # sibling diffusion_vendor/ — a flattened group would break those imports).
+      - path: LLMPro/Resources/helpers/diffusion_vendor
+        type: folder
     info:
       path: LLMPro/Info.plist
       properties:

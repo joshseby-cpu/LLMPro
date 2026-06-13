@@ -47,9 +47,12 @@ final class ChatSession {
                     prompt: fullContext,
                     params: params
                 )
-                for try await line in stream {
+                for try await chunk in stream {
                     if let i = messages.firstIndex(where: { $0.id == assistantID }) {
-                        messages[i].text.append(line + "\n")
+                        // Append raw: InferenceService yields chunks ready to
+                        // concatenate (the mlx_lm path re-adds its line newline; the
+                        // diffusion path streams raw token segments that join inline).
+                        messages[i].text.append(chunk)
                     }
                 }
                 if let i = messages.firstIndex(where: { $0.id == assistantID }) {

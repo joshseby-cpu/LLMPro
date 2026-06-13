@@ -158,6 +158,70 @@ distill, run an eval harness):
 
 ---
 
+## Add a non-mlx-lm inference path (e.g. a diffusion model)
+
+Some models can't run through mlx-lm at all — e.g. Google's **DiffusionGemma**, a
+masked/block-diffusion LM with no autoregressive mlx-lm class. This is the recipe used
+to land DiffusionGemma as an **inference-only "guest"** (download + chat, but excluded
+from Teach/Practice because it can't be LoRA-fine-tuned). Follow it for any new engine
+mlx-lm doesn't cover.
+
+1. **Get a decoder.** If a maintained one exists, **vendor a reviewed subset** under
+   `Resources/helpers/<vendor>/` rather than adding a pip dependency — copy *only* the
+   inference closure, leave out any network/subprocess/server/agent code, and add a
+   `VENDORED.md` (source, version, license, the excluded subtrees). For DiffusionGemma
+   that's [`diffusion_vendor/`](../LLMPro/Resources/helpers/diffusion_vendor/) (the
+   `optiq/vlm` subset of MIT `mlx-optiq`). Rationale:
+   [`CONVENTIONS.md`](CONVENTIONS.md#vendoring-the-diffusiongemma-decoder-copy-not-pip).
+   Preserve the package's internal layout so its relative imports still resolve once
+   the dir is on `sys.path`.
+
+2. **Write a helper** ([`Resources/helpers/<name>.py`](../LLMPro/Resources/helpers/),
+   e.g. [`diffusion_generate.py`](../LLMPro/Resources/helpers/diffusion_generate.py))
+   that adds the vendored dir to `sys.path`, imports the decoder, and streams via the
+   [JSON-event protocol](CONTRACTS.md#3-helper-script-protocol)
+   (`start`/`progress`/`token`/`done`/`error`). Two gotchas DiffusionGemma hit:
+   - **Apply the chat template yourself** if the model is instruct-tuned and the
+     decoder's `stream_generate` doesn't — an un-templated prompt produced garbage.
+     Template + pre-tokenize with `add_special_tokens=False` (the template carries
+     BOS), then pass the token-id list.
+   - **Self-pin MLX memory** if you spawn the helper directly (bypassing `mlx_run.py`),
+     reading `LLMPRO_MEM_LIMIT_GB` (default 108) — same as `inspect_attention.py`.
+
+3. **Register the helper** in
+   [`PythonRuntime.installHelpers()`](../LLMPro/Services/PythonRuntime.swift) (add its
+   name to the flat-copy list) **and** copy any vendored subtree **recursively** (a
+   flattened copy breaks package imports — `installHelpers()` does a dedicated
+   `copyItem` of the `diffusion_vendor/` folder). Add any new dep to the
+   `bootstrap()` pip list (DiffusionGemma needed only `pillow`).
+
+4. **Add a detection flag in `ModelRegistry`.** Give `DetectedModel` an
+   `isDiffusion`-style `Bool` set during `scan()` from the model's `config.json`
+   (DiffusionGemma: top-level `model_type == "diffusion_gemma"` or a `DiffusionGemma*`
+   architecture). This one flag is the single source of truth for routing + exclusions.
+
+5. **Route in `InferenceService`.** In `stream`, branch on the flag and spawn your
+   helper (direct spawn + self-pinned memory) instead of `mlx_lm generate`, parsing the
+   JSON events. **Yield ready-to-append chunks** — the mlx_lm path re-adds its
+   line `\n`; a token-streaming path yields raw segments — so `ChatSession.send`
+   appends raw (see [the streaming convention](CONVENTIONS.md#streaming-convention-inferenceservice-yields-ready-to-append-chunks)).
+
+6. **Exclude from the fine-tune pickers** if the engine can't be trained: filter
+   `!isDiffusion` in [`TrainingConfigView`](../LLMPro/Features/Training/TrainingConfigView.swift)
+   (Teach) and [`SelfImproveView`](../LLMPro/Features/SelfImprove/SelfImproveView.swift)
+   (Practice), and badge it in
+   [`ModelsBrowserView`](../LLMPro/Features/Models/ModelsBrowserView.swift)
+   ("Diffusion · chat only") so the user knows it's chat-only. Keep the loop framing —
+   a guest model joins only the nodes it can support; don't fake a training flow
+   (see [`CONCEPT.md`](CONCEPT.md#inference-only-guest-models-diffusiongemma--on--test-off-the-fine-tune-loop)).
+
+7. **Verify** end-to-end: the model shows in Models with the badge, generates coherent
+   text in Try-it-out, is absent from the Teach/Practice pickers, and an ordinary
+   mlx-lm model still streams correctly in the Arena (the streaming-contract change
+   touches both paths). Then read the logs (zero ERROR/FAULT, no new `.ips`).
+
+---
+
 ## Add a new training-time hyperparameter
 
 If a new mlx-lm flag becomes important and you want users to be able to set it
