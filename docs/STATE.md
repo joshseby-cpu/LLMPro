@@ -299,11 +299,19 @@ absent (it used to spawn the missing script and surface a raw error). Guard +
 installer build-verified; the live clone is a runtime/network action not yet
 smoke-tested through the UI.
 
-### Resume button for orphaned jobs
+### Resume button for orphaned jobs — RESOLVED
 
 `JobRegistry.recoverOrphans()` marks dead-pid jobs as `.orphaned`. The Monitor
-view doesn't yet render a Resume button for those. `TrainingService.resume()` is
-written; just needs the UI wiring.
+view now renders a friendly orange "This lesson was interrupted" **resumeCard**
+with a "Resume lesson" button when `mostRecentJob()` is `.orphaned` (the action
+chain in `TrainingMonitorView.content(for:)` gained an `.orphaned` branch
+alongside `.running`/`.completed`). It fetches the SwiftData `TrainingJob` by id,
+finds the newest checkpoint via the new `TrainingService.latestAdapterCheckpoint(in:)`
+(highest-numbered `NNNNNNN_adapters.safetensors`, else `adapters.safetensors`),
+and calls the pre-existing `TrainingService.resume(...)`; on success
+`JobRegistry.attach` flips the job to `.running` and the normal running UI takes
+over. Missing SwiftData record or no checkpoint → a friendly alert, no crash.
+Build-verified; the live resume run is a runtime action not yet UI-smoke-tested.
 
 ### `LocalModel` SwiftData @Model
 
@@ -2735,7 +2743,11 @@ build + the 39-test suite, commit locally (push is the user's call). Running tal
 - **Iter 4 — ModelRegistry size dedup** (`3472ea7`): when a model appears in both HF
   cache layouts, keep the larger `sizeBytes` (fixes the wrong per-model size
   readout). +2 tests → 39 total.
-- **Iter 5 — llama.cpp guard + one-click installer** (this commit): see the
+- **Iter 5 — llama.cpp guard + one-click installer** (`a5d078c`): see the
   RESOLVED note above. `FuseError.llamaCppMissing` fail-fast guard +
   `PythonRuntime.installLlamaCpp` + Install buttons in Export & Settings. Build +
   39 tests green.
+- **Iter 6 — Resume button for orphaned jobs** (this commit): the Progress tab
+  now offers a "Resume lesson" card for jobs orphaned by an app restart (see the
+  RESOLVED note above). New `TrainingService.latestAdapterCheckpoint(in:)` +
+  Monitor `resumeCard`/`attemptResume`. Build green.

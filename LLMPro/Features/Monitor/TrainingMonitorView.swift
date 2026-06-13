@@ -1,10 +1,14 @@
 import SwiftUI
+import SwiftData
 import Charts
 
 struct TrainingMonitorView: View {
     @Environment(JobRegistry.self) private var jobRegistry
+    @Environment(\.modelContext) private var modelContext
     @State private var metrics = SystemMetrics.shared
     @State private var showTechnical = false
+    @State private var resuming = false
+    @State private var resumeError: String?
 
     var body: some View {
         NavigationStack {
@@ -44,6 +48,8 @@ struct TrainingMonitorView: View {
                     stopButton(jobID: job.id)
                 } else if job.status == .completed {
                     completionCard(job: job)
+                } else if job.status == .orphaned {
+                    resumeCard(job: job)
                 }
                 technicalDisclosure(job: job)
             }
@@ -51,6 +57,15 @@ struct TrainingMonitorView: View {
             .frame(maxWidth: 880, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .alert("Couldn't resume the lesson", isPresented: resumeErrorBinding) {
+            Button("OK", role: .cancel) { resumeError = nil }
+        } message: {
+            Text(resumeError ?? "")
+        }
+    }
+
+    private var resumeErrorBinding: Binding<Bool> {
+        Binding(get: { resumeError != nil }, set: { if !$0 { resumeError = nil } })
     }
 
     // MARK: - Cards
@@ -192,6 +207,62 @@ struct TrainingMonitorView: View {
     /// eval already running.
     private func scoringHandoff(_ job: JobRegistry.LiveJob) -> ModelHandoff {
         ModelHandoff(model: job.baseModelRepoID, adapterPath: job.adapterURL.path, autoScore: true)
+    }
+
+    // The retrain-after-interruption edge: a job whose process died while the app
+    // was closed comes back as `.orphaned`. Offer to pick the lesson back up from
+    // its most-recent checkpoint instead of starting over from scratch.
+    private func resumeCard(job: JobRegistry.LiveJob) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("This lesson was interrupted", systemImage: "pause.circle.fill")
+                .font(.headline).foregroundStyle(.orange)
+            Text("It looks like the app closed while your model was still learning. The good news: it saved its progress along the way, so we can pick up right where it left off.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button {
+                    attemptResume(job: job)
+                } label: {
+                    HStack(spacing: 6) {
+                        if resuming { ProgressView().controlSize(.small) }
+                        Label("Resume lesson", systemImage: "play.fill").padding(.horizontal, 4)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(resuming)
+                Spacer()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // The view's only logic: re-fetch the SwiftData record and hand it to the
+    // service (which finds the checkpoint and respawns mlx-lm). On success the
+    // registry flips the LiveJob to `.running` and the `.running` UI takes over,
+    // so there's nothing to refresh here.
+    private func attemptResume(job: JobRegistry.LiveJob) {
+        let jobID = job.id
+        let descriptor = FetchDescriptor<TrainingJob>(predicate: #Predicate { $0.id == jobID })
+        guard let record = (try? modelContext.fetch(descriptor))?.first else {
+            resumeError = "We couldn't find the saved details for this lesson, so it can't be resumed. You can start a fresh lesson from the Teach tab."
+            return
+        }
+        guard let checkpoint = TrainingService.latestAdapterCheckpoint(in: job.adapterURL) else {
+            resumeError = "This lesson didn't save far enough to resume. You can start a fresh lesson from the Teach tab."
+            return
+        }
+        resuming = true
+        Task { @MainActor in
+            defer { resuming = false }
+            do {
+                try await TrainingService.shared.resume(job: record, latestAdapterFile: checkpoint, context: modelContext)
+            } catch {
+                Log.error("Resume failed for job \(jobID)", .training, error: error)
+                resumeError = error.localizedDescription
+            }
+        }
     }
 
     // MARK: - Technical disclosure

@@ -582,6 +582,32 @@ final class TrainingService {
         JobRegistry.shared.attach(job, process: process)
     }
 
+    /// Find the newest LoRA checkpoint to resume from in an adapter directory.
+    ///
+    /// mlx-lm writes periodic checkpoints during training named with a zero-padded
+    /// iteration prefix, e.g. `0000200_adapters.safetensors`, plus a final
+    /// `adapters.safetensors` once the run completes. To pick up where an
+    /// interrupted run left off we want the most-trained snapshot available:
+    /// the highest-numbered `*_adapters.safetensors` if any exist, otherwise the
+    /// plain `adapters.safetensors`, otherwise nil (nothing to resume from).
+    ///
+    /// Pure `FileManager` enumeration with no actor state, hence `static`.
+    static func latestAdapterCheckpoint(in dir: URL) -> URL? {
+        let fm = FileManager.default
+        let suffix = "_adapters.safetensors"
+        let entries = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        let numbered = entries
+            .filter { $0.lastPathComponent.hasSuffix(suffix) }
+            .compactMap { url -> (Int, URL)? in
+                let prefix = String(url.lastPathComponent.dropLast(suffix.count))
+                guard let iter = Int(prefix) else { return nil }
+                return (iter, url)
+            }
+        if let best = numbered.max(by: { $0.0 < $1.0 }) { return best.1 }
+        let final = dir.appendingPathComponent("adapters.safetensors")
+        return fm.fileExists(atPath: final.path) ? final : nil
+    }
+
     private static func fetchJob(id: UUID, context: ModelContext) -> TrainingJob? {
         let descriptor = FetchDescriptor<TrainingJob>(predicate: #Predicate { $0.id == id })
         return (try? context.fetch(descriptor))?.first
