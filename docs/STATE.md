@@ -665,24 +665,25 @@ correctness/safety fixes in three commits. These items were **surfaced by the sa
 audit but intentionally NOT fixed** — each needs a product/security decision or is
 lower-priority. Listed so the next agent doesn't re-discover them as "new":
 
-**Needs a decision (security ↔ usability):**
+**RESOLVED in wave 3 (`acec4a8`) — the user approved these hardenings:**
 
-- **Code-agent command/edit auto-run defaults to ON.** `CodingAgentService.AgentSettings`
-  ships with both `autoApproveEdits` and `autoRunCommands` defaulting `true`, and
-  `run_command` runs `/bin/zsh -lc <cmd>` with the **full inherited environment**
-  (login shell, unscoped) in the workspace cwd. That means a fine-tuned local model's
-  team can run arbitrary shell with the user's env unattended. This is a deliberate
-  usability call (builders "run unattended"), but it's the biggest blast-radius open
-  item — worth a tiered allowlist / opt-in confirmation decision.
-- **`fetch_url` has no SSRF / loopback / private-range guard.** `AgentTools.fetchUrl`
-  validates only the `http(s)` scheme, then `URLSession`s the URL — nothing blocks
-  `127.0.0.1`, `169.254.x`, `10./192.168./172.16.x`, or cloud metadata endpoints. A
-  model could be steered to fetch internal services. Add an address-class guard before
-  the request if the Code tab is ever exposed to untrusted prompts.
-- **Delegation has a depth cap but no breadth / total cap.** Sub-agent delegation is
-  depth-capped at 5 (`runDelegations`), but there's no limit on how many delegates one
-  turn can fan out, nor a total-delegations budget per session — a runaway team could
-  spawn many concurrent sub-runs against the one shared model server.
+- ✅ **Code-agent command/edit auto-run now defaults to OFF.** `AgentSettings`
+  `autoApproveEdits`/`autoRunCommands` both default `false` (edits + shell commands go
+  through the approval gate); the UI toggles still let the user opt in per session.
+  **`run_command`'s `/bin/zsh -lc` child env is now secret-scrubbed** — inherited vars
+  matching a secret denylist (TOKEN/SECRET/PASSWORD/API_KEY/_KEY/CREDENTIAL +
+  HF_TOKEN/AWS_/OPENAI/ANTHROPIC/GH_TOKEN/…) are blanked; PATH/HOME/etc. kept.
+- ✅ **`fetch_url` now has an SSRF guard** (`validatePublicURL`/`isBlockedSSRFTarget`):
+  rejects non-http(s) + `localhost`, resolves the host via `getaddrinfo`, and blocks if
+  ANY resolved address (DNS-rebinding defense) is loopback/link-local (incl.
+  169.254.169.254)/private/ULA/unspecified/multicast. Fails closed; the DDG redirect
+  target is filtered through the same check.
+- ✅ **Delegation now has a breadth/total cap.** Per-task budget of 40 total spawns
+  (reset each top-level turn) + a cycle guard (A→B→A short-circuits via the ancestor
+  chain), both feeding a message back to the model instead of spawning. Depth cap (6) kept.
+
+**Still deferred — needs a decision or lower priority:**
+
 - **Restored Code workspace may need a security-scoped bookmark.** The Code tab
   re-opens its last workspace folder on launch; verify whether the app's sandbox
   status actually grants read/write to that path on restore (a security-scoped
@@ -777,10 +778,14 @@ work that another agent might be looking for context on.
     tests — streaming captures all lines incl. the unterminated EOF tail, non-zero exit
     surfaces code+stderr, both streams terminate on exit, a cancelled consumer reaps
     the child). The suite is now **7 test files / 53 tests** (see the Tests section).
-  - **Deferred (not fixed):** see the new "Audit — deferred items" section above for
-    the items the audit surfaced but intentionally left (auto-run defaults, `fetch_url`
-    SSRF guard, delegation breadth cap, restored-workspace bookmark, DatasetEditor
-    structured-content drop, and a handful of LOW cosmetic items).
+  - **Wave 3 — security hardening (`acec4a8`, user-approved):** auto-run/auto-approve
+    now default OFF; `run_command` env is secret-scrubbed; `fetch_url` SSRF guard
+    (DNS-rebinding-aware, fails closed); delegation breadth/total cap (40/task) + cycle
+    guard. Build + 53 tests green.
+  - **Still deferred:** see the "Audit — deferred items" section above — restored-workspace
+    security-scoped bookmark, DatasetEditor structured-content drop, and a handful of LOW
+    cosmetic items (FuseService Modelfile quoting, InferenceService system-prompt slot,
+    ModelsBrowser timing handoff, diffusion_server non-stream timeout).
 
 - **Code tab now serves text-diffusion models (DiffusionGemma) for the agentic loop —
   VERIFIED LIVE.** DiffusionGemma is **no longer chat-only**: it now also drives the
