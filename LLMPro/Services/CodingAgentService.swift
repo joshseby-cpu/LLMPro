@@ -90,8 +90,8 @@ struct UserQuestion: Identifiable, Sendable {
 }
 
 struct AgentSettings: Sendable {
-    var autoApproveEdits = true            // ON by default for the team (builders run unattended)
-    var autoRunCommands = true
+    var autoApproveEdits = false           // OFF by default: file edits go through the human approval gate
+    var autoRunCommands = false             // OFF by default: shell commands go through the human approval gate
     var useNativeTools = true
     var parallelAgents = false              // when off, the orchestrator runs delegates one at a time
                                            // (kinder to a smaller model — only one request in flight)
@@ -123,6 +123,11 @@ final class CodingAgentService {
     /// Agents can reference each other, so this bounds cycles and fan-out chains.
     static let maxDelegationDepth = 6
 
+    /// Total delegate spawns allowed per top-level user turn. The depth cap bounds
+    /// the chain length but not the breadth/total, so a model that fans out wide on
+    /// every level could spawn exponentially (a local DoS). This caps the aggregate.
+    static let maxDelegationsPerTask = 40
+
     var workspaceURL: URL?
     var settings = AgentSettings()
     private(set) var transcript: [AgentBubble] = []
@@ -140,6 +145,11 @@ final class CodingAgentService {
     private var runTask: Task<Void, Never>?
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
     private var answerContinuation: CheckedContinuation<String, Never>?
+
+    /// Total delegate spawns this top-level task (reset at the start of each user
+    /// turn). Main-actor-isolated — the whole agent loop runs on @MainActor, so a
+    /// plain stored property is concurrency-safe here.
+    private var delegationsThisTask = 0
 
     private init() {}
 
@@ -203,10 +213,11 @@ final class CodingAgentService {
                                       attachments: attachments.map(\.name)))
         lastError = nil
         isRunning = true
+        delegationsThisTask = 0   // fresh delegation budget for this top-level turn
         runTask = Task {
             let extra = attachments.isEmpty ? "" : await Attachment.combinedText(for: attachments)
             self.orchestrator.wire.append(ChatWireMessage(role: "user", content: trimmed + extra))
-            let outcome = await self.runRole(.entry, convo: self.orchestrator, depth: 0)
+            let outcome = await self.runRole(.entry, convo: self.orchestrator, depth: 0, ancestors: [TeamRole.entry.id])
             self.isRunning = false
             self.runTask = nil
             // The "evolving" step: after the task finishes (not cancelled), reflect
@@ -252,7 +263,9 @@ final class CodingAgentService {
 
     /// Run one role's loop on its conversation until it stops calling tools.
     /// Returns the role's final text (fed back to whoever delegated to it).
-    private func runRole(_ role: TeamRole, convo: Convo, depth: Int) async -> String {
+    /// `ancestors` is the chain of role IDs that delegated down to this one
+    /// (including this role), used to short-circuit delegation cycles (A→B→A).
+    private func runRole(_ role: TeamRole, convo: Convo, depth: Int, ancestors: [String]) async -> String {
         var tools = role.toolSpecs()
         // Give every role the `remember` tool while the evolving agent is on, so it
         // can persist a durable lesson the moment it learns one (in addition to the
@@ -355,7 +368,7 @@ final class CodingAgentService {
             setBubbleText(idx, AgentTools.stripToolCallBlocks(from: rawText))
             attachTools(idx, calls)
             lastText = rawText
-            if await executeRoleCalls(calls, convo: convo, bubbleIndex: idx, native: native, depth: depth) { return lastText }
+            if await executeRoleCalls(calls, convo: convo, bubbleIndex: idx, native: native, depth: depth, ancestors: ancestors) { return lastText }
         }
         appendInfo("\(role.emoji) \(role.displayName) reached its step limit.")
         return lastText
@@ -363,7 +376,7 @@ final class CodingAgentService {
 
     /// Execute a role's tool calls: delegation (recursive, parallel if >1), ask_user,
     /// todo_write, and ordinary file/web tools (approval-gated). Returns true if cancelled.
-    private func executeRoleCalls(_ calls: [ParsedToolCall], convo: Convo, bubbleIndex: Int, native: Bool, depth: Int) async -> Bool {
+    private func executeRoleCalls(_ calls: [ParsedToolCall], convo: Convo, bubbleIndex: Int, native: Bool, depth: Int, ancestors: [String]) async -> Bool {
         var fallbackResults = ""
         var delegations: [ParsedToolCall] = []
 
@@ -439,7 +452,7 @@ final class CodingAgentService {
         }
 
         if !delegations.isEmpty {
-            let results = await runDelegations(delegations, depth: depth)
+            let results = await runDelegations(delegations, depth: depth, ancestors: ancestors)
             for (call, output) in results {
                 setTool(bubbleIndex, call.id) { $0.status = .done; $0.output = output }
                 feedBack(native: native, convo: convo, callID: call.id, name: call.name, body: output, into: &fallbackResults)
@@ -454,36 +467,66 @@ final class CodingAgentService {
 
     /// Run delegate sub-agents — concurrently when there's more than one (the
     /// orchestrator dispatching coder + ui in the same turn = parallel).
-    private func runDelegations(_ calls: [ParsedToolCall], depth: Int) async -> [(ParsedToolCall, String)] {
+    private func runDelegations(_ calls: [ParsedToolCall], depth: Int, ancestors: [String]) async -> [(ParsedToolCall, String)] {
         guard depth < Self.maxDelegationDepth else {
             return calls.map { ($0, "Delegation depth limit reached (\(Self.maxDelegationDepth)).") }
         }
-        // Sequential when parallelism is off (or only one call): run each delegate
-        // to completion before starting the next, so only one request is ever in
-        // flight on the shared server — gentler on a smaller model.
-        if !settings.parallelAgents || calls.count == 1 {
-            var results: [(ParsedToolCall, String)] = []
-            for call in calls {
-                results.append((call, await runDelegate(call, depth: depth)))
+        // Admit calls against the per-task budget and the cycle guard BEFORE any
+        // await point. The reservation runs synchronously on @MainActor, so even in
+        // the parallel branch (which launches all tasks before any completes) every
+        // spawn is counted exactly once and the cap can't be raced past.
+        var admitted: [ParsedToolCall] = []
+        var blocked: [(ParsedToolCall, String)] = []
+        for call in calls {
+            // Cycle guard: a role delegating to a role already in its own ancestor
+            // chain (A→B→A) would loop; short-circuit with a clear message instead.
+            if let role = TeamRole.role(forCallTool: call.name), ancestors.contains(role.id) {
+                Log.notice("Code agent: blocked delegation cycle \(ancestors.joined(separator: "→"))→\(role.id)", .agent)
+                blocked.append((call, "Delegation cycle blocked: \(role.id) is already in the active chain (\(ancestors.joined(separator: " → "))). Answer directly instead of delegating back."))
+                continue
             }
-            return results
+            // Per-task total budget.
+            guard delegationsThisTask < Self.maxDelegationsPerTask else {
+                Log.notice("Code agent: delegation budget exhausted (\(delegationsThisTask) this task)", .agent)
+                blocked.append((call, "Delegation budget exhausted (\(delegationsThisTask) delegations this task); answer directly or summarize."))
+                continue
+            }
+            delegationsThisTask += 1
+            admitted.append(call)
         }
-        // Parallel: start each delegate concurrently; they interleave at their await
-        // points (model requests) on the single shared server. Unstructured Tasks
-        // inherit the @MainActor context.
-        let started = calls.map { call in Task { await self.runDelegate(call, depth: depth) } }
-        var results: [(ParsedToolCall, String)] = []
-        for (call, task) in zip(calls, started) {
-            results.append((call, await task.value))
+
+        // Sequential when parallelism is off (or only one admitted call): run each
+        // delegate to completion before starting the next, so only one request is
+        // ever in flight on the shared server — gentler on a smaller model.
+        var results: [(ParsedToolCall, String)]
+        if !settings.parallelAgents || admitted.count <= 1 {
+            results = []
+            for call in admitted {
+                results.append((call, await runDelegate(call, depth: depth, ancestors: ancestors)))
+            }
+        } else {
+            // Parallel: start each delegate concurrently; they interleave at their await
+            // points (model requests) on the single shared server. Unstructured Tasks
+            // inherit the @MainActor context.
+            let started = admitted.map { call in Task { await self.runDelegate(call, depth: depth, ancestors: ancestors) } }
+            results = []
+            for (call, task) in zip(admitted, started) {
+                results.append((call, await task.value))
+            }
         }
-        return results
+        // Preserve the caller's call order in the returned results (admitted +
+        // blocked recombined by id) so each tool result maps to its own call.
+        var byID: [String: String] = [:]
+        for (call, out) in results { byID[call.id] = out }
+        for (call, out) in blocked { byID[call.id] = out }
+        return calls.map { ($0, byID[$0.id] ?? "Delegation produced no result.") }
     }
 
-    private func runDelegate(_ call: ParsedToolCall, depth: Int) async -> String {
+    private func runDelegate(_ call: ParsedToolCall, depth: Int, ancestors: [String]) async -> String {
         guard let role = TeamRole.role(forCallTool: call.name) else { return "Unknown delegate." }
         let task = stringArg(call.argumentsJSON, "task") ?? ""
         let convo = Convo([systemMessage(role), ChatWireMessage(role: "user", content: task)])
-        return await runRole(role, convo: convo, depth: depth + 1)
+        return await runRole(role, convo: convo, depth: depth + 1, ancestors: ancestors + [role.id])
     }
 
     // MARK: User interaction

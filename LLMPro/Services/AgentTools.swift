@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // The tools the coding agent can call, their JSON-Schema definitions (sent to
 // the model as the request `tools` array), a text fallback parser for models
@@ -46,6 +47,117 @@ enum AgentToolName: String, CaseIterable, Sendable {
 enum AgentTools {
     static let maxOutputChars = 16_000
     static let commandTimeout: TimeInterval = 120
+
+    /// Case-insensitive substring patterns for env-var names that may hold a secret
+    /// (tokens / keys / credentials). `_KEY` is meant as a suffix but a substring
+    /// match is the conservative choice — it also catches names like `MY_KEY_FILE`.
+    private static let secretEnvPatterns: [String] = [
+        "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "_KEY",
+        "CREDENTIAL", "HF_TOKEN", "HUGGINGFACE", "HUGGING_FACE", "AWS_",
+        "OPENAI", "ANTHROPIC", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN",
+        "OPENROUTER", "GOOGLE_API", "GEMINI"
+    ]
+
+    /// Build the environment dict for a `run_command` child so secret-bearing
+    /// variables can't leak to arbitrary shell commands. ProcessRunner seeds the
+    /// child from the full parent environment, then merges this dict over it; we
+    /// map every matching secret var to "" so the merge BLANKS the inherited value
+    /// while leaving non-secret vars (PATH, HOME, …) untouched so normal builds work.
+    static func scrubbedSecretEnv() -> [String: String] {
+        var overrides: [String: String] = [:]
+        for key in ProcessInfo.processInfo.environment.keys {
+            let upper = key.uppercased()
+            if secretEnvPatterns.contains(where: { upper.contains($0) }) {
+                overrides[key] = ""
+            }
+        }
+        return overrides
+    }
+
+    // MARK: - SSRF guard (fetch_url / web redirects)
+
+    enum SSRFError: LocalizedError {
+        case blocked(String)
+        var errorDescription: String? { switch self { case .blocked(let m): return m } }
+    }
+
+    /// Throw if `url` targets a private / loopback / link-local / metadata address.
+    /// Resolves the host via getaddrinfo and rejects if ANY resolved address is
+    /// internal (defends against DNS-rebinding to a private IP). Any PORT is allowed
+    /// — the IP-range check is the real protection. Scheme must be http/https.
+    static func validatePublicURL(_ url: URL) throws {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            throw SSRFError.blocked("Blocked: \(url.absoluteString) uses an unsupported scheme (only http/https are allowed).")
+        }
+        guard let host = url.host, !host.isEmpty else {
+            throw SSRFError.blocked("Blocked: \(url.absoluteString) has no host.")
+        }
+        // `localhost` resolves to loopback; reject the literal name outright too.
+        if host.caseInsensitiveCompare("localhost") == .orderedSame {
+            throw SSRFError.blocked("Blocked: \(url.absoluteString) resolves to a private/loopback address.")
+        }
+        // Resolve EVERY address the host maps to (an IP literal resolves to itself).
+        var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: SOCK_STREAM,
+                             ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(host, nil, &hints, &result)
+        guard status == 0, let head = result else {
+            throw SSRFError.blocked("Blocked: \(url.absoluteString) could not be resolved to an address.")
+        }
+        defer { freeaddrinfo(head) }
+        var node: UnsafeMutablePointer<addrinfo>? = head
+        while let n = node {
+            if let sa = n.pointee.ai_addr, isPrivateSockaddr(sa) {
+                throw SSRFError.blocked("Blocked: \(url.absoluteString) resolves to a private/loopback address.")
+            }
+            node = n.pointee.ai_next
+        }
+    }
+
+    /// Non-throwing convenience for callers that just need a yes/no.
+    static func isBlockedSSRFTarget(_ url: URL) -> Bool {
+        (try? validatePublicURL(url)) == nil
+    }
+
+    /// True if a resolved sockaddr is in a range we must never let a tool reach:
+    /// loopback, link-local (incl. 169.254.169.254 cloud metadata), private (RFC1918
+    /// / ULA fc00::/7), unspecified, or multicast.
+    private static func isPrivateSockaddr(_ sa: UnsafePointer<sockaddr>) -> Bool {
+        switch Int32(sa.pointee.sa_family) {
+        case AF_INET:
+            let b = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr.s_addr }
+            let host = UInt32(bigEndian: b)            // a.b.c.d as a host-order UInt32
+            let a = (host >> 24) & 0xff, second = (host >> 16) & 0xff
+            if a == 127 { return true }                                 // 127.0.0.0/8 loopback
+            if a == 10  { return true }                                 // 10.0.0.0/8 private
+            if a == 172 && (16...31).contains(second) { return true }   // 172.16.0.0/12 private
+            if a == 192 && second == 168 { return true }                // 192.168.0.0/16 private
+            if a == 169 && second == 254 { return true }                // 169.254.0.0/16 link-local (incl. metadata 169.254.169.254)
+            if a == 0 { return true }                                   // 0.0.0.0/8 unspecified / "this host"
+            if (224...239).contains(a) { return true }                  // 224.0.0.0/4 multicast
+            return false
+        case AF_INET6:
+            var addr = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee.sin6_addr }
+            let bytes = withUnsafeBytes(of: &addr) { Array($0) }        // 16 bytes, network order
+            if bytes.allSatisfy({ $0 == 0 }) { return true }            // :: unspecified
+            if bytes[0..<15].allSatisfy({ $0 == 0 }) && bytes[15] == 1 { return true } // ::1 loopback
+            if bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80 { return true }           // fe80::/10 link-local
+            if (bytes[0] & 0xfe) == 0xfc { return true }                              // fc00::/7 ULA
+            if bytes[0] == 0xff { return true }                                       // ff00::/8 multicast
+            // IPv4-mapped IPv6 (::ffff:a.b.c.d): re-check the embedded v4 address.
+            if bytes[0..<10].allSatisfy({ $0 == 0 }) && bytes[10] == 0xff && bytes[11] == 0xff {
+                let host = (UInt32(bytes[12]) << 24) | (UInt32(bytes[13]) << 16) | (UInt32(bytes[14]) << 8) | UInt32(bytes[15])
+                let a = (host >> 24) & 0xff, second = (host >> 16) & 0xff
+                if a == 127 || a == 10 || a == 0 || (224...239).contains(a) { return true }
+                if a == 172 && (16...31).contains(second) { return true }
+                if a == 192 && second == 168 { return true }
+                if a == 169 && second == 254 { return true }
+            }
+            return false
+        default:
+            return true   // unknown family → fail closed
+        }
+    }
 
     /// Build the `tools` array for a specific set of tools (per-role).
     static func specs(for tools: [AgentToolName]) -> [ChatToolSpec] {
@@ -427,6 +539,7 @@ struct ToolExecutor: Sendable {
         let proc = try await ProcessRunner.spawn(
             executable: URL(fileURLWithPath: "/bin/zsh"),
             arguments: ["-lc", command],
+            environment: AgentTools.scrubbedSecretEnv(),
             currentDirectory: workspace)
 
         let outTask = Task { () -> String in
@@ -521,7 +634,17 @@ struct ToolExecutor: Sendable {
             guard let html = String(data: data, encoding: .utf8) else {
                 return ToolResult(output: "Search returned no readable response.", isError: true)
             }
-            let results = Self.parseDuckDuckGo(html)
+            // Apply the SSRF guard to each DuckDuckGo redirect target before it's
+            // surfaced (and thus before the model can follow it): drop any result
+            // whose unwrapped URL resolves to a private/loopback/metadata address.
+            let results = Self.parseDuckDuckGo(html).filter { r in
+                guard let u = URL(string: r.url) else { return true }   // keep unparseable; fetch_url re-guards
+                if AgentTools.isBlockedSSRFTarget(u) {
+                    Log.notice("Code agent: web_search dropped SSRF redirect \(r.url)", .agent)
+                    return false
+                }
+                return true
+            }
             if results.isEmpty {
                 return ToolResult(output: "No results for “\(query)”.", isError: false)
             }
@@ -543,6 +666,14 @@ struct ToolExecutor: Sendable {
         guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             return ToolResult(output: "fetch_url needs a full http(s) URL. Got: \(raw)", isError: true)
+        }
+        // SSRF guard: fail closed if the URL resolves to a private/loopback/metadata
+        // address (defends against internal-network probing and DNS-rebinding).
+        do {
+            try AgentTools.validatePublicURL(url)
+        } catch {
+            Log.error("Code agent: fetch_url SSRF-blocked \(url.absoluteString)", .agent)
+            return ToolResult(output: error.localizedDescription, isError: true)
         }
         do {
             let (data, response) = try await URLSession.shared.data(for: Self.webRequest(url))
