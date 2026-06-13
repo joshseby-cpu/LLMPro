@@ -457,7 +457,7 @@ private struct LocalModelRow: View {
                 Image(systemName: "doc.on.doc")
             }
             .buttonStyle(.borderless)
-            .foregroundStyle(.blue)
+            .foregroundStyle(Color.brand)
             .help("Duplicate as a new independent local model (APFS clonefile — usually instant)")
             Button {
                 onLMStudioTapped()

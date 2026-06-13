@@ -105,8 +105,8 @@ struct DatasetsView: View {
             }
             Spacer()
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: 14)
     }
 
     private var dropZone: some View {
@@ -118,8 +118,7 @@ struct DatasetsView: View {
             if let error { Text(error).foregroundStyle(.red).font(.caption) }
         }
         .frame(maxWidth: .infinity, minHeight: 110)
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .card()
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -135,7 +134,7 @@ struct DatasetsView: View {
     private var activePrepSection: some View {
         if !prep.active.isEmpty {
             VStack(alignment: .leading) {
-                Text("Preparing").font(.headline)
+                sectionHeader("Preparing", systemImage: "hourglass")
                 ForEach(prep.active) { entry in
                     HStack {
                         ProgressView().controlSize(.small)
@@ -148,8 +147,8 @@ struct DatasetsView: View {
                             Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(.red).font(.caption)
                         }
                     }
-                    .padding(8)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .card(padding: 8, cornerRadius: 10)
                 }
             }
         }
@@ -157,7 +156,7 @@ struct DatasetsView: View {
 
     private var yoursSection: some View {
         VStack(alignment: .leading) {
-            Text("Your datasets (\(datasets.count))").font(.headline)
+            sectionHeader("Your datasets (\(datasets.count))", systemImage: "books.vertical")
             if datasets.isEmpty {
                 Text("No datasets yet — grab one from the catalog above or drop a JSONL file.")
                     .foregroundStyle(.secondary)
@@ -185,9 +184,9 @@ struct DatasetsView: View {
                 Spacer()
                 Image(systemName: "chevron.right").foregroundStyle(.tertiary).font(.caption)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .padding(8)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .card(padding: 10, cornerRadius: 10)
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -587,8 +586,8 @@ private struct StarterDatasetsSection: View {
             Text("License: \(preset.licenseHint)")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: 12, cornerRadius: 12)
     }
 }
 

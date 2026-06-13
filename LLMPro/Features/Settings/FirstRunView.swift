@@ -56,7 +56,7 @@ struct FirstRunView: View {
                 checkRow(ok: macOS14Plus, label: "macOS 14+")
                 checkRow(ok: hasEnoughRAM, label: "≥ 16 GB unified memory recommended (for 7B models)")
             }
-            .padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .card()
         }
     }
 

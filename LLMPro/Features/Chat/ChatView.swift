@@ -40,11 +40,29 @@ struct ChatPaneView: View {
                     }
                 }
                 .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .overlay {
+                if session.messages.isEmpty && session.error == nil {
+                    emptyState
+                }
             }
             .onChange(of: session.messages.last?.text) { _, _ in
                 if let last = session.messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
         }
+    }
+
+    /// Friendly placeholder for an as-yet-unused chat pane, so a fresh pane reads
+    /// as inviting rather than a black void. Subtle + secondary; worded to fit the
+    /// base-vs-fine-tune compare panes.
+    private var emptyState: some View {
+        ContentUnavailableView(
+            "Nothing here yet",
+            systemImage: "bubble.left.and.bubble.right",
+            description: Text("Ask something to compare the answers.")
+        )
+        .allowsHitTesting(false)
     }
 }
 

@@ -436,9 +436,7 @@ struct SelfImproveView: View {
             }
             .buttonStyle(.borderless)
         }
-        .padding(12)
-        .background(.background.tertiary)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .card(padding: 12, cornerRadius: 12)
     }
 
     /// Hand the automated loop's result to the manual loop's Test / Use stages.
@@ -470,10 +468,8 @@ struct SelfImproveView: View {
 
     private func cardBox<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading) { content() }
-            .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.secondary)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .card(padding: 20)
     }
 
     private func pickerRow<Content: View>(_ title: String, systemImage: String,

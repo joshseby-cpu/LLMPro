@@ -110,7 +110,7 @@ struct ArenaView: View {
                 }
                 inputBar
             }
-            .navigationTitle(arenaMode ? "Model Arena" : "Chat")
+            .navigationTitle(arenaMode ? "Try it out" : "Chat")
             .onAppear {
                 loadPreferenceCount()
                 refreshCustomSuites()
@@ -468,8 +468,7 @@ struct ArenaView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .card(padding: 14)
         .padding(.horizontal, 10).padding(.vertical, 6)
     }
 

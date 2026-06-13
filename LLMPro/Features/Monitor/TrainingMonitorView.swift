@@ -114,8 +114,8 @@ struct TrainingMonitorView: View {
                 }
             }
         }
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
     }
 
     private func howWellCard(stars: Int) -> some View {
@@ -135,8 +135,8 @@ struct TrainingMonitorView: View {
             Text("Each star = the model getting noticeably better at the lessons.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
     }
 
     private var memoryCard: some View {
@@ -153,8 +153,8 @@ struct TrainingMonitorView: View {
                 .tint(pct > 0.85 ? .red : (pct > 0.7 ? .orange : .green))
                 .scaleEffect(x: 1, y: 1.5, anchor: .center)
         }
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
     }
 
     private func stopButton(jobID: UUID) -> some View {
@@ -197,8 +197,12 @@ struct TrainingMonitorView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(.green.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .card()
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.green.opacity(0.10))
+                .allowsHitTesting(false)
+        )
     }
 
     private func handoff(_ job: JobRegistry.LiveJob) -> ModelHandoff {
@@ -237,8 +241,12 @@ struct TrainingMonitorView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .card()
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.orange.opacity(0.10))
+                .allowsHitTesting(false)
+        )
     }
 
     // The view's only logic: re-fetch the SwiftData record and hand it to the

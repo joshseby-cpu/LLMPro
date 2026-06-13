@@ -765,9 +765,8 @@ struct TrainingConfigView: View {
                 Text(body).font(.callout).foregroundStyle(.secondary)
             }
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .card(padding: 14, cornerRadius: 12)
     }
 
     private func launch() async {
@@ -965,16 +964,9 @@ private struct ModelChoiceCard: View {
             }
             .foregroundStyle(.secondary)
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
-        )
+        .card(padding: 12, cornerRadius: 12)
+        .overlay(selectionOverlay(isSelected: isSelected, cornerRadius: 12))
         .contentShape(Rectangle())
     }
 }
@@ -1008,17 +1000,10 @@ private struct DatasetChoiceCard: View {
                 .font(.caption2)
                 .foregroundStyle(filesMissing ? .orange : .secondary)
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: 12, cornerRadius: 12)
+        .overlay(selectionOverlay(isSelected: isSelected, cornerRadius: 12))
         .opacity(filesMissing ? 0.55 : 1.0)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
-        )
         .contentShape(Rectangle())
     }
 }
@@ -1037,17 +1022,21 @@ private struct DurationCard: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 90)
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
-        )
+        .card(padding: 12, cornerRadius: 12)
+        .overlay(selectionOverlay(isSelected: isSelected, cornerRadius: 12))
         .contentShape(Rectangle())
     }
+}
+
+/// Shared selection treatment for the Teach picker cards: a brand-violet border
+/// (lineWidth 2) plus a faint brand fill, so a selected card reads as distinctly
+/// filled on top of the base `.card()` surface. Returns a clear shape when not
+/// selected so the layering stays uniform.
+private func selectionOverlay(isSelected: Bool, cornerRadius: CGFloat) -> some View {
+    let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    return shape
+        .fill(isSelected ? Color.brand.opacity(0.10) : Color.clear)
+        .overlay(shape.strokeBorder(isSelected ? Color.brand : .clear, lineWidth: 2))
 }
 
 extension Notification.Name {
