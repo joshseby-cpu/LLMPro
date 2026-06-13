@@ -66,7 +66,8 @@ struct DashboardView: View {
 
     private var hero: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Make your own coding helper").font(.largeTitle.bold())
+            Text("Make your own coding helper")
+                .font(.system(.largeTitle, design: .rounded).weight(.bold))
             Text("Pick a model, give it some lessons, then chat with it. LLMPro handles the tricky parts.")
                 .foregroundStyle(.secondary)
         }
@@ -112,7 +113,10 @@ struct DashboardView: View {
     private var nextStepCard: some View {
         let step = nextStep
         return HStack(alignment: .top, spacing: 16) {
-            Image(systemName: step.icon).font(.largeTitle).foregroundStyle(.tint).frame(width: 44)
+            Image(systemName: step.icon)
+                .font(.largeTitle)
+                .foregroundStyle(Theme.brandGradient)
+                .frame(width: 44)
             VStack(alignment: .leading, spacing: 6) {
                 Text(step.title).font(.title3.bold())
                 Text(step.body).font(.callout).foregroundStyle(.secondary)
@@ -121,13 +125,13 @@ struct DashboardView: View {
                         NotificationCenter.default.post(name: .switchSidebar, object: section)
                     }
                     .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
                     .padding(.top, 4)
                 }
             }
             Spacer()
         }
-        .padding(20)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .card(padding: 20, cornerRadius: 16)
     }
 
     private var quickStats: some View {
@@ -154,19 +158,23 @@ struct DashboardView: View {
     }
 
     private func statCard(title: String, value: String, hint: String, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: icon).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title2.monospacedDigit().bold())
-            Text(hint).font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(Color.brand)
+            Text(value)
+                .font(.system(.title, design: .rounded).weight(.bold))
+                .monospacedDigit()
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(hint).font(.caption2).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .card(padding: 14, cornerRadius: 12)
     }
 
     private var recentJobs: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Recent lessons").font(.headline)
+            sectionHeader("Recent lessons", systemImage: "clock.arrow.circlepath")
             if jobs.isEmpty {
                 Text("No lessons yet. Open Teach to start one.").foregroundStyle(.secondary).font(.callout)
             } else {
@@ -212,7 +220,7 @@ struct DashboardView: View {
         let (label, color): (String, Color) = {
             switch status {
             case .running:   ("Learning",  .green)
-            case .completed: ("Done",      .blue)
+            case .completed: ("Done",      .brand)
             case .failed:    ("Problem",   .red)
             case .cancelled: ("Stopped",   .secondary)
             case .orphaned:  ("Recovered", .orange)

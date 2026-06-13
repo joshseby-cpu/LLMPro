@@ -67,6 +67,9 @@ struct RootView: View {
                 .task { SystemMetrics.shared.start() }   // one long-lived poller for all tabs
             }
         }
+        // Belt-and-suspenders brand tint so custom views/controls pick up the
+        // violet even if the AccentColor asset isn't auto-applied.
+        .tint(Color.brand)
     }
 
     @ViewBuilder
