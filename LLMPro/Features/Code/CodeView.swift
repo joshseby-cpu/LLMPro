@@ -47,6 +47,7 @@ struct CodeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openCodeWithModel)) { note in
             applyHandoff(note.object)
         }
+        .sheet(isPresented: $showOptions) { optionsSheet }
         .sheet(isPresented: $showAgents) { AgentsManagerView() }
         .sheet(isPresented: $showSkills) { SkillsManagerView() }
         .sheet(isPresented: $showMemory) {
@@ -232,34 +233,15 @@ struct CodeView: View {
                     .lineLimit(2)
             }
 
-            // Options as an inline collapsible section (not a popover) so it
-            // pushes the IDE down rather than floating over the transcript. When
-            // expanded it reads as part of the header — full-width, no boxed card,
-            // separated only by a hairline divider — rather than a pasted-in panel.
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { showOptions.toggle() }
-            } label: {
-                Label("Options", systemImage: showOptions ? "chevron.down" : "chevron.right")
+            // Options live in a Settings sheet (modal panel) rather than inline —
+            // the sheet is separate from the transcript, so the controls get a
+            // clean grouped layout without pushing the IDE down.
+            Button { showOptions = true } label: {
+                Label("Options", systemImage: "slider.horizontal.3")
                     .font(.caption)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-
-            if showOptions {
-                Divider()
-                // The form is long; cap its height and let IT scroll. This
-                // ScrollView is in the header (above the Divider below workspaceArea)
-                // — a sibling of the IDE/transcript area, NOT nested inside the chat
-                // column — so it doesn't reintroduce the competing-ScrollView layout
-                // cycle the optionsForm comment warns about.
-                ScrollView {
-                    optionsForm
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 4)
-                }
-                .frame(maxHeight: 360)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
         }
         .padding(10)
     }
@@ -286,65 +268,119 @@ struct CodeView: View {
         }
     }
 
-    // Flat layout on purpose: an expandable header that nests a ScrollView
-    // (or further DisclosureGroups) competing with the transcript ScrollView
-    // below it sends SwiftUI's macOS layout into a cycle (beachball) — even when
-    // the log is empty. Keeping this as plain growing content avoids that.
-    private var optionsForm: some View {
+    // MARK: Options sheet
+
+    // Options live in a modal Settings sheet, separate from the transcript.
+    // The body is split into per-section @ViewBuilder helpers so the type
+    // checker doesn't choke on one giant Form expression.
+    private var optionsSheet: some View {
         @Bindable var agent = agent
-        return VStack(alignment: .leading, spacing: 8) {
+        return NavigationStack {
+            Form {
+                permissionsSection(agent)
+                teamSection(agent)
+                skillsSection(agent)
+                memorySection(agent)
+                advancedSection(agent)
+                serverLogSection
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Session options")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showOptions = false }
+                }
+            }
+        }
+        .frame(minWidth: 460, idealWidth: 520, minHeight: 520, idealHeight: 640)
+    }
+
+    @ViewBuilder
+    private func permissionsSection(_ agent: CodingAgentService) -> some View {
+        Section {
             Toggle("Auto-approve file edits (write / edit)", isOn: $agent.settings.autoApproveEdits)
             Toggle("Auto-run shell commands", isOn: $agent.settings.autoRunCommands)
+        } header: {
+            Text("Permissions")
+        } footer: {
             Text("With these off, the agent asks before it changes files or runs commands.")
-                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
 
-            Divider()
+    @ViewBuilder
+    private func teamSection(_ agent: CodingAgentService) -> some View {
+        Section {
             Toggle("Run teammates in parallel \(TeamRole.all.map(\.emoji).joined())",
                    isOn: $agent.settings.parallelAgents)
+        } header: {
+            Text("Team")
+        } footer: {
             Text("On: the Orchestrator can run the Coder and UI agents at the same time (faster on a big model). Off: teammates run one at a time — easier on a smaller model, since only one request hits the GPU at once.")
-                .font(.caption2).foregroundStyle(.secondary)
-
-            Divider()
+        }
+        Section {
             Button {
+                // Dismiss this sheet first, then open the next on the following
+                // runloop — SwiftUI won't present a sheet over another sheet.
                 showOptions = false
-                showAgents = true
+                DispatchQueue.main.async { showAgents = true }
             } label: {
                 Label("Edit team agents…", systemImage: "person.2.badge.gearshape")
             }
+        } footer: {
             Text("Each teammate’s instructions live in an editable Markdown file — tweak how they think, or reset to default.")
-                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
 
-            Divider()
+    @ViewBuilder
+    private func skillsSection(_ agent: CodingAgentService) -> some View {
+        Section {
             Toggle("Skills: load instruction packs on demand", isOn: $agent.settings.useSkills)
-            Text("On: every agent sees each skill’s name + description, and loads the full SKILL.md instructions only when a task matches — progressive disclosure, à la Codex/Anthropic.")
-                .font(.caption2).foregroundStyle(.secondary)
             Button {
                 showOptions = false
-                showSkills = true
+                DispatchQueue.main.async { showSkills = true }
             } label: {
                 Label(skillsButtonTitle, systemImage: "wand.and.stars")
             }
+        } header: {
+            Text("Skills")
+        } footer: {
+            Text("On: every agent sees each skill’s name + description, and loads the full SKILL.md instructions only when a task matches — progressive disclosure, à la Codex/Anthropic.")
+        }
+    }
 
-            Divider()
+    @ViewBuilder
+    private func memorySection(_ agent: CodingAgentService) -> some View {
+        Section {
             Toggle("Evolve: learn from each task", isOn: $agent.settings.evolve)
-            Text("On: the team remembers durable lessons about THIS project (build commands, conventions, gotchas) and reuses them next time — improving without re-training the model.")
-                .font(.caption2).foregroundStyle(.secondary)
             Button {
                 showOptions = false
-                showMemory = true
+                DispatchQueue.main.async { showMemory = true }
             } label: {
                 Label(memoryButtonTitle, systemImage: "brain")
             }
             .disabled(agent.workspaceURL == nil)
+        } header: {
+            Text("Memory")
+        } footer: {
+            Text("On: the team remembers durable lessons about THIS project (build commands, conventions, gotchas) and reuses them next time — improving without re-training the model.")
+        }
+    }
 
-            Divider()
-            Text("Advanced").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+    @ViewBuilder
+    private func advancedSection(_ agent: CodingAgentService) -> some View {
+        Section {
             Toggle("Use native tool-calling", isOn: $agent.settings.useNativeTools)
+        } header: {
+            Text("Advanced")
+        } footer: {
             Text("Turn off if your model errors on the tools field — the agent then relies on text tool calls.")
-                .font(.caption2).foregroundStyle(.secondary)
+        }
+        Section {
             Toggle("Let the model think first (slower)", isOn: $agent.settings.letModelThink)
+        } footer: {
             Text("Off (recommended) tells “thinking” models (Gemma-4, Qwen3) to act directly instead of reasoning at length — otherwise they can burn the whole turn thinking and never call a tool.")
-                .font(.caption2).foregroundStyle(.secondary)
+        }
+        Section {
             Stepper("Max tokens per step: \(agent.settings.maxTokens)",
                     value: $agent.settings.maxTokens, in: 256...8192, step: 256)
             HStack {
@@ -354,10 +390,13 @@ struct CodeView: View {
             }
             Button("Clear conversation") { agent.resetConversation() }
                 .disabled(agent.isRunning)
+        }
+    }
 
-            if !server.logTail.isEmpty {
-                Divider()
-                Text("Server log").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+    @ViewBuilder
+    private var serverLogSection: some View {
+        if !server.logTail.isEmpty {
+            Section("Server log") {
                 Text(server.logTail.suffix(20).joined(separator: "\n"))
                     .font(.system(.caption2, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -365,7 +404,6 @@ struct CodeView: View {
                     .textSelection(.enabled)
             }
         }
-        .padding(.top, 4)
     }
 
     // MARK: Transcript
