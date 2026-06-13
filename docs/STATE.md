@@ -320,7 +320,7 @@ not used at runtime — `ModelRegistry.DetectedModel` (the runtime equivalent)
 covers the current need. Either delete LocalModel or start using it for
 per-model preferences (favorite, alias, notes).
 
-### Practice tab (recursive self-improvement) — plumbing verified, tuning open
+### Practice tab (recursive self-improvement) — overfit root-cause fixed; empirical tuning still open
 
 New in this session. Implements rejection-sampling self-distillation gated by
 unit-test execution. **Verified end-to-end through the SwiftUI front-end on
@@ -338,6 +338,19 @@ round needs to be larger (more problems, higher candidates), the learning rate
 should be cut for tiny datasets, or both. Reasonable starting point: 40
 problems × 4 candidates on a stronger base. None of this is a fix to the loop
 plumbing — it's a defaults question. Worth revisiting after a few more runs.
+
+**Structural fix landed (2026-06-13 loop, iter 10):** the primary cause of that
+9% collapse was that each round trained on **only that round's keepers** (5 rows
+× ~50 iters → memorise-then-collapse). The round now trains on a **cumulative,
+deduped buffer of all rounds' keepers so far** (`round_N/cumulative/`, built by
+`SelfImproveService.mergeAndSplitKeepers` — dedup by user-prompt, latest round's
+solution wins), so the training set grows monotonically instead of staying tiny.
+This is the textbook rejection-fine-tuning buffer and is the highest-confidence
+anti-overfit lever; it's covered by 6 new unit tests. **Still unvalidated by a
+live run** — whether the curve now *improves* (vs merely not collapsing) needs an
+end-to-end Practice run, and the numeric defaults (rounds/candidates/iters/LR)
+are deliberately unchanged pending that measurement. Next session: run Practice
+on Llama-1B and compare the trend to the old per-round-only behaviour.
 
 Earlier risks worth checking on first UI run:
 
@@ -2765,7 +2778,7 @@ build + the 39-test suite, commit locally (push is the user's call). Running tal
   Also folded in the stale-badge fix: Models-tab diffusion badge now reads
   "Diffusion · chat + Code" (was "chat only"), with the matching doc references
   de-staled. Build green (incl. the 80ms type-check gate).
-- **Iter 9 — custom eval suites importable + delta confirmed** (this commit): the
+- **Iter 9 — custom eval suites importable + delta confirmed** (`324ac9f`): the
   "Score it" delta vs the previous fine-tune was already implemented; the gap was
   custom suites being unreachable from the UI. `EvalService` gained `customSuites()`
   (discovery), `importCustomSuite(from:name:)` (validates each row has non-empty
@@ -2775,3 +2788,20 @@ build + the 39-test suite, commit locally (push is the user's call). Running tal
   an "Import suite…" button (NSOpenPanel) + delete. Resolves the long-standing
   "custom suites: on-disk only, no authoring UI" boundary (docs de-staled across
   WORKFLOWS/CONVENTIONS/CONTRACTS/EXTENDING/STATE/REFERENCES). Build + 39 tests green.
+- **Iter 10 — Practice cumulative keeper buffer (overfit root-cause fix)** (this
+  commit): each round trained on **only that round's keepers** (a handful of
+  passers → the LoRA memorised then collapsed: the smoke run's 31%→9%). It now
+  trains on a **cumulative deduped buffer of all rounds' keepers** (`round_N/
+  cumulative/`, built by the pure `SelfImproveService.mergeAndSplitKeepers` —
+  dedup by user-prompt, latest round's solution wins), so the training set grows
+  monotonically. Held-out eval, seed/eval split, prior-adapter continual scheme,
+  and the numeric defaults are all unchanged (those need a live run to tune).
+  +6 unit tests (45 total). Build + tests green. See the Practice section above —
+  the structural cause is fixed; whether the curve now *improves* still needs a
+  live multi-round Practice run to confirm.
+
+**Loop complete — 10/10 iterations.** Commits `d6be9ee`, `0794373`, `0eef282`,
+`de2cf94`, `3472ea7`, `a5d078c`, `2ca6d78`, `afebf99`, `0299474`, `324ac9f`, +
+this one. Resolved STATE.md items: GGUF chat-template, llama.cpp installer,
+orphaned-job Resume, dead `AgentTemplate`, disk guard, custom-suite authoring UI,
+Practice overfit root-cause. Iters 1–9 pushed to GitHub; iter 10 local.

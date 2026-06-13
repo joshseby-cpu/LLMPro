@@ -1077,8 +1077,12 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 │   ├── run.json                    ← sidecar (status / round count / timestamps)
 │   └── round_N/
 │       ├── results.jsonl           ← per-prompt pass/fail tally
-│       └── dataset/                ← passing solutions become the next-round training set
-│           ├── train.jsonl
+│       ├── dataset/                ← THIS round's passing solutions (per-round keepers, from self_improve_round.py)
+│       │   ├── train.jsonl
+│       │   ├── valid.jsonl
+│       │   └── test.jsonl
+│       └── cumulative/             ← deduped union of rounds 1..N keepers — the ACTUAL training set
+│           ├── train.jsonl          (growing buffer; anti-overfit. dedup by user-prompt, latest round wins)
 │           ├── valid.jsonl
 │           └── test.jsonl
 │   # Note: per-round adapters live under adapters/<round-job-uuid>/, NOT here,

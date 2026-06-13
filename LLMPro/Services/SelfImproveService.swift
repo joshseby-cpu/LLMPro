@@ -259,12 +259,18 @@ final class SelfImproveService {
         try? context.save()
         run.writeSidecar()
 
-        // — 3b. Train on the round's dataset --------------------------------------
+        // — 3b. Train on the CUMULATIVE keeper buffer -----------------------------
+        // Rejection fine-tuning / ReST: train each round on the growing, deduped
+        // union of every round's keepers so far — not just this round's handful —
+        // which was the documented cause of the tiny-dataset overfit curve.
         status.phase = .training
         status.headline = "Round \(n): studying what it got right…"
-        status.detail = "\(roundRecord.rowsKept) kept lessons"
 
-        let datasetDir = roundDir.appendingPathComponent("dataset", isDirectory: true)
+        let datasetDir = roundDir.appendingPathComponent("cumulative", isDirectory: true)
+        let cumCounts = Self.buildCumulativeDataset(run: run, throughRound: n, into: datasetDir)
+        let cumulativeTotal = cumCounts.train + cumCounts.valid
+        status.detail = "\(cumulativeTotal) lessons so far (all rounds)"
+
         let adapterDir = PathResolver.adaptersDir.appendingPathComponent(roundJobID.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: adapterDir, withIntermediateDirectories: true)
 
@@ -327,6 +333,133 @@ final class SelfImproveService {
         appendLog(String(format: "round \(n) pass@1 = %.1f%%", pass * 100))
 
         return roundRecord
+    }
+
+    // MARK: – Cumulative keeper buffer (rejection fine-tuning / ReST)
+
+    /// Merge every round's keeper rows into one growing, deduped training set,
+    /// then re-split it deterministically into train/valid/test.
+    ///
+    /// This is the fix for the documented Practice overfit curve: training each
+    /// round on only that round's handful of passers overfits a tiny dataset.
+    /// Instead we train on the union of all rounds' keepers so far (textbook
+    /// rejection fine-tuning / ReST).
+    ///
+    /// - Parameter roundsRows: one `[String]` of raw JSONL lines per round, in
+    ///   round order (round 1 first … round n last). Each element is the union
+    ///   of that round's train + valid + test lines.
+    /// - Returns: deterministic train/valid/test line arrays.
+    ///
+    /// Dedup: keyed on `messages[0].content` (the user prompt). When the same
+    /// prompt appears in multiple rounds the LAST occurrence wins (latest round
+    /// = the most-improved model's solution). Lines that don't parse or carry no
+    /// `messages[0].content` are skipped. Pure + `nonisolated static` so tests
+    /// can call it with no main-actor hop and no filesystem.
+    nonisolated static func mergeAndSplitKeepers(roundsRows: [[String]])
+        -> (train: [String], valid: [String], test: [String]) {
+
+        // Dedup by prompt key, last-occurrence-wins, but preserve a stable
+        // first-seen order so the re-split is deterministic across runs.
+        var lineByKey: [String: String] = [:]
+        var orderByKey: [String: Int] = [:]
+        var nextOrder = 0
+
+        for round in roundsRows {
+            for line in round {
+                guard let key = Self.promptKey(from: line) else { continue }
+                if orderByKey[key] == nil {
+                    orderByKey[key] = nextOrder
+                    nextOrder += 1
+                }
+                lineByKey[key] = line   // last write wins → latest round kept
+            }
+        }
+
+        guard !lineByKey.isEmpty else { return ([], [], []) }
+
+        // Stable order: first-seen index, tie-broken by key for full determinism.
+        let orderedKeys = lineByKey.keys.sorted { a, b in
+            let oa = orderByKey[a] ?? Int.max
+            let ob = orderByKey[b] ?? Int.max
+            return oa != ob ? oa < ob : a < b
+        }
+        let rows = orderedKeys.map { lineByKey[$0]! }
+        let total = rows.count
+
+        // Degenerate 1-row case: mlx-lm needs a non-empty valid set, so reuse
+        // the single row across all three splits.
+        if total == 1 {
+            return ([rows[0]], [rows[0]], [rows[0]])
+        }
+
+        // Hold out ~10% as valid (at least 1 when total >= 2). test mirrors valid.
+        let validCount = max(1, total / 10)
+        let valid = Array(rows.suffix(validCount))
+        let train = Array(rows.prefix(total - validCount))
+        return (train, valid, valid)
+    }
+
+    /// Extracts the dedup key (`messages[0].content`) from one JSONL line, or
+    /// nil if the line doesn't parse or has no first user message content.
+    nonisolated private static func promptKey(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let messages = obj["messages"] as? [[String: Any]],
+              let first = messages.first,
+              let content = first["content"] as? String
+        else { return nil }
+        return content
+    }
+
+    /// Reads each round's `dataset/{train,valid,test}.jsonl` (rounds 1…n,
+    /// tolerating missing files), merges + re-splits via `mergeAndSplitKeepers`,
+    /// and writes the cumulative `train/valid/test.jsonl` into `destDir`.
+    /// Non-pure (touches disk) but `static` — no instance state.
+    @discardableResult
+    static func buildCumulativeDataset(run: SelfImproveRun,
+                                       throughRound n: Int,
+                                       into destDir: URL) -> (train: Int, valid: Int, test: Int) {
+        var roundsRows: [[String]] = []
+        for k in 1 ... max(1, n) {
+            let dir = run.roundDir(k).appendingPathComponent("dataset", isDirectory: true)
+            var rows: [String] = []
+            for name in ["train.jsonl", "valid.jsonl", "test.jsonl"] {
+                rows.append(contentsOf: readJSONLines(dir.appendingPathComponent(name)))
+            }
+            roundsRows.append(rows)
+        }
+
+        let split = mergeAndSplitKeepers(roundsRows: roundsRows)
+
+        do {
+            try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+            try writeJSONLines(split.train, to: destDir.appendingPathComponent("train.jsonl"))
+            try writeJSONLines(split.valid, to: destDir.appendingPathComponent("valid.jsonl"))
+            try writeJSONLines(split.test,  to: destDir.appendingPathComponent("test.jsonl"))
+        } catch {
+            Log.error("Practice: failed to write cumulative dataset at \(destDir.path): \(error.localizedDescription)", .training, error: error)
+        }
+
+        return (split.train.count, split.valid.count, split.test.count)
+    }
+
+    /// Reads a JSONL file into non-empty lines. Returns [] when the file is
+    /// missing or unreadable (tolerated — early rounds may lack some splits).
+    nonisolated private static func readJSONLines(_ url: URL) -> [String] {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8)
+        else { return [] }
+        return text.split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    nonisolated private static func writeJSONLines(_ lines: [String], to url: URL) throws {
+        let body = lines.joined(separator: "\n")
+        let content = lines.isEmpty ? "" : body + "\n"
+        try content.write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: – Subprocess wrappers
