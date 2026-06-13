@@ -83,7 +83,9 @@ def _start_poller(repo_cache_dir: Path, total_bytes: int) -> threading.Event:
             downloaded = _dir_bytes(repo_cache_dir)
             if downloaded != last_downloaded:
                 last_downloaded = downloaded
-                percent = (downloaded / total_bytes) if total_bytes else 0.0
+                # Clamp: a reported total that under-counts (e.g. xet chunk
+                # overhead, .incomplete padding) can push the raw ratio > 1.0.
+                percent = min(1.0, downloaded / total_bytes) if total_bytes > 0 else 0.0
                 emit({
                     "event": "progress",
                     "downloaded": downloaded,

@@ -88,7 +88,9 @@ final class JobRegistry {
     }
 
     func stopAll() async {
-        for (id, _) in processes { stop(jobID: id) }
+        // Snapshot the keys first — stop() calls processes.removeValue(forKey:),
+        // and mutating a Dictionary while iterating it traps.
+        for id in Array(processes.keys) { stop(jobID: id) }
     }
 
     func detachAll() {

@@ -36,20 +36,25 @@ final class AutoTunerTests: XCTestCase {
         XCTAssertEqual(AutoTuner.categorize(repoID: "some-2b-model"), .small)
     }
 
-    /// No "<num>B" marker → ACTUAL behavior is .tiny.
+    /// No "<num>B" marker → falls back to .medium (the documented, safer default).
     ///
-    /// NOTE: the source doc comment claims "Falls back to .medium if no marker is
-    /// found", but the trailing `return .medium` is dead code: the patterns table
-    /// ends with `(0.0, .tiny)` and `maxBillion` is 0 when no marker matches, so
-    /// `maxBillion >= 0.0` always returns .tiny first. This test pins the actual
-    /// contract rather than the (unreachable) documented one. In practice every
-    /// caller passes a real repoID that contains a size marker, so this only bites
-    /// a custom-renamed model with no size in its name (which then gets the most
-    /// aggressive .tiny hyperparameters). Whether the intended default is .tiny or
-    /// .medium is a product decision flagged back to the orchestrator.
-    func testCategorizeNoMarkerFallsBackToTiny() {
-        XCTAssertEqual(AutoTuner.categorize(repoID: "mlx-community/some-coding-model"), .tiny)
-        XCTAssertEqual(AutoTuner.categorize(repoID: "phi-mini-instruct"), .tiny)
+    /// This was previously a bug: the patterns table ended with `(0.0, .tiny)` and
+    /// `maxBillion` is 0 when no marker matches, so `maxBillion >= 0.0` always
+    /// returned .tiny first, making the documented `return .medium` dead code. A
+    /// custom-renamed model with no size in its name therefore got the most
+    /// aggressive .tiny hyperparameters. Fixed (2026-06-13 audit): the `(0.0, .tiny)`
+    /// tuple was removed and an explicit `0 < maxBillion < 2 → .tiny` branch added,
+    /// so a real sub-2B marker still maps to tiny while an UNMARKED id now correctly
+    /// falls through to .medium.
+    func testCategorizeNoMarkerFallsBackToMedium() {
+        XCTAssertEqual(AutoTuner.categorize(repoID: "mlx-community/some-coding-model"), .medium)
+        XCTAssertEqual(AutoTuner.categorize(repoID: "phi-mini-instruct"), .medium)
+    }
+
+    /// A genuine sub-2B marker still maps to .tiny (the explicit guarded branch).
+    func testCategorizeSmallMarkerStillTiny() {
+        XCTAssertEqual(AutoTuner.categorize(repoID: "llama-3.2-1b-instruct"), .tiny)
+        XCTAssertEqual(AutoTuner.categorize(repoID: "qwen2.5-1.5b"), .tiny)
     }
 
     /// When multiple markers appear, the largest wins (e.g. a "1.5B" embedder

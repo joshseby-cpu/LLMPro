@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct ProcessExit: Sendable {
     let code: Int32
@@ -29,6 +30,13 @@ struct RunningProcess: @unchecked Sendable {
     func interrupt() {
         guard process.isRunning else { return }
         process.interrupt()
+    }
+
+    /// SIGKILL — the hard escalation when `terminate()` (SIGTERM) is ignored.
+    /// `Process` has no kill API, so signal the PID directly.
+    func kill() {
+        guard process.isRunning else { return }
+        Darwin.kill(process.processIdentifier, SIGKILL)
     }
 
     func detach() {
@@ -117,8 +125,27 @@ enum ProcessRunner {
         let (stdoutStream, stdoutCont) = AsyncStream<String>.makeStream(bufferingPolicy: .unbounded)
         let (stderrStream, stderrCont) = AsyncStream<String>.makeStream(bufferingPolicy: .unbounded)
 
-        attachLineReader(handle: outPipe.fileHandleForReading, continuation: stdoutCont)
-        attachLineReader(handle: errPipe.fileHandleForReading, continuation: stderrCont)
+        // If the consumer abandons the stream (its awaiting Task is cancelled),
+        // reap the child so it doesn't orphan, and tear down the readabilityHandler
+        // so the continuation + LineBuffer aren't retained forever. `process` is a
+        // reference type; capture it through a Sendable box for the @Sendable closure.
+        let procBox = SendableBox(process)
+        let outHandle = outPipe.fileHandleForReading
+        let errHandle = errPipe.fileHandleForReading
+        stdoutCont.onTermination = { @Sendable _ in
+            outHandle.readabilityHandler = nil
+            if procBox.value.isRunning { procBox.value.terminate() }
+        }
+        stderrCont.onTermination = { @Sendable _ in
+            errHandle.readabilityHandler = nil
+            if procBox.value.isRunning { procBox.value.terminate() }
+        }
+
+        // The readabilityHandler owns stream termination: it finishes the
+        // continuation on EOF *after* draining the buffered remainder, so the final
+        // traceback/error line is never lost to a racing finish() from the exit Task.
+        attachLineReader(handle: outHandle, continuation: stdoutCont)
+        attachLineReader(handle: errHandle, continuation: stderrCont)
 
         Log.info("spawn: \(executable.lastPathComponent) \(arguments.joined(separator: " "))", .python)
         do {
@@ -132,8 +159,9 @@ enum ProcessRunner {
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 process.terminationHandler = { _ in cont.resume() }
             }
-            stdoutCont.finish()
-            stderrCont.finish()
+            // Do NOT finish the continuations here — the readabilityHandler finishes
+            // each stream itself once it has seen EOF and drained the buffered tail.
+            // Finishing here would race the EOF drain and drop the final line.
             return ProcessExit(
                 code: process.terminationStatus,
                 signal: process.terminationReason == .uncaughtSignal ? process.terminationStatus : nil
@@ -152,6 +180,9 @@ enum ProcessRunner {
                     continuation.yield(remainder)
                 }
                 fh.readabilityHandler = nil
+                // EOF: this reader owns termination — finish only after the
+                // buffered remainder has been yielded, so the tail is never lost.
+                continuation.finish()
                 return
             }
             for line in buffer.append(chunk) {
@@ -159,6 +190,14 @@ enum ProcessRunner {
             }
         }
     }
+}
+
+/// Wraps a non-Sendable reference in a Sendable container so it can be captured
+/// by a @Sendable continuation-termination closure. Safe here because the only
+/// access is `isRunning` / `terminate()`, which `Process` serializes internally.
+private final class SendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }
 
 /// Thread-safe line buffer for piped stdout/stderr.

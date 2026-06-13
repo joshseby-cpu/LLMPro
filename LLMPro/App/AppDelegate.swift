@@ -35,7 +35,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch response {
         case .alertFirstButtonReturn:
-            Task { await JobRegistry.shared.stopAll() }
+            // .terminateLater means AppKit waits for an explicit reply. JobRegistry
+            // is @MainActor, so the reply follows the await on the main actor — if
+            // we never call reply(), AppKit hangs forever (no other code does).
+            Task {
+                await JobRegistry.shared.stopAll()
+                sender.reply(toApplicationShouldTerminate: true)
+            }
             return .terminateLater
         case .alertSecondButtonReturn:
             JobRegistry.shared.detachAll()

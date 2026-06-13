@@ -118,12 +118,14 @@ enum AutoTuner {
     static func categorize(repoID: String) -> ModelSize {
         let lowered = repoID.lowercased()
         // Match patterns like "27b", "1.5b", "32b", "3b", "70b". Order matters: check large first.
+        // No (0.0, .tiny) tuple — a 0 (no marker found) must fall through to `.medium`,
+        // not silently match `0 >= 0.0`. `.tiny` is reached only via the explicit
+        // sub-2B branch below so an unmarked 7B model never gets tiny's hyperparameters.
         let patterns: [(Double, ModelSize)] = [
             (20.0, .huge),
             (10.0, .large),
             (5.0,  .medium),
             (2.0,  .small),
-            (0.0,  .tiny),
         ]
         // Extract every "<num>B" or "<num>b" marker; pick the largest.
         let regex = try! NSRegularExpression(pattern: #"(\d+(?:\.\d+)?)\s*b\b"#)
@@ -137,6 +139,9 @@ enum AutoTuner {
         for (threshold, size) in patterns where maxBillion >= threshold {
             return size
         }
+        // Explicit sub-2B bucket: a real marker under 2B (e.g. "1B", "1.5B") → tiny.
+        if maxBillion > 0 && maxBillion < 2 { return .tiny }
+        // No size marker at all → default to medium (documented fallback).
         return .medium
     }
 
@@ -486,6 +491,13 @@ enum AutoTuner {
         )
     }
 
+    /// Count non-empty lines in a JSONL file, 0 if it can't be read. Used to clamp
+    /// DPO `val_batches` to the (typically tiny) preference valid set.
+    private static func countJSONLines(at path: String) -> Int {
+        guard let s = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) else { return 0 }
+        return s.split(whereSeparator: \.isNewline).count
+    }
+
     /// Render an AutoTunedConfig + paths into the mlx-lm YAML our TrainingService consumes.
     static func renderYAML(repoID: String, dataPath: String, adapterPath: String,
                            tuned: AutoTunedConfig) -> String {
@@ -518,7 +530,15 @@ enum AutoTuner {
         // try first. Evaluate ~5×/run, snapshot ~4×/run.
         cfg.stepsPerEval = max(10, tuned.iters / 5)
         cfg.saveEvery = max(cfg.stepsPerEval, tuned.iters / 4)
-        cfg.valBatches = 10
+        // DPO preference valid sets are tiny (often 1-5 rows). Requesting more val
+        // batches than exist skews val-loss, so clamp to the actual valid-row count
+        // when known (mirrors SelfImproveService's val_batches cap). SFT keeps 10.
+        if tuned.trainMode == .dpo {
+            let validCount = countJSONLines(at: dataPath + "/valid.jsonl")
+            cfg.valBatches = validCount > 0 ? max(1, min(10, validCount / max(1, cfg.batchSize))) : 1
+        } else {
+            cfg.valBatches = 10
+        }
         // Mild LoRA dropout — free regularization on the small coding datasets this
         // app trains on; matches the curated recipes (0.05). Off for NaN-prone bases.
         cfg.loraDropout = tuned.optimizer == "sgd" ? 0.0 : 0.05

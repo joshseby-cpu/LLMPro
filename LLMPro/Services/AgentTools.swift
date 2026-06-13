@@ -717,12 +717,46 @@ struct ToolExecutor: Sendable {
 
     /// Resolve a workspace-relative (or absolute) path and refuse anything that
     /// escapes the project root. `..` is resolved lexically before the check.
+    ///
+    /// The lexical check (`..`/absolute + standardized prefix) is NOT sufficient on
+    /// its own: `standardizedFileURL` does not resolve symlinks, so a symlink that
+    /// lives inside the workspace but points outside it would pass the prefix test
+    /// and let a tool read/write the real out-of-tree target. We therefore resolve
+    /// symlinks and re-check containment against a canonicalized root. For paths that
+    /// do not yet exist (creating a new file), we canonicalize the deepest existing
+    /// ancestor directory and re-append the remaining components, which blocks writing
+    /// THROUGH a symlinked parent that escapes while still allowing genuinely-new
+    /// files inside the jail.
     private func sandboxed(_ relative: String) throws -> URL {
         let root = workspace.standardizedFileURL
         let rel = relative.trimmingCharacters(in: .whitespacesAndNewlines)
         let joined = rel.hasPrefix("/") ? URL(fileURLWithPath: rel) : root.appendingPathComponent(rel)
         let std = joined.standardizedFileURL
+        // Lexical guard first: reject `..`/absolute escapes before touching disk.
         guard std.path == root.path || std.path.hasPrefix(root.path + "/") else {
+            throw ToolError.outsideWorkspace(rel)
+        }
+        // Canonicalize the root the SAME way we resolve candidates, so the two are
+        // comparable (e.g. /var → /private/var on macOS).
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let resolved: URL
+        if FileManager.default.fileExists(atPath: std.path) {
+            resolved = std.resolvingSymlinksInPath().standardizedFileURL
+        } else {
+            // Leaf does not exist: walk up to the deepest existing ancestor, resolve
+            // its symlinks, then re-append the missing trailing components.
+            var ancestor = std.deletingLastPathComponent()
+            var trailing: [String] = [std.lastPathComponent]
+            while !FileManager.default.fileExists(atPath: ancestor.path),
+                  ancestor.path != "/" && ancestor.path != ancestor.deletingLastPathComponent().path {
+                trailing.insert(ancestor.lastPathComponent, at: 0)
+                ancestor = ancestor.deletingLastPathComponent()
+            }
+            var rebuilt = ancestor.resolvingSymlinksInPath().standardizedFileURL
+            for comp in trailing { rebuilt.appendPathComponent(comp) }
+            resolved = rebuilt.standardizedFileURL
+        }
+        guard resolved.path == canonicalRoot.path || resolved.path.hasPrefix(canonicalRoot.path + "/") else {
             throw ToolError.outsideWorkspace(rel)
         }
         return std

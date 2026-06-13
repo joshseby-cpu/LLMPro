@@ -149,7 +149,14 @@ final class SelfImproveService {
             status.headline = "Done — see Try it out to chat with the improved model."
             activeProcess = nil
         } catch {
-            fail(run: run, context: context, error: error)
+            // A user cancel terminates the subprocess (SIGTERM → non-zero exit), which
+            // throws here. Route to the cancelled terminal state instead of overwriting
+            // it with .failed and a misleading error message.
+            if status.phase == .cancelled || Task.isCancelled {
+                cancelled(run: run, context: context)
+            } else {
+                fail(run: run, context: context, error: error)
+            }
         }
     }
 
@@ -536,7 +543,9 @@ final class SelfImproveService {
                     rowsDone += 1
                     status.detail = "Graded \(rowsDone) of \(totalRows)"
                 case "done":
-                    passAtOne = event["pass_at_1"] as? Double
+                    // pass_at_1 is the k==1 alias; for k>1 the helper emits only
+                    // pass_at_k. Read both so a k>1 run never silently reports 0%.
+                    passAtOne = (event["pass_at_1"] as? Double) ?? (event["pass_at_k"] as? Double)
                 case "error":
                     throw LoopError.helperEmittedError((event["message"] as? String) ?? "eval failed")
                 default: break
@@ -663,6 +672,19 @@ final class SelfImproveService {
         status.phase = .failed
         status.headline = "Stopped"
         status.detail = msg
+        activeProcess = nil
+    }
+
+    /// Persist a user-initiated cancel as the cancelled terminal state (not .failed).
+    private func cancelled(run: SelfImproveRun, context: ModelContext) {
+        run.status = .cancelled
+        run.lastError = nil
+        run.endedAt = Date()
+        try? context.save()
+        run.writeSidecar()
+        status.phase = .cancelled
+        status.headline = "Stopped"
+        status.detail = "Cancelled."
         activeProcess = nil
     }
 

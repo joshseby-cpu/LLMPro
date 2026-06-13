@@ -32,6 +32,7 @@ final class EvalService {
         case helperEmittedError(String)
         case process(String)
         case runVanished
+        case noProblems
 
         var errorDescription: String? {
             switch self {
@@ -41,6 +42,7 @@ final class EvalService {
             case .helperEmittedError(let s): "Helper error: \(s)"
             case .process(let s):            "Process error: \(s)"
             case .runVanished:               "Evaluation record vanished mid-run."
+            case .noProblems:                "No problems were graded — the suite is empty."
             }
         }
     }
@@ -493,6 +495,12 @@ final class EvalService {
 
         let passedCount = donePassed ?? passedSoFar
         let totalCount  = doneTotal ?? (total > 0 ? total : tasks.count)
+        // A done event carrying total: 0 (doneTotal is non-nil 0) means nothing was
+        // graded — saving a 0/0 passAtK would persist a misleading report card.
+        // Surface it as a failure instead.
+        guard totalCount > 0 else {
+            throw EvalError.noProblems
+        }
         let passAtK     = donePassAtK ?? (totalCount > 0 ? Double(passedCount) / Double(totalCount) : 0)
 
         live.passAtK = passAtK

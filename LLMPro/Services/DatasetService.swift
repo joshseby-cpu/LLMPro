@@ -32,11 +32,22 @@ enum DatasetService {
                 .split(whereSeparator: \.isNewline)
                 .map(String.init)
             let total = lines.count
-            let trainCut = max(1, Int(Double(total) * 0.9))
-            let validCut = max(trainCut + 1, Int(Double(total) * 0.95))
+            // 90/5/5 split that keeps each of train/valid/test non-empty when total >= 3.
+            // The naive cuts steal the test split's only row on small files (e.g. total=10
+            // → test empty), so reserve at least one row for valid and one for test.
+            let trainCut: Int
+            let validCut: Int
+            if total >= 3 {
+                trainCut = min(max(1, Int(Double(total) * 0.9)), total - 2)
+                validCut = min(max(trainCut + 1, Int(Double(total) * 0.95)), total - 1)
+            } else {
+                // Too few rows to give all three splits a row: put everything in train.
+                trainCut = total
+                validCut = total
+            }
             try lines[..<trainCut].joined(separator: "\n").write(to: destination.appendingPathComponent("train.jsonl"), atomically: true, encoding: .utf8)
-            try lines[trainCut..<min(validCut, total)].joined(separator: "\n").write(to: destination.appendingPathComponent("valid.jsonl"), atomically: true, encoding: .utf8)
-            try lines[min(validCut, total)..<total].joined(separator: "\n").write(to: destination.appendingPathComponent("test.jsonl"), atomically: true, encoding: .utf8)
+            try lines[trainCut..<validCut].joined(separator: "\n").write(to: destination.appendingPathComponent("valid.jsonl"), atomically: true, encoding: .utf8)
+            try lines[validCut..<total].joined(separator: "\n").write(to: destination.appendingPathComponent("test.jsonl"), atomically: true, encoding: .utf8)
         } else {
             throw NSError(domain: "DatasetService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unsupported source: \(source.lastPathComponent)"])
         }

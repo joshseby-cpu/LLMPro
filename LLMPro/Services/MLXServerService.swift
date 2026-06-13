@@ -68,7 +68,10 @@ final class MLXServerService {
     // MARK: - Lifecycle
 
     func start(model: String, adapterPath: String?) async {
-        stop()
+        // Wait for the old server to fully exit before spawning the new one — a
+        // multi-GB mlx_lm server briefly coexisting with its replacement is the
+        // memory spike this guards against.
+        await stopAndWait()
         generation += 1
         let gen = generation
 
@@ -174,6 +177,51 @@ final class MLXServerService {
         process?.terminate()
         process = nil
         state = .stopped
+    }
+
+    /// Like `stop()`, but waits for the old server process to actually exit (and
+    /// release its multi-GB model from unified memory) before returning, so a
+    /// caller about to load a new model never double-occupies memory. Bounded by a
+    /// short timeout: if the process won't die in time, escalate from SIGTERM to
+    /// SIGKILL, then proceed regardless.
+    private func stopAndWait() async {
+        generation += 1                                    // invalidate any in-flight start/exit
+        exitWatcher?.cancel()
+        exitWatcher = nil
+        guard let oldProc = process else {
+            state = .stopped
+            return
+        }
+        process = nil
+        state = .stopped
+
+        oldProc.terminate()
+        let exited = await awaitExit(of: oldProc, timeout: 8)
+        if !exited {
+            // SIGTERM didn't take in time — escalate to a hard kill, then give it
+            // a brief moment to actually release memory before we return.
+            Log.error("Model server didn't exit on terminate; sending SIGKILL", .server)
+            oldProc.kill()
+            _ = await awaitExit(of: oldProc, timeout: 3)
+        }
+    }
+
+    /// Awaits a process's exit, capped at `timeout` seconds. Returns true if it
+    /// exited within the budget, false on timeout.
+    private func awaitExit(of proc: RunningProcess, timeout: TimeInterval) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                _ = try? await proc.exit.value
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
     }
 
     private func handleServerExit(generation gen: Int, code: Int32?) {

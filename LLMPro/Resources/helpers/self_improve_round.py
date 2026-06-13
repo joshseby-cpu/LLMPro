@@ -46,6 +46,8 @@ import json
 import os
 import random
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -97,11 +99,24 @@ def extract_code(response: str) -> str:
 _RUNNER_TEMPLATE = textwrap.dedent("""
     import resource, signal, sys, traceback
 
-    # Soft memory cap so a sample can't OOM the host.
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (1_073_741_824, 1_073_741_824))
-    except Exception:
-        pass
+    # Resource caps so a malicious / runaway sample can't harm the host. Each is
+    # best-effort (wrapped) — a missing rlimit on some platform shouldn't abort
+    # the test, the parent's timeout + process-group kill is the real backstop.
+    #   RLIMIT_AS    — address space, blocks OOM of the host
+    #   RLIMIT_NPROC — max processes for this uid, blocks fork bombs
+    #   RLIMIT_FSIZE — max bytes any single file write, caps disk abuse
+    #   RLIMIT_CPU   — CPU-seconds, belt for the wall-clock alarm below
+    for _name, _limit in (
+        ("RLIMIT_AS",    1_073_741_824),       # 1 GiB address space
+        ("RLIMIT_NPROC", 64),                   # no fork bombs
+        ("RLIMIT_FSIZE", 67_108_864),           # 64 MiB max single-file write
+        ("RLIMIT_CPU",   {timeout} + 5),        # CPU-seconds backstop
+    ):
+        try:
+            _r = getattr(resource, _name)
+            resource.setrlimit(_r, (_limit, _limit))
+        except Exception:
+            pass
 
     # Hard wall-clock cap inside the child as a belt for the parent's
     # `timeout` belt-and-suspenders.
@@ -147,31 +162,82 @@ _RUNNER_TEMPLATE = textwrap.dedent("""
 """)
 
 
+# Minimal env handed to model-generated code. We deliberately do NOT forward the
+# full process environment — that would leak any HF token / API secrets into
+# arbitrary generated code. Only the bare essentials a normal Python program
+# needs to start are allowlisted.
+_ENV_ALLOWLIST = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE")
+
+
+def _sandbox_env() -> dict[str, str]:
+    env = {k: os.environ[k] for k in _ENV_ALLOWLIST if k in os.environ}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
+
+
 def run_one_test(code: str, tests: str, entry: str, timeout: int) -> tuple[bool, str]:
-    """Run `code + tests` in a subprocess. Returns (passed, short_reason)."""
+    """Run `code + tests` in a hardened subprocess. Returns (passed, short_reason).
+
+    Containment layers (defence in depth — none is load-bearing alone):
+      • child runs in a fresh process group (`start_new_session=True`) so on a
+        timeout we can SIGKILL the WHOLE group, reaping any forked grandchildren
+        that `subprocess`'s direct-child kill would otherwise orphan;
+      • child gets a STRIPPED env (no HF/API secrets — see _sandbox_env);
+      • child's cwd is a throwaway tempdir, so any file writes land there, never
+        in the app's project tree (cleaned up in the finally);
+      • additional rlimits (NPROC/FSIZE/CPU/AS) + SIGALRM are set in the child
+        via _RUNNER_TEMPLATE.
+    """
     runner = _RUNNER_TEMPLATE.format(source=code, tests=tests, entry=entry, timeout=timeout)
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
         fh.write(runner)
         runner_path = fh.name
+    work_dir = tempfile.mkdtemp(prefix="llmpro_si_")
+    proc: subprocess.Popen | None = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, runner_path],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout + 5,        # belt: parent kills if child's alarm misses
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            cwd=work_dir,                  # writes land in throwaway space
+            env=_sandbox_env(),            # no inherited secrets
+            start_new_session=True,        # own process group → group-kill on timeout
         )
+        try:
+            out, err = proc.communicate(timeout=timeout + 5)  # belt: parent kills if child's alarm misses
+        except subprocess.TimeoutExpired:
+            # Kill the WHOLE group so forked grandchildren don't survive as orphans.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                proc.communicate(timeout=5)   # reap the now-dead group
+            except Exception:
+                pass
+            return False, "timeout"
         if proc.returncode == 0:
             return True, "ok"
-        msg = (proc.stderr or proc.stdout or "").strip().splitlines()
+        msg = (err or out or "").strip().splitlines()
         short = msg[-1][:120] if msg else f"exit {proc.returncode}"
         return False, short
-    except subprocess.TimeoutExpired:
-        return False, "timeout"
     except Exception as exc:
+        # Last-ditch: ensure no stray group is left running before we return.
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                try: proc.kill()
+                except Exception: pass
         return False, f"runner: {exc.__class__.__name__}"
     finally:
         try: os.unlink(runner_path)
+        except Exception: pass
+        try: shutil.rmtree(work_dir, ignore_errors=True)
         except Exception: pass
 
 
