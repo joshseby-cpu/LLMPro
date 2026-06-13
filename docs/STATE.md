@@ -283,14 +283,21 @@ Marked Experimental in the UI. The Python helper is correct but slow on 27B+
 only on smaller models in CLI. Defaults to projecting the refusal direction at
 60% depth; this might need to be a slider in the Advanced view.
 
-### llama.cpp helper for GGUF export of non-Llama architectures
+### llama.cpp helper for GGUF export of non-Llama architectures — RESOLVED
 
 The Export wizard correctly detects when GGUF export needs llama.cpp's
 `convert_hf_to_gguf.py` (for Qwen, Gemma, Phi). It looks for the converter at
-`<runtime>/llama.cpp/convert_hf_to_gguf.py`. **There is no auto-installer yet**
-— the wizard shows a warning but doesn't fix the problem. To unblock: add a
-button in Settings or the Export wizard that runs `git clone llama.cpp` into
-`runtime/` and `uv pip install gguf`.
+`<runtime>/llama.cpp/convert_hf_to_gguf.py`. **Now installable in one click:**
+`PythonRuntime.installLlamaCpp(progress:)` (mirrors `installMergekit` /
+`installDPOTrainer`) `git clone --depth 1`s llama.cpp into
+`PathResolver.llamaCppDir` and `uv pip install gguf`s into the venv; an "Install
+llama.cpp converter" button is surfaced in both the Export wizard (the
+`converterSection`) and Settings → Runtime ("GGUF export tools"). And
+`FuseService.fuseAndConvertExternalGGUF` now **fails fast** with an actionable
+`FuseError.llamaCppMissing` *before* the multi-minute fuse if the converter is
+absent (it used to spawn the missing script and surface a raw error). Guard +
+installer build-verified; the live clone is a runtime/network action not yet
+smoke-tested through the UI.
 
 ### Resume button for orphaned jobs
 
@@ -2707,3 +2714,28 @@ quantization pass, gated on the source precision (verified the gating matters):
 
 Verified end-to-end: F16 path convert→quantize→swap→load (1.2GB→349MB, generates);
 quantized path correctly skipped. BUILD SUCCEEDED.
+
+### Session 2026-06-13 — autonomous improvement loop (deep-research + 10 iterations)
+
+A self-paced `/loop` doing "deep research on LLMPro and improve it." Each
+iteration: pick the next backlog item from the audit, dispatch a Builder, gate on
+build + the 39-test suite, commit locally (push is the user's call). Running tally:
+
+- **Iter 1 — GGUF→MLX chat-template fallback** (`d6be9ee`): templateless instruct
+  GGUFs now get a per-arch fallback chat template on import (ChatML/Gemma/Llama3/
+  Phi3/Mistral); metadata-present path stays byte-identical. Closes the half-done
+  item at "GGUF→MLX importer does not reconstruct a chat template".
+- **Iter 2 — first XCTest suite** (`0794373`): 37 tests on the loop's critical-path
+  pure functions (LogStreamParser, DatasetService classify, AutoTuner,
+  FuseService templates). Deleted the stale `Tests/MLXStudioTests/`.
+- **Iter 3 — Code tab serves text-diffusion models** (`0eef282`): the agentic Code
+  loop can now drive DiffusionGemma via `diffusion_server.py` (OpenAI-compatible,
+  Gemma tool-call syntax → OpenAI `tool_calls`). Verified a live
+  Orchestrator→Coder→write_file chain.
+- **Iter 4 — ModelRegistry size dedup** (`3472ea7`): when a model appears in both HF
+  cache layouts, keep the larger `sizeBytes` (fixes the wrong per-model size
+  readout). +2 tests → 39 total.
+- **Iter 5 — llama.cpp guard + one-click installer** (this commit): see the
+  RESOLVED note above. `FuseError.llamaCppMissing` fail-fast guard +
+  `PythonRuntime.installLlamaCpp` + Install buttons in Export & Settings. Build +
+  39 tests green.

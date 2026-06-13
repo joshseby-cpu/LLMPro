@@ -60,6 +60,8 @@ struct ExportWizardView: View {
     @State private var ollamaInstalled: Bool = false
     @State private var alsoInstallInLMStudio: Bool = false
     @State private var lmstudioFusedName: String = ""
+    @State private var llamaCppInstalled: Bool = false
+    @State private var installingLlamaCpp: Bool = false
 
     /// Completed fine-tunes — Teach jobs and Practice runs — whose adapter
     /// weights are on disk. The single list the user exports from.
@@ -82,6 +84,7 @@ struct ExportWizardView: View {
             .navigationTitle("Export")
             .onAppear {
                 ollamaInstalled = FuseService.shared.locateOllama() != nil
+                Task { llamaCppInstalled = await FuseService.shared.llamaCppInstalled() }
             }
         }
     }
@@ -155,8 +158,7 @@ struct ExportWizardView: View {
                       systemImage: "info.circle").foregroundStyle(.orange)
             }
             if !isNativelyGGUFExportable(source) {
-                Label("This architecture isn't directly GGUF-exportable. Will run a two-step fuse + llama.cpp conversion (requires llama.cpp helper).",
-                      systemImage: "info.circle")
+                converterSection
             }
         }
         .onAppear {
@@ -167,6 +169,52 @@ struct ExportWizardView: View {
                     .replacingOccurrences(of: "-4bit", with: "")
                     + "-tuned"
             }
+        }
+    }
+
+    /// Shown under the GGUF options when the selected model's architecture isn't
+    /// directly GGUF-exportable (Qwen/Gemma/Phi). Export then needs llama.cpp's
+    /// converter — surface a one-click installer instead of letting the run fail
+    /// with a confusing spawn error.
+    @ViewBuilder
+    private var converterSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if llamaCppInstalled {
+                Label("This architecture needs a two-step fuse + llama.cpp conversion. The converter is installed — you're ready to export.",
+                      systemImage: "checkmark.circle")
+                    .foregroundStyle(.green)
+            } else {
+                Label("This architecture isn't directly GGUF-exportable. It needs the llama.cpp converter — install it once and you're set.",
+                      systemImage: "info.circle")
+                    .foregroundStyle(.orange)
+                Button {
+                    Task { await installConverter() }
+                } label: {
+                    if installingLlamaCpp {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Installing llama.cpp converter…")
+                        }
+                    } else {
+                        Label("Install llama.cpp converter", systemImage: "arrow.down.circle")
+                    }
+                }
+                .disabled(installingLlamaCpp || running)
+            }
+        }
+    }
+
+    private func installConverter() async {
+        installingLlamaCpp = true
+        error = nil
+        defer { installingLlamaCpp = false }
+        let ok = await PythonRuntime.shared.installLlamaCpp { msg in
+            log.append(msg)
+            if log.count > 500 { log.removeFirst(log.count - 500) }
+        }
+        llamaCppInstalled = await FuseService.shared.llamaCppInstalled()
+        if !ok {
+            error = "Couldn't install the llama.cpp converter. See the output below or Settings → Logs."
         }
     }
 

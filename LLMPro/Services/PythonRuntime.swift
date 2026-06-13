@@ -148,6 +148,30 @@ final class PythonRuntime {
         throw RuntimeError.uvNotFound
     }
 
+    /// Find a usable `git` binary: the macOS system one (`/usr/bin/git`, the
+    /// developer-tools shim) first, then common Homebrew locations. Used to clone
+    /// llama.cpp for the GGUF converter.
+    private func resolveGit() throws -> URL {
+        for candidate in ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"] {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return URL(fileURLWithPath: candidate)
+            }
+        }
+        throw RuntimeError.gitNotFound
+    }
+
+    private func runGit(_ args: [String]) async throws {
+        let git = try resolveGit()
+        appendLog("$ git \(args.joined(separator: " "))")
+        try await ProcessRunner.runCapturing(
+            executable: git,
+            arguments: args,
+            environment: ["GIT_TERMINAL_PROMPT": "0"],
+            onStdout: { [weak self] line in Task { @MainActor in self?.appendLog(line) } },
+            onStderr: { [weak self] line in Task { @MainActor in self?.appendLog(line) } }
+        )
+    }
+
     private func runUV(_ uv: URL, _ args: [String]) async throws {
         appendLog("$ \(uv.lastPathComponent) \(args.joined(separator: " "))")
         try await ProcessRunner.runCapturing(
@@ -201,6 +225,59 @@ final class PythonRuntime {
             ])
             return true
         } catch {
+            await MainActor.run { progress("Install failed: \(error.localizedDescription)") }
+            return false
+        }
+    }
+
+    /// True when llama.cpp's `convert_hf_to_gguf.py` is checked out under
+    /// `PathResolver.llamaCppDir`. The GGUF export fall-back for
+    /// non-natively-exportable architectures (Qwen/Gemma/Phi) needs it. Cheap
+    /// (a file-existence check). Mirrors `mergekitInstalled()` semantically.
+    func llamaCppInstalled() -> Bool {
+        let converter = PathResolver.llamaCppDir.appendingPathComponent("convert_hf_to_gguf.py")
+        return FileManager.default.fileExists(atPath: converter.path)
+    }
+
+    /// Install llama.cpp's GGUF converter on demand: shallow-clone the repo into
+    /// `PathResolver.llamaCppDir` (skipped if already present) and `uv pip install
+    /// gguf` (the converter's only runtime dep) into the venv. Mirrors
+    /// `installMergekit` — same `resolveUV`/`runUV` plumbing and progress
+    /// streaming. Called from the Export screen / Settings before a two-step
+    /// fuse → GGUF export of a non-natively-exportable architecture. Returns
+    /// true on success.
+    func installLlamaCpp(progress: @escaping @MainActor (String) -> Void) async -> Bool {
+        do {
+            let dir = PathResolver.llamaCppDir
+            if llamaCppInstalled() {
+                await MainActor.run { progress("llama.cpp converter already installed.") }
+            } else {
+                // A stale partial checkout (clone interrupted) would make `git
+                // clone` fail with "destination path already exists"; clear it so
+                // the retry is clean.
+                if FileManager.default.fileExists(atPath: dir.path) {
+                    try? FileManager.default.removeItem(at: dir)
+                }
+                await MainActor.run { progress("Cloning llama.cpp (the GGUF converter)…") }
+                try await runGit([
+                    "clone", "--depth", "1",
+                    "https://github.com/ggerganov/llama.cpp", dir.path
+                ])
+            }
+            // `gguf` is the converter's writer library; the clone ships
+            // requirements but we only need this one dep for convert_hf_to_gguf.py.
+            await MainActor.run { progress("Installing the GGUF writer (gguf)…") }
+            let uv = try await resolveUV()
+            try await runUV(uv, [
+                "pip", "install",
+                "--python", PathResolver.venvPython.path,
+                "gguf"
+            ])
+            Log.notice("llama.cpp GGUF converter installed at \(dir.path)", .model)
+            await MainActor.run { progress("llama.cpp converter ready.") }
+            return true
+        } catch {
+            Log.error("llama.cpp converter install failed", .model, error: error)
             await MainActor.run { progress("Install failed: \(error.localizedDescription)") }
             return false
         }
@@ -282,10 +359,13 @@ final class PythonRuntime {
 
     enum RuntimeError: LocalizedError {
         case uvNotFound
+        case gitNotFound
         var errorDescription: String? {
             switch self {
             case .uvNotFound:
                 return "Could not find `uv`. Install it from https://docs.astral.sh/uv/ or bundle a uv binary in Resources."
+            case .gitNotFound:
+                return "Could not find `git`. Install Xcode Command Line Tools (`xcode-select --install`) and try again."
             }
         }
     }

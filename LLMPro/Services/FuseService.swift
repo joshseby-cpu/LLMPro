@@ -6,12 +6,24 @@ actor FuseService {
     enum FuseError: LocalizedError {
         case runtimeNotReady
         case ollamaNotFound
+        case llamaCppMissing
         var errorDescription: String? {
             switch self {
             case .runtimeNotReady: "Python runtime not ready."
             case .ollamaNotFound:  "Ollama CLI not found. Install Ollama from https://ollama.com."
+            case .llamaCppMissing:
+                "The llama.cpp GGUF converter isn't installed — install it from the Export screen (or Settings) to export this architecture to GGUF."
             }
         }
+    }
+
+    /// True when llama.cpp's `convert_hf_to_gguf.py` is present on disk (under
+    /// `PathResolver.llamaCppDir`). The two-step fuse → GGUF fall-back for
+    /// non-natively-exportable architectures (Qwen/Gemma/Phi) needs it; install
+    /// it on demand via `PythonRuntime.installLlamaCpp`.
+    func llamaCppInstalled() -> Bool {
+        let converter = PathResolver.llamaCppDir.appendingPathComponent("convert_hf_to_gguf.py")
+        return FileManager.default.fileExists(atPath: converter.path)
     }
 
     /// Fuse a LoRA adapter back into the base model, producing safetensors.
@@ -72,10 +84,17 @@ actor FuseService {
         llamaCppDir: URL,
         onProgress: (@Sendable (String) -> Void)? = nil
     ) async throws {
+        // Fail fast BEFORE the (expensive) fuse if the converter isn't installed —
+        // never spawn a non-existent script (that produced a confusing raw spawn
+        // failure). The user installs it from the Export screen / Settings.
+        let converter = llamaCppDir.appendingPathComponent("convert_hf_to_gguf.py")
+        guard FileManager.default.fileExists(atPath: converter.path) else {
+            Log.error("GGUF export blocked: \(converter.path) not found — llama.cpp converter not installed", .model)
+            throw FuseError.llamaCppMissing
+        }
         try await fuse(baseModel: baseModel, adapterPath: adapterPath, savePath: fp16Path, onProgress: onProgress)
         guard await PythonRuntime.shared.isReady, let python = await PythonRuntime.shared.pythonURL
         else { throw FuseError.runtimeNotReady }
-        let converter = llamaCppDir.appendingPathComponent("convert_hf_to_gguf.py")
         try await ProcessRunner.runCapturing(
             executable: python,
             arguments: [converter.path, fp16Path, "--outfile", ggufPath, "--outtype", "f16"],

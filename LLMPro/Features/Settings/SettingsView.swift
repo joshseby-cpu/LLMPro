@@ -5,6 +5,9 @@ struct SettingsView: View {
     @State private var hfTokenDraft: String = ""
     @State private var savedTokenStatus: String = ""
     @State private var logText: String = ""
+    @State private var llamaCppInstalled: Bool = false
+    @State private var installingLlamaCpp: Bool = false
+    @State private var llamaCppStatus: String = ""
 
     var body: some View {
         TabView {
@@ -60,8 +63,41 @@ struct SettingsView: View {
                     NSWorkspace.shared.open(PathResolver.logsDir)
                 }
             }
+            Section("GGUF export tools") {
+                LabeledContent("llama.cpp converter",
+                               value: llamaCppInstalled ? "Installed" : "Not installed")
+                Button {
+                    Task { await installLlamaCpp() }
+                } label: {
+                    if installingLlamaCpp {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Installing…")
+                        }
+                    } else {
+                        Text(llamaCppInstalled ? "Reinstall llama.cpp converter" : "Install llama.cpp converter")
+                    }
+                }
+                .disabled(installingLlamaCpp)
+                if !llamaCppStatus.isEmpty {
+                    Text(llamaCppStatus).font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Needed to export Qwen / Gemma / Phi fine-tunes to GGUF (Ollama / LM Studio).")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+        .task { llamaCppInstalled = runtime.llamaCppInstalled() }
+    }
+
+    private func installLlamaCpp() async {
+        installingLlamaCpp = true
+        defer { installingLlamaCpp = false }
+        let ok = await runtime.installLlamaCpp { msg in llamaCppStatus = msg }
+        llamaCppInstalled = runtime.llamaCppInstalled()
+        if !ok && llamaCppStatus.isEmpty {
+            llamaCppStatus = "Install failed — see Logs."
+        }
     }
 
     private var paths_tab: some View {
