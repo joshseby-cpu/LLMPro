@@ -731,6 +731,20 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-06-13 (cont.) — Visual/aesthetic UI refresh (`5267406`, `ec3dc77`).**
+  Reviewed every tab live (screenshots) then restyled. (1) **Brand identity unified:**
+  new `AccentColor` asset (violet ≈ #6B4AFF/#8C78FF) wired app-wide via
+  `ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME` — all controls were system blue
+  despite the purple icon; now everything (sidebar selection, buttons, toggles,
+  sliders, progress) is brand violet. (2) **New `Core/Theme.swift` design system:**
+  `Color.brand`, `.card()` surface (defined border + elevation, replaces flat
+  `.thinMaterial`), `sectionHeader()`, `Theme.brandGradient`. (3) **Rolled out:** Home
+  + Teach/Progress/Practice/Lessons/Save&Use/First-run cards → `.card()`; Teach picker
+  gains a brand-tinted selected state; semantic green/orange/red preserved. (4) **Fixes:**
+  "Try it out" tab was titled "Model Arena" (fixed); its empty compare panes were bare
+  black voids (now a friendly empty-state). Build + 53 tests green; verified live on
+  Home/Teach/Try-it-out/Progress. Convention recorded in CONVENTIONS.md "Brand accent +
+  the shared card surface".
 - **Session 2026-06-13 (cont.) — Full code audit + fixes (3 commits).** A 6-agent
   read-only audit of the whole codebase, then correctness/safety fixes landed across
   three commits (build + 53 tests green; this was a code session — the docs were

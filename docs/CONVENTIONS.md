@@ -405,6 +405,13 @@ through a fresh `AutoTuner.tune()` — that could change the LoRA shape.
 
 ## UX
 
+### Brand accent + the shared card surface (use the design system)
+
+The app has one visual identity: a **brand violet** (the app icon's purple + grad-cap).
+It's an `AccentColor` asset wired as the app-wide accent (`ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor` in `project.yml`), so **every system control — sidebar selection, buttons, toggles, sliders, progress bars, selected cards — tints brand automatically**. Don't hardcode `.blue`/`Color.blue` for an accent, selection, or CTA; use `Color.brand` (from [`Core/Theme.swift`](../LLMPro/Core/Theme.swift)) or just let the control inherit the tint. Semantic colors are the exception and stay literal: **green** = success / memory-ok, **orange** = warning / interrupted, **red** = destructive / error, and the system/user/assistant chat-role palette.
+
+For content cards, use **`.card()`** (from `Theme.swift`) — a defined, slightly-elevated rounded surface — instead of re-rolling `.background(.thinMaterial, in: RoundedRectangle(...))`. A selected card adds a `Color.brand` border + faint brand fill. **Leave flat** (don't `.card()`): dark log/terminal panels, the code editor, chat bubbles, chips/pills/badges, grouped `Form`s, and inset `List` rows. Section headers use `sectionHeader(_:systemImage:)`. This keeps every tab visually consistent without per-view chrome.
+
 ### "9-year-old friendly" by default; technical by disclosure
 
 Following an explicit user request, the primary UI uses:
