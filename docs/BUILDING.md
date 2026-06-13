@@ -170,7 +170,7 @@ Just hit ⌘R in Xcode. If you've added a new file, do
 
 ### "I want to run the tests"
 
-There's a 37-test XCTest suite in `Tests/LLMProTests/` (the `LLMProTests` target).
+There's a 53-test XCTest suite in `Tests/LLMProTests/` (the `LLMProTests` target).
 Run it from the CLI:
 
 ```bash

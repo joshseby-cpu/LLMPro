@@ -423,6 +423,22 @@ python <helper>.py <required-args...> [optional-args...]
 Swift side: spawn via [`ProcessRunner.swift`](../LLMPro/Core/ProcessRunner.swift)
 with `PYTHONUNBUFFERED=1` in the environment so output flushes line-by-line.
 
+**⚠️ HF token travels via the `HF_TOKEN` env var, NOT argv (2026-06-13 audit).** The
+two HF-authenticated helpers — [`hf_download.py`](../LLMPro/Resources/helpers/hf_download.py)
+and [`prepare_coding_dataset.py`](../LLMPro/Resources/helpers/prepare_coding_dataset.py)
+— now receive the HuggingFace token through the **`HF_TOKEN` environment variable**
+(set by Swift's `DownloadService` / `DatasetPrepService` from the Keychain via
+`KeychainHelper.readHFToken`), so the secret never appears in the process argv / `ps`
+output. The Python reads `os.environ.get("HF_TOKEN")`; a **positional argv token is a
+deprecated fallback** kept only for backward compatibility. New invocation shape:
+
+```bash
+HF_TOKEN=<token> python hf_download.py <repo_id> <cache_dir>
+HF_TOKEN=<token> python prepare_coding_dataset.py <preset_id> <output_dir> [max_rows]
+```
+
+Don't reintroduce the token as a positional argument — pass it in the environment.
+
 **`mlx_run.py` launcher — Apple-Silicon MLX memory tuning (always on).**
 `MemoryService.wrap()` **always** prepends `mlx_run.py` to the mlx_lm argv (so it
 runs on every training, inference, and coding-agent-server invocation), and
@@ -533,6 +549,25 @@ progress without polling. Consumed by
 These helpers also re-emit a `start` event with `rows / candidates / model / adapter`
 fields and a `done` event with `pass_at_1` (eval) or `pass_rate / kept / train / valid / test` (round).
 The contracts of `start / done / error` are unchanged — see above.
+
+#### `self_improve_round.py` — model-generated-code sandbox (hardened 2026-06-13 audit)
+
+`self_improve_round.py` runs **model-generated** code to unit-test each candidate, so
+its sandbox was hardened. Each candidate now runs:
+
+- in its **own process group** (`start_new_session=True`), so a timeout escalates to a
+  **`killpg`** of the whole group — a candidate can't outlive the wall-clock alarm by
+  forking;
+- in a **throwaway cwd** (a temp dir), so writes don't touch the run's output;
+- with a **stripped environment** — only an explicit allowlist is passed through, so
+  generated code **no longer sees `HF_TOKEN` or any other inherited secret**;
+- under `RLIMIT_NPROC` (fork-bomb cap), `RLIMIT_FSIZE` (64 MiB single-file write cap),
+  and `RLIMIT_CPU` (a CPU-seconds backstop), on top of the pre-existing
+  `RLIMIT_AS=1 GB + SIGALRM`.
+
+This is still a "code from a model we just fine-tuned" trust model, not a
+general-purpose sandbox, but the obvious fork-bomb / disk-abuse / secret-leak holes
+are closed. The JSON-event contract is unchanged.
 
 #### `eval_pass_rate.py` — `--k` / `--temperature` (pass@k)
 
@@ -895,6 +930,26 @@ private func handle(line: String, id: UUID) {
     }
 }
 ```
+
+### `ProcessRunner` process model (EOF/cancel semantics — 2026-06-13 audit)
+
+`ProcessRunner` exposes two entry points — `runCapturing()` (await full completion)
+and `spawn()` (returns a `RunningProcess` streaming handle). Two contract details
+matter when wrapping a helper:
+
+- **The pipe reader (not the exit handler) finishes the output streams on EOF.** The
+  `readabilityHandler` owns stream termination: it finishes the stdout/stderr
+  `AsyncStream` continuations when it reads EOF. This was the fix for a **dropped final
+  line** — the previous code finished the streams in the process-exit handler, which
+  could fire before the reader had drained the last buffered line, silently losing the
+  **error/traceback tail** of a helper that died. Any helper's final `{"event":"error"}`
+  line is now guaranteed to be delivered.
+- **A cancelled consumer reaps the child.** The streaming continuation's
+  `onTermination` now **terminates the child process** when the consuming `Task` is
+  cancelled, so a cancelled stream no longer **orphans** the subprocess. For the hard
+  case, `RunningProcess.kill()` sends **SIGKILL** (the escalation when `terminate()`'s
+  SIGTERM is ignored — `Foundation.Process` has no kill API, so it signals the PID
+  directly).
 
 ---
 

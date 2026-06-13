@@ -65,7 +65,7 @@ working in one area knows what exists elsewhere. Filenames are clickable.
 |---|---|
 | [`LLMPro/Core/PathResolver.swift`](../LLMPro/Core/PathResolver.swift) | Single source of truth for every directory the app uses. Lazily creates dirs on first access. All other code calls `PathResolver.adaptersDir`, `PathResolver.datasetDir(for: uuid)`, etc. — never builds paths from raw strings. Includes `agentsDir` (`~/Library/Application Support/LLMPro/agents/`) — the editable `<role>.md` team-agent definitions seeded by `AgentStore` — `skillsDir` (`~/Library/Application Support/LLMPro/skills/`) — the Agent Skills library, one folder per `SKILL.md` package — and `evalsDir` (`~/Library/Application Support/LLMPro/evals/`) + `evalSuiteDir(for:)` — the scored-eval harness's cached suites + per-run sidecars (see [`CONTRACTS.md`](CONTRACTS.md#6-filesystem-layout-the-canonical-paths)). |
 | [`LLMPro/Core/LoopHandoff.swift`](../LLMPro/Core/LoopHandoff.swift) | The feedback loop's cross-tab glue. `struct ModelHandoff: Sendable { model: String; adapterPath: String?; autoScore: Bool = false }` — a base model + optional LoRA adapter — is posted as a notification `object` to pre-fill the next stage's tab (Progress→Try-it-out/Code, Practice→Try-it-out/Code), so the user never copies a disk path by hand. **`autoScore`** (additive, default false) tells the Test node to auto-run the eval on arrival — Progress's "Grade it" CTA sets it. Receivers accept **either** a `ModelHandoff` **or** a bare `String` (model only) for backward compatibility (the dual-decode is unchanged). Also declares `Notification.Name.openCodeWithModel` (open the Code tab + load this model/adapter). **Also declares `struct PreferenceHandoff: Sendable { model; adapterPath?; datasetID: UUID }` + `Notification.Name.openTrainingWithPreferences`** — the **DPO preference back-edge**: the Arena's "Teach by preference →" CTA posts it (carrying the `.preference` dataset) and `TrainingConfigView` pre-fills + switches to DPO mode. See [`CONCEPT.md`](CONCEPT.md). |
-| [`LLMPro/Core/ProcessRunner.swift`](../LLMPro/Core/ProcessRunner.swift) | `Foundation.Process` wrapper that returns `AsyncStream<String>` for stdout/stderr (line-buffered via a thread-safe `LineBuffer` class with NSLock). Two entry points: `runCapturing()` (await full completion) and `spawn()` (return a `RunningProcess` handle for streaming long-running jobs). |
+| [`LLMPro/Core/ProcessRunner.swift`](../LLMPro/Core/ProcessRunner.swift) | `Foundation.Process` wrapper that returns `AsyncStream<String>` for stdout/stderr (line-buffered via a thread-safe `LineBuffer` class with NSLock). Two entry points: `runCapturing()` (await full completion) and `spawn()` (return a `RunningProcess` handle for streaming long-running jobs). **Process-model details (2026-06-13 audit):** the pipe `readabilityHandler` — **not** the exit handler — owns finishing the output streams on EOF, so the **final stdout/stderr line (a helper's error/traceback tail) is no longer dropped**; the streaming continuation's `onTermination` **terminates the child when its consumer Task is cancelled** (no more orphaned subprocesses); and `RunningProcess.kill()` sends **SIGKILL** (the hard escalation when `terminate()`'s SIGTERM is ignored — `Process` has no kill API, so it signals the PID directly). See [`CONTRACTS.md`](CONTRACTS.md#3-helper-script-protocol). |
 | [`LLMPro/Core/LogStreamParser.swift`](../LLMPro/Core/LogStreamParser.swift) | Regex-based parser for the `Iter N: Train loss…` lines that `mlx_lm.lora` writes to stdout. Emits `TrainingStep` structs that the rest of the app consumes. The regexes are marked `nonisolated(unsafe)` because Swift Regex types aren't yet Sendable. |
 | [`LLMPro/Core/SafetensorsHeader.swift`](../LLMPro/Core/SafetensorsHeader.swift) | Pure-Swift `.safetensors` header reader for the **Inspect** tab's Weights view — **no model load, no Python, no tensor data read**. Parses each shard's `8-byte little-endian u64 header length + JSON` (and `model.safetensors.index.json` for multi-shard) via `FileHandle` + `JSONSerialization`, reading only the first ~tens-of-KB of a multi-GB file → `[TensorEntry]` (name, dtype, shape, byteSize, paramCount over **all** dims). The canonical example of the Swift-first rule (structure = Swift; only deep value-stats would need the MLX sidecar). Verified exact against the cached Qwen/Gemma (byte-sum == `index.json` total_size). |
 | [`LLMPro/Core/HelpHint.swift`](../LLMPro/Core/HelpHint.swift) | Reusable `HelpHint(title:, message:, learnMore:)` ⓘ-icon component. Tapping opens a popover with a plain-language explanation + an optional "Learn more →" hyperlink to authoritative reading. Used everywhere Advanced settings live (Teach, Modify, Practice, Fusion, Add experts). Convenience `LabeledHint` wraps a label + hint + content together. |
@@ -483,23 +483,29 @@ state sharing, lift the state into a Service.
 
 ## Tests (`Tests/LLMProTests/`)
 
-The `LLMProTests` XcodeGen target holds the project's first unit-test suite —
-**37 passing XCTest tests** (`xcodebuild … test` → TEST SUCCEEDED). Pure-logic
-coverage, no model loads or subprocesses:
+The `LLMProTests` XcodeGen target holds the project's unit-test suite —
+**53 passing XCTest tests across 7 files** (`xcodebuild … test` → TEST SUCCEEDED).
+Pure-logic coverage, no model loads or subprocesses (the `ProcessRunner` tests spawn
+tiny deterministic `/bin/sh -c` commands, not model runs):
 
 | File | Covers |
 |---|---|
 | [`LogStreamParserTests.swift`](../Tests/LLMProTests/LogStreamParserTests.swift) | `LogStreamParser` regexes against real mlx-lm train / eval / DPO lines |
 | [`DatasetServiceClassifyTests.swift`](../Tests/LLMProTests/DatasetServiceClassifyTests.swift) | `DatasetService.classify` for each source schema (incl. the `preference`-before-`completions` vote) |
-| [`AutoTunerTests.swift`](../Tests/LLMProTests/AutoTunerTests.swift) | `AutoTuner.categorize` size buckets + every `(size, duration)` bucket produces a sane (positive, monotonic) config |
+| [`AutoTunerTests.swift`](../Tests/LLMProTests/AutoTunerTests.swift) | `AutoTuner.categorize` size buckets (incl. the no-marker → `.medium` fallback + the explicit sub-2B → `.tiny` branch) + every `(size, duration)` bucket produces a sane (positive, monotonic) config |
 | [`FuseServiceTemplateTests.swift`](../Tests/LLMProTests/FuseServiceTemplateTests.swift) | `FuseService.OllamaChatTemplate` per-architecture suggestions |
+| [`ModelRegistryTests.swift`](../Tests/LLMProTests/ModelRegistryTests.swift) | `ModelRegistry` size-preference / argument-order tie-breaking |
+| [`SelfImproveMergeTests.swift`](../Tests/LLMProTests/SelfImproveMergeTests.swift) | `SelfImproveService.mergeAndSplitKeepers` cumulative-keeper dedup + deterministic non-empty splits |
+| [`ProcessRunnerTests.swift`](../Tests/LLMProTests/ProcessRunnerTests.swift) | `ProcessRunner` streaming/capture: all lines incl. the unterminated EOF tail (the dropped-final-line fix), non-zero-exit code+stderr surfacing, stream termination, and a cancelled consumer reaping the child (the orphan-subprocess fix) |
 
-The stale empty `Tests/MLXStudioTests/` was removed. (One pinned discrepancy:
-`AutoTuner.categorize`'s doc comment says it falls back to `.medium` for a
-marker-less id, but the trailing `return .medium` is dead code — the patterns table
-ends with `(0.0, .tiny)`, so a marker-less id actually returns `.tiny`;
-`testCategorizeNoMarkerFallsBackToTiny` pins the **actual** behavior and flags the
-gap. See [`STATE.md`](STATE.md#tests).)
+The stale empty `Tests/MLXStudioTests/` was removed. (Former pinned discrepancy, now
+**FIXED** in the 2026-06-13 audit: `AutoTuner.categorize` previously returned `.tiny`
+for a marker-less id despite its doc comment claiming a `.medium` fallback — the
+patterns table ended with a `(0.0, .tiny)` tuple that made `return .medium` dead code.
+The audit removed that tuple and added an explicit `0 < maxBillion < 2 → .tiny`
+branch, so a marker-less id now falls through to `.medium` while a genuine sub-2B
+marker still maps to `.tiny`. The test is now `testCategorizeNoMarkerFallsBackToMedium`
+(plus `testCategorizeSmallMarkerStillTiny`). See [`STATE.md`](STATE.md#tests).)
 
 ## Where files DON'T live
 

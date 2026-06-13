@@ -362,9 +362,16 @@ Earlier risks worth checking on first UI run:
   canonical name and works without auth, but HF occasionally renames or
   deprecates eval sets. If `humaneval_pull.py` fails with HTTP 404, try
   `bigcode/humanevalpack` or pin to a known-good revision.
-- **Sandbox sufficiency**: candidates run with `RLIMIT_AS=1GB + SIGALRM`. We
-  haven't stress-tested fork bombs, file-write attempts, or network calls.
-  Trust model is "code from a model we just fine-tuned" — not a generic sandbox.
+- **Sandbox sufficiency** (hardened 2026-06-13 audit): candidates still run with
+  `RLIMIT_AS=1GB + SIGALRM`, but the model-generated-code sandbox in
+  `self_improve_round.py` was hardened — each candidate now runs in its **own
+  process group** (`start_new_session=True`, group-`killpg` on timeout so a
+  fork-bomb can't survive the wall-clock alarm), in a **throwaway cwd**, with a
+  **stripped environment** (an allowlist, so generated code no longer sees `HF_TOKEN`
+  or other secrets), plus `RLIMIT_NPROC` (fork-bomb cap), `RLIMIT_FSIZE`
+  (64 MiB single-file write cap), and `RLIMIT_CPU`. Still not a general-purpose
+  sandbox — trust model remains "code from a model we just fine-tuned" — but the
+  obvious fork-bomb / disk-abuse / secret-leak holes are closed.
 - **Time budget**: a Quick round on a 7B with 4 candidates × 20 problems is
   ~80 generations + 80 sandboxed tests + a short LoRA + an eval pass. Order
   of 10–15 min on M-series. The UI does not currently estimate this — the user
@@ -373,7 +380,9 @@ Earlier risks worth checking on first UI run:
   *training* phase of round N, the round will be abandoned mid-way. Already-
   written `round_N/dataset/` stays on disk for inspection; the SwiftData round
   record will show `endedAt == nil`. A future cleanup pass should garbage-collect
-  these.
+  these. **(2026-06-13 audit:** a user Stop now routes to a `.cancelled` terminal
+  state instead of being reported as a failure, so a deliberate cancel no longer
+  shows up as a red "failed" run.**)**
 
 To smoke-test: pick a small model (Llama-3.2-1B or Qwen2.5-Coder-1.5B), seed
 HumanEval, 2 rounds, 4 candidates, 12 problems per round. Should finish in
@@ -609,9 +618,10 @@ back-and-forth on the first submission. Document any caveats here once done.
 
 ## Tests
 
-There is now a **37-test XCTest suite** in `Tests/LLMProTests/` (the `LLMProTests`
-XcodeGen target). `xcodebuild … test` → **TEST SUCCEEDED**. All pure-logic, no model
-loads or subprocesses. Run with:
+There is now a **53-test XCTest suite** (7 files) in `Tests/LLMProTests/` (the
+`LLMProTests` XcodeGen target). `xcodebuild … test` → **TEST SUCCEEDED**. All
+pure-logic, no model loads or subprocesses (the `ProcessRunner` tests spawn tiny deterministic
+`/bin/sh -c` commands — `echo`/`seq`/`sleep`/`exit` — not model runs). Run with:
 
 ```bash
 xcodebuild -project LLMPro.xcodeproj -scheme LLMPro \
@@ -624,23 +634,78 @@ Current coverage:
 |---|---|
 | [`LogStreamParserTests.swift`](../Tests/LLMProTests/LogStreamParserTests.swift) | `LogStreamParser` regexes against real mlx-lm train / eval / DPO stdout lines (and that noise lines don't match) |
 | [`DatasetServiceClassifyTests.swift`](../Tests/LLMProTests/DatasetServiceClassifyTests.swift) | `DatasetService.classify` across the source schemas, including the `preference`-before-`completions` vote |
-| [`AutoTunerTests.swift`](../Tests/LLMProTests/AutoTunerTests.swift) | `AutoTuner.categorize` size buckets + every `(size, duration)` bucket produces a positive, monotonic config (guards against a bucket regressing to zero iters/batch) |
+| [`AutoTunerTests.swift`](../Tests/LLMProTests/AutoTunerTests.swift) | `AutoTuner.categorize` size buckets (incl. the no-marker → `.medium` fallback + the explicit sub-2B → `.tiny` branch) + every `(size, duration)` bucket produces a positive, monotonic config (guards against a bucket regressing to zero iters/batch) |
 | [`FuseServiceTemplateTests.swift`](../Tests/LLMProTests/FuseServiceTemplateTests.swift) | `FuseService.OllamaChatTemplate` per-architecture suggestions |
+| [`ModelRegistryTests.swift`](../Tests/LLMProTests/ModelRegistryTests.swift) | `ModelRegistry` size-preference / argument-order tie-breaking |
+| [`SelfImproveMergeTests.swift`](../Tests/LLMProTests/SelfImproveMergeTests.swift) | `SelfImproveService.mergeAndSplitKeepers` — cumulative-keeper dedup (latest round wins), deterministic + non-empty splits, empty/malformed-line handling |
+| [`ProcessRunnerTests.swift`](../Tests/LLMProTests/ProcessRunnerTests.swift) | `ProcessRunner` streaming/capture: all lines including the **unterminated final line** (the EOF-tail fix), non-zero-exit code+stderr surfacing, both streams terminating on exit, and a **cancelled consumer reaping the child** (the orphan-subprocess fix) |
 
 The stale empty `Tests/MLXStudioTests/` folder was removed.
 
-**One pinned discrepancy (tracked, not fixed):** `AutoTuner.categorize`'s doc comment
-says it "Falls back to `.medium` if no marker is found," but the trailing
-`return .medium` is **dead code** — the patterns table ends with `(0.0, .tiny)` and
-`maxBillion` is 0 when no `<num>B` marker matches, so `maxBillion >= 0.0` always
-returns `.tiny` first. `testCategorizeNoMarkerFallsBackToTiny` **pins the actual
-`.tiny` behavior** and documents the gap (in practice every caller passes a real
-repoID with a size marker; this only bites a custom-renamed model with no size in its
-name, which then gets the most aggressive `.tiny` hyperparameters). Whether the
-intended default is `.tiny` or `.medium` is a product decision left to a future pass.
+**Former pinned discrepancy — now FIXED (2026-06-13 audit).** `AutoTuner.categorize`
+previously contradicted its own doc comment: it claimed to "fall back to `.medium`
+if no marker is found," but the patterns table ended with `(0.0, .tiny)` and
+`maxBillion` was 0 for a markerless name, so `maxBillion >= 0.0` always returned
+`.tiny` first — making the documented `return .medium` dead code. The audit removed
+the `(0.0, .tiny)` tuple and added an explicit `0 < maxBillion < 2 → .tiny` branch,
+so a markerless name (a custom-renamed model with no size in its name) now correctly
+falls through to the safer `.medium` default while a genuine sub-2B marker still maps
+to `.tiny`. The test was renamed `testCategorizeNoMarkerFallsBackToMedium` and a
+`testCategorizeSmallMarkerStillTiny` was added to pin both branches.
 
 Good next test targets: `DatasetEditorService.parseRow` (each source row shape
 auto-promotes to chat) and `HuggingFaceClient` decode against recorded JSON responses.
+
+---
+
+## Audit — deferred items (known / not regressions)
+
+The 2026-06-13 full code audit (see the Recent-session-log entry) landed the
+correctness/safety fixes in three commits. These items were **surfaced by the same
+audit but intentionally NOT fixed** — each needs a product/security decision or is
+lower-priority. Listed so the next agent doesn't re-discover them as "new":
+
+**Needs a decision (security ↔ usability):**
+
+- **Code-agent command/edit auto-run defaults to ON.** `CodingAgentService.AgentSettings`
+  ships with both `autoApproveEdits` and `autoRunCommands` defaulting `true`, and
+  `run_command` runs `/bin/zsh -lc <cmd>` with the **full inherited environment**
+  (login shell, unscoped) in the workspace cwd. That means a fine-tuned local model's
+  team can run arbitrary shell with the user's env unattended. This is a deliberate
+  usability call (builders "run unattended"), but it's the biggest blast-radius open
+  item — worth a tiered allowlist / opt-in confirmation decision.
+- **`fetch_url` has no SSRF / loopback / private-range guard.** `AgentTools.fetchUrl`
+  validates only the `http(s)` scheme, then `URLSession`s the URL — nothing blocks
+  `127.0.0.1`, `169.254.x`, `10./192.168./172.16.x`, or cloud metadata endpoints. A
+  model could be steered to fetch internal services. Add an address-class guard before
+  the request if the Code tab is ever exposed to untrusted prompts.
+- **Delegation has a depth cap but no breadth / total cap.** Sub-agent delegation is
+  depth-capped at 5 (`runDelegations`), but there's no limit on how many delegates one
+  turn can fan out, nor a total-delegations budget per session — a runaway team could
+  spawn many concurrent sub-runs against the one shared model server.
+- **Restored Code workspace may need a security-scoped bookmark.** The Code tab
+  re-opens its last workspace folder on launch; verify whether the app's sandbox
+  status actually grants read/write to that path on restore (a security-scoped
+  bookmark may be required), or whether the restore silently fails outside the
+  app-support tree.
+- **DatasetEditor silently drops non-text structured chat content.** The chat-row
+  editor only round-trips plain-text message content; structured/multi-part content
+  (e.g. tool blocks, image parts) is dropped on load→save rather than preserved or
+  flagged.
+
+**LOW priority (cosmetic / robustness, no current bug observed):**
+
+- **FuseService Modelfile path quoting** — the generated Ollama `Modelfile` `FROM
+  <gguf-path>` line isn't quoted; a path with spaces could break `ollama create`.
+- **InferenceService system prompt not using the chat-template slot** — the Arena
+  passes `--system-prompt` rather than routing the system message through the model's
+  chat-template system slot, so some models may not honor it as intended.
+- **ModelsBrowser handoff is timing-based (0.15s).** The "use this model" handoff
+  relies on a 0.15s delay rather than an explicit ready signal — works in practice but
+  is fragile.
+- **`diffusion_server.py` non-stream `done.wait()` has no timeout** — a wedged
+  diffusion worker thread could block a non-streaming request indefinitely (the
+  streaming path is fine).
 
 ---
 
@@ -664,6 +729,58 @@ for the full reasoning. Quick reference:
 
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
+
+- **Session 2026-06-13 (cont.) — Full code audit + fixes (3 commits).** A 6-agent
+  read-only audit of the whole codebase, then correctness/safety fixes landed across
+  three commits (build + 53 tests green; this was a code session — the docs were
+  updated in a follow-up Builder-Text pass, source files unchanged by the docs pass).
+
+  - **Wave 1 (`90b64c9`):** AppDelegate quit-hang fixed (the `.terminateLater` path
+    now actually calls `reply(toApplicationShouldTerminate:)`). `ProcessRunner` got
+    three fixes: the pipe `readabilityHandler` now **owns stream-finish on EOF** (was
+    dropping the final stdout/stderr line — i.e. the error/traceback tail); a
+    `continuation.onTermination` now **terminates the child when its consumer is
+    cancelled** (was orphaning subprocesses); and a new `RunningProcess.kill()`
+    (SIGKILL escalation) was added. `JobRegistry.stopAll` snapshots its keys (was
+    mutate-during-iteration). `MLXServerService` now **awaits the old server's exit
+    before respawning** (was double-loading a multi-GB model). `AutoTuner.categorize`
+    now returns **`.medium`** (not `.tiny`) for size-markerless names — the documented
+    fallback, with an explicit `<2B → .tiny` branch (the dead-code `(0.0, .tiny)` tuple
+    is gone); `AutoTuner` also clamps DPO `val_batches` to the tiny valid-row count.
+    `DatasetService`'s 90/5/5 split no longer produces an empty test/valid split for
+    small files. `EvalService` fails an empty suite with `.noProblems` instead of
+    saving a 0/0 EvalRun. `TrainingService` now escapes model/data/adapter_path in the
+    generated YAML. `SelfImproveService` routes a **user-cancel to a `.cancelled`
+    terminal state** (was reported as failure) and `runEval` dual-reads
+    `pass_at_1 ?? pass_at_k`. `AgentTools.sandboxed()` now **resolves symlinks**
+    (closing a workspace-jail escape where an in-jail symlink let file tools read/write
+    outside the workspace). `self_improve_round.py` hardened its model-generated-code
+    sandbox: own process group (`start_new_session` + `killpg` on timeout), throwaway
+    cwd, **stripped environment so generated code no longer sees `HF_TOKEN`/secrets**,
+    plus `RLIMIT_NPROC`/`FSIZE`/`CPU`. `manage_experts.py` / `add_expert.py` /
+    `strip_vision.py` gained top-level error-event guards; `hf_download.py` clamps
+    progress to ≤1.0.
+  - **Wave 2 (`d125dfd`):** `TrainingMonitorView` **no longer stops the shared
+    `SystemMetrics` poller on disappear** (it was freezing the memory gauges
+    app-wide). `SelfImproveView` Practice-run delete is now confirmation-gated and
+    cleans up the on-disk dir. `ModelRegistry.delete(repoID:)` rejects `/` and `..`
+    (path-traversal guard). `HuggingFaceClient` got a 20 s request timeout. The Arena
+    generation leak is fixed (`InferenceService` terminates the child on stream
+    `onTermination` + checks `Task.isCancelled`; `ChatSession` stores/cancels its
+    generation `Task` in `clear()` / `stop()` / `deinit`). **The HF token is no longer
+    passed as argv** — it now travels via the **`HF_TOKEN` env var** for
+    `hf_download.py` and `prepare_coding_dataset.py` (`DownloadService` /
+    `DatasetPrepService` set the env; the Python reads `HF_TOKEN` with an argv
+    fallback). A pre-existing Swift-6 region-isolation error in `DatasetPrepService`
+    (sending non-`Sendable` `onComplete`) was fixed by making `onComplete` `@Sendable`.
+  - **Tests (`0a318b1`):** added `Tests/LLMProTests/ProcessRunnerTests.swift` (7
+    tests — streaming captures all lines incl. the unterminated EOF tail, non-zero exit
+    surfaces code+stderr, both streams terminate on exit, a cancelled consumer reaps
+    the child). The suite is now **7 test files / 53 tests** (see the Tests section).
+  - **Deferred (not fixed):** see the new "Audit — deferred items" section above for
+    the items the audit surfaced but intentionally left (auto-run defaults, `fetch_url`
+    SSRF guard, delegation breadth cap, restored-workspace bookmark, DatasetEditor
+    structured-content drop, and a handful of LOW cosmetic items).
 
 - **Code tab now serves text-diffusion models (DiffusionGemma) for the agentic loop —
   VERIFIED LIVE.** DiffusionGemma is **no longer chat-only**: it now also drives the
