@@ -44,6 +44,19 @@ final class ModelRegistry {
 
     private init() {}
 
+    /// Pick which of two `DetectedModel`s for the *same* repoID to keep when the
+    /// HF cache holds the model in both on-disk layouts (`<HF_HOME>/models--*`
+    /// and `<HF_HOME>/hub/models--*`). The two layouts can report different
+    /// sizes — the `hub/` layout's `blobs/` symlink readout is sometimes wrong
+    /// (it has reported 26.9 MB for a 28 GB model), so naively letting the
+    /// later-scanned entry overwrite the earlier one clobbers a correct size
+    /// with a bogus one. Keep the entry with the larger `sizeBytes`; `a` wins
+    /// ties so the merge is stable (first-scanned survives an exact tie).
+    /// Pure and filesystem-free so it can be unit-tested directly.
+    static func preferredDuplicate(_ a: DetectedModel, _ b: DetectedModel) -> DetectedModel {
+        a.sizeBytes >= b.sizeBytes ? a : b
+    }
+
     /// Delete every on-disk artefact for a model from disk. Handles:
     ///   - HF snapshot-cache layout                 (<HF_HOME>/models--*)
     ///   - HF standard hub layout                   (<HF_HOME>/hub/models--*)
@@ -264,7 +277,14 @@ final class ModelRegistry {
             guard let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }
             for entry in entries where entry.lastPathComponent.hasPrefix("models--") {
                 if let detected = inspectHFCacheRepo(at: entry) {
-                    found[detected.repoID] = detected
+                    let id = detected.repoID
+                    if let existing = found[id] {
+                        // Same model in both HF layouts: keep the larger reading,
+                        // not whichever the directory enumeration hit last.
+                        found[id] = Self.preferredDuplicate(existing, detected)
+                    } else {
+                        found[id] = detected
+                    }
                 }
             }
         }
