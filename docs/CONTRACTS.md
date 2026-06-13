@@ -1087,8 +1087,8 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 ├── evals/                         ← scored-eval harness (EvalService); see §7 EvalRun
 │   ├── <suiteID>/eval.jsonl       ← cached built-in suite (humaneval / mbpp-sanitized),
 │   │                                 pulled lazily via humaneval_pull.py on first use
-│   ├── custom-<uuid>/eval.jsonl   ← user-supplied custom suite (on-disk only this version;
-│   │                                 no authoring UI yet — drop the file in by hand)
+│   ├── custom-<uuid>/eval.jsonl   ← user-supplied custom suite (imported via the Test node
+│   │                                 "Import suite…", or hand-dropped); optional suite.json {name,problemCount}
 │   └── <run-uuid>/eval_run.json   ← per-run sidecar (one per EvalRun; same pattern as job.json)
 │
 ├── skills/<skill-id>/             ← one folder per Code-tab Agent Skill (SkillStore — LIVE); folder name = stable skill id

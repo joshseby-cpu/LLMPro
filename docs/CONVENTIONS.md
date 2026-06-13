@@ -720,15 +720,17 @@ stepper), consistent with "friendly first, technical disclosed": most users want
 honest deterministic number, not a sampling-temperature discussion. At k>1 a row
 passes if **any** of its k candidates passes.
 
-### v1 ships built-in suites only; custom suites are on-disk-but-no-UI
+### Built-ins are the only auto-pulled suites; custom suites are importable from the Test node
 
 `EvalSuite` has a `.custom` case and `PathResolver` resolves
-`evals/custom-<uuid>/eval.jsonl`, so a hand-dropped custom suite already works — but
-**there is no authoring UI this version**. We shipped the two built-in coding suites
-(HumanEval / MBPP, pulled lazily via `humaneval_pull.py`) first because they're the
-ones that match the app's coding focus and need zero authoring. A custom-suite editor
-is a clean later addition (the on-disk shape is already there); see
-[`EXTENDING.md`](EXTENDING.md#add-an-eval-suite-the-scored-test-node).
+`evals/custom-<uuid>/eval.jsonl`, so a hand-dropped custom suite has always worked —
+and as of this version it's also **importable from the Test node ("Score it") via the
+suite menu's "Import suite…" button** (`EvalService.importCustomSuite(from:name:)`,
+validating each row), discoverable in the picker, and deletable. The two built-in
+coding suites (HumanEval / MBPP) remain the only suites we **auto-pull** (lazily via
+`humaneval_pull.py`) because they match the app's coding focus and need zero authoring.
+There's still no in-app row editor — custom suites are file-import + discovery + delete;
+see [`EXTENDING.md`](EXTENDING.md#add-an-eval-suite-the-scored-test-node).
 
 ---
 

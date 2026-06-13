@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// How many problems a "Score it" run grades. Friendly speed/thoroughness trade-off;
 /// `thorough` is effectively "all" (the helper treats a huge limit as no cap).
@@ -24,6 +25,15 @@ private enum EvalDepth: String, CaseIterable, Identifiable {
     }
 }
 
+/// The suite-picker selection, bridging the two `@State`s (`evalSuite` +
+/// `customSuiteID`) into one `Hashable` tag so the Picker stays simple and the
+/// type-checker stays fast. A built-in carries its `EvalSuite`; a custom suite
+/// carries its on-disk folder id.
+private enum SuiteChoice: Hashable {
+    case builtin(EvalSuite)
+    case custom(String)
+}
+
 struct ArenaView: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -40,6 +50,14 @@ struct ArenaView: View {
     // Scored-evaluation state. The view only SHOWS scores; EvalService DOES the work.
     @State private var evalService = EvalService.shared
     @State private var evalSuite: EvalSuite = .humaneval
+    /// Folder id (the part after "custom-") when `evalSuite == .custom`; else "".
+    @State private var customSuiteID: String = ""
+    /// Custom suites discovered on disk, refreshed on open and after import/delete.
+    @State private var customSuites: [EvalService.CustomSuiteInfo] = []
+    /// Friendly import-error text, shown in an alert when non-nil.
+    @State private var importError: String?
+    /// Drives the "delete this custom suite?" confirmation.
+    @State private var showDeleteSuiteConfirm = false
     @State private var evalDepth: EvalDepth = .quick
     @State private var evalK: Int = 1
     @State private var showEvalTechnical = false
@@ -93,9 +111,25 @@ struct ArenaView: View {
                 inputBar
             }
             .navigationTitle(arenaMode ? "Model Arena" : "Chat")
-            .onAppear { loadPreferenceCount() }
+            .onAppear {
+                loadPreferenceCount()
+                refreshCustomSuites()
+            }
             .onReceive(NotificationCenter.default.publisher(for: .openChatWithModel)) { note in
                 handleHandoff(note.object)
+            }
+            .alert("Couldn't import that suite",
+                   isPresented: Binding(get: { importError != nil },
+                                        set: { if !$0 { importError = nil } })) {
+                Button("OK", role: .cancel) { importError = nil }
+            } message: {
+                Text(importError ?? "")
+            }
+            .alert("Remove this suite?", isPresented: $showDeleteSuiteConfirm) {
+                Button("Remove", role: .destructive) { deleteSelectedCustomSuite() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This deletes the imported problems from your Mac. Your scores are kept.")
             }
         }
     }
@@ -176,14 +210,27 @@ struct ArenaView: View {
                 } label: { Label("Cancel", systemImage: "xmark.circle") }
             }
 
-            Picker("Suite", selection: $evalSuite) {
-                Text("HumanEval").tag(EvalSuite.humaneval)
-                Text("MBPP").tag(EvalSuite.mbppSanitized)
+            suitePicker
+
+            Button {
+                importSuite()
+            } label: {
+                Label("Import suite…", systemImage: "square.and.arrow.down")
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+            .labelStyle(.iconOnly)
             .disabled(evalService.isRunning)
+            .help("Import your own problems from a .jsonl file — one JSON object per line, each with a \"prompt\" and \"tests\".")
+
+            if isCustomSelected {
+                Button(role: .destructive) {
+                    showDeleteSuiteConfirm = true
+                } label: {
+                    Label("Remove suite", systemImage: "trash")
+                }
+                .labelStyle(.iconOnly)
+                .disabled(evalService.isRunning)
+                .help("Remove this imported suite from your Mac.")
+            }
 
             Picker("How thorough", selection: $evalDepth) {
                 ForEach(EvalDepth.allCases) { depth in
@@ -199,6 +246,51 @@ struct ArenaView: View {
 
             advancedEvalControls
         }
+    }
+
+    // The suite picker: HumanEval / MBPP, then any discovered custom suites shown as
+    // "<name> · <n>". A `.menu` style keeps it compact as the list grows. The two
+    // backing `@State`s (`evalSuite` + `customSuiteID`) are bridged through one
+    // `SuiteChoice` tag so the tags stay trivial and the type-checker stays fast.
+    private var suitePicker: some View {
+        Picker("Suite", selection: suiteChoice) {
+            Text("HumanEval").tag(SuiteChoice.builtin(.humaneval))
+            Text("MBPP").tag(SuiteChoice.builtin(.mbppSanitized))
+            ForEach(customSuites) { suite in
+                Text("\(suite.name) · \(suite.problemCount)")
+                    .tag(SuiteChoice.custom(suite.id))
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .fixedSize()
+        .disabled(evalService.isRunning)
+    }
+
+    /// Bridge the `SuiteChoice` tag to the two backing `@State`s: selecting a built-in
+    /// sets `evalSuite` and clears `customSuiteID`; selecting a custom entry sets
+    /// `evalSuite = .custom` and `customSuiteID`. Reading reconstructs the choice from
+    /// the current state.
+    private var suiteChoice: Binding<SuiteChoice> {
+        Binding(
+            get: {
+                evalSuite == .custom ? .custom(customSuiteID) : .builtin(evalSuite)
+            },
+            set: { choice in
+                switch choice {
+                case .builtin(let suite):
+                    evalSuite = suite
+                    customSuiteID = ""
+                case .custom(let id):
+                    evalSuite = .custom
+                    customSuiteID = id
+                }
+            })
+    }
+
+    /// True when a custom suite is the current selection.
+    private var isCustomSelected: Bool {
+        evalSuite == .custom && !customSuiteID.isEmpty
     }
 
     private var advancedEvalControls: some View {
@@ -265,6 +357,53 @@ struct ArenaView: View {
         adapterSession.send(p)
     }
 
+    // MARK: - Custom suites
+
+    /// Reload the discovered custom suites; if the selected custom suite no longer
+    /// exists on disk, fall back to HumanEval so the picker can't point at nothing.
+    private func refreshCustomSuites() {
+        customSuites = evalService.customSuites()
+        if evalSuite == .custom, !customSuites.contains(where: { $0.id == customSuiteID }) {
+            evalSuite = .humaneval
+            customSuiteID = ""
+        }
+    }
+
+    /// Open a file picker for a `.jsonl` suite, import it (validating prompt/tests on
+    /// every row), then refresh the list and auto-select the new suite. A friendly
+    /// failure message is surfaced in the import-error alert.
+    private func importSuite() {
+        let panel = NSOpenPanel()
+        panel.title = "Import an evaluation suite"
+        panel.message = "Pick a .jsonl file — one JSON object per line, each with a \"prompt\" and \"tests\"."
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.json, .plainText]
+        panel.allowsOtherFileTypes = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let suiteName = url.deletingPathExtension().lastPathComponent
+        do {
+            let id = try evalService.importCustomSuite(from: url, name: suiteName)
+            refreshCustomSuites()
+            evalSuite = .custom
+            customSuiteID = id
+        } catch {
+            importError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Delete the currently-selected custom suite (called from the confirm alert),
+    /// then reset the selection back to HumanEval and refresh the list.
+    private func deleteSelectedCustomSuite() {
+        guard isCustomSelected else { return }
+        try? evalService.deleteCustomSuite(id: customSuiteID)
+        evalSuite = .humaneval
+        customSuiteID = ""
+        refreshCustomSuites()
+    }
+
     // MARK: - Scored evaluation
 
     /// Kick off a scored eval of the currently-loaded model (+ adapter) using the
@@ -275,6 +414,7 @@ struct ArenaView: View {
         let model = modelText
         let adapter = adapterText.isEmpty ? nil : adapterText
         let suite = evalSuite
+        let customID = customSuiteID
         let k = evalK
         let limit = evalDepth.limit
         Task {
@@ -282,6 +422,7 @@ struct ArenaView: View {
                 model: model,
                 adapterPath: adapter,
                 suite: suite,
+                customID: customID,
                 k: k,
                 limit: limit,
                 sourceLabel: "Test",

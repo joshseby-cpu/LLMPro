@@ -581,11 +581,9 @@ The Test node's **"Score it"** action ([`EvalService`](../LLMPro/Services/EvalSe
 ships two built-in suites (HumanEval / MBPP). There are two ways to add another,
 depending on whether it's a built-in (pulled from HF) or a one-off local file.
 
-**A local, on-disk custom suite (no code — already supported):** drop an
-`eval.jsonl` at `evals/custom-<uuid>/eval.jsonl`
-([`PathResolver.evalSuiteDir(for:)`](../LLMPro/Core/PathResolver.swift)). Each row is
-the same shape the eval engine expects — `{prompt, tests, entry_point}` (plus the
-optional `canonical_solution` / `messages` the seed format carries):
+**A local custom suite (no code — already supported):** author an `eval.jsonl` where
+each row is the shape the eval engine expects — `{prompt, tests, entry_point}` (plus
+the optional `canonical_solution` / `messages` the seed format carries):
 
 ```jsonc
 {"task_id": "mine/1", "prompt": "def add(a, b):\n    \"\"\"…\"\"\"\n",
@@ -594,8 +592,23 @@ optional `canonical_solution` / `messages` the seed format carries):
 
 `tests` must be Python that passes (no exception) or raises once the candidate's code
 is in scope — same contract as `humaneval_pull.py` rows (see "Add a new seed
-preset"). `EvalRun.customSuiteID` points at the `custom-<uuid>` folder. **There is no
-authoring UI yet**, so this is hand-authored for now.
+preset"). `EvalRun.customSuiteID` points at the `custom-<uuid>` folder.
+
+There are two ways to get that file into a discoverable suite:
+
+- **Import from the UI (the easy path):** in the Test node ("Score it"), open the suite
+  menu and pick **"Import suite…"**, then choose your `.jsonl`.
+  `EvalService.importCustomSuite(from:name:)` validates every non-empty row (each must be
+  a JSON object with a non-empty `prompt` **and** non-empty `tests`, else it's rejected
+  with the first offending line number), copies it to `evals/custom-<uuid>/eval.jsonl`,
+  and writes a `suite.json` `{name, problemCount}`. The new suite then shows in the menu
+  and can be deleted there.
+- **Hand-drop (still works):** drop the file at `evals/custom-<uuid>/eval.jsonl`
+  ([`PathResolver.evalSuiteDir(for:)`](../LLMPro/Core/PathResolver.swift));
+  `EvalService.customSuites()` discovers any `custom-*/` dir holding a non-empty
+  `eval.jsonl` (friendly name from an optional `suite.json`, else the id).
+
+There's no in-app row editor — custom suites are file-import + discovery + delete.
 
 **A new built-in suite (pulled from HF, picker-visible):**
 

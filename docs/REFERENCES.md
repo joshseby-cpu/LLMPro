@@ -73,7 +73,7 @@ These are the richer techniques we'd reach for if/when we go further.
 
 | Project | Relevance |
 |---|---|
-| **llm-checker** — <https://github.com/Pavelevich/llm-checker> | Local LLM evaluation/benchmarking. Reference for our eval surfaces — the scored Test node (`EvalService` → `EvalRun`, pass@k via `eval_pass_rate.py`) and the Practice held-out eval — and a pointer for richer eval (more suites, a custom-suite authoring UI) if we expand them. |
+| **llm-checker** — <https://github.com/Pavelevich/llm-checker> | Local LLM evaluation/benchmarking. Reference for our eval surfaces — the scored Test node (`EvalService` → `EvalRun`, pass@k via `eval_pass_rate.py`) and the Practice held-out eval — and a pointer for richer eval (more suites; a basic custom-suite import path already exists in the Test node) if we expand them. |
 
 ## ⑥ Agent management / orchestration UX (comparison)
 

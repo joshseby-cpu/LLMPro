@@ -82,8 +82,8 @@ scope.
   (▲/▼ "vs your last try", via `EvalService.previousAdapterEval`) needs two evals of the
   same base with different adapters, and no small model with an adapter was available —
   the "first score for this model" no-previous branch WAS verified live; the delta
-  branch was not. Also still on-disk-only (no authoring UI): custom suites
-  (`EvalSuite.custom`). Design rationale in
+  branch was not. Custom suites (`EvalSuite.custom`) are importable via the Test node
+  ("Import suite…") as of the 2026-06-13 loop; hand-drop still works. Design rationale in
   [`CONVENTIONS.md`](CONVENTIONS.md#the-scored-test-node-evalservice--evalrun); trace in
   [`WORKFLOWS.md §6b`](WORKFLOWS.md).
 - ✅ **DPO preference loop ("Teach by preference") — plumbing verified live
@@ -384,9 +384,10 @@ Remaining boundaries (not blocking the working status):
   try" comparison (`EvalService.previousAdapterEval`) needs two evals of the same base
   with different adapters; no small model with an adapter was available, so only the
   no-previous "first score for this model" branch was seen live.
-- **Custom suites are on-disk only** (`EvalSuite.custom` +
-  `evals/custom-<uuid>/eval.jsonl` resolve, but there's no authoring UI yet — v1 ships
-  the two built-in coding suites).
+- **Custom suites are importable via the Test node** ("Import suite…") as of the
+  2026-06-13 loop; hand-dropping `evals/custom-<uuid>/eval.jsonl` still works. There's no
+  in-app row editor — it's file import + discovery + delete. Built-ins (HumanEval / MBPP)
+  remain the only auto-pulled suites.
 
 ### Code tab (agentic coding assistant) — agent loop verified end-to-end
 
@@ -2756,7 +2757,7 @@ build + the 39-test suite, commit locally (push is the user's call). Running tal
   the file, regenerated the project, and corrected the current-state doc
   references (ARCHITECTURE/CONVENTIONS/WORKFLOWS/STATE/CLAUDE) that still called
   it "dead code" rather than deleted. Build green.
-- **Iter 8 — low-disk warning banner** (this commit): new pure-Foundation
+- **Iter 8 — low-disk warning banner** (`0299474`): new pure-Foundation
   `Core/DiskSpace.swift` (`freeGBForImportantUsage()` + pure `tier(freeGB:)`) and
   the first `Features/Shared/` view, `LowDiskWarningBanner` (amber <20 GB / red
   <5 GB / hidden otherwise; polls every 30s), placed atop the Models and Teach
@@ -2764,3 +2765,13 @@ build + the 39-test suite, commit locally (push is the user's call). Running tal
   Also folded in the stale-badge fix: Models-tab diffusion badge now reads
   "Diffusion · chat + Code" (was "chat only"), with the matching doc references
   de-staled. Build green (incl. the 80ms type-check gate).
+- **Iter 9 — custom eval suites importable + delta confirmed** (this commit): the
+  "Score it" delta vs the previous fine-tune was already implemented; the gap was
+  custom suites being unreachable from the UI. `EvalService` gained `customSuites()`
+  (discovery), `importCustomSuite(from:name:)` (validates each row has non-empty
+  `prompt`+`tests`, copies to `evals/custom-<uuid>/`, writes `suite.json`),
+  `deleteCustomSuite(id:)`, and a pure unit-testable `validateSuiteText`. ArenaView's
+  suite picker is now a menu listing the built-ins + discovered custom suites, with
+  an "Import suite…" button (NSOpenPanel) + delete. Resolves the long-standing
+  "custom suites: on-disk only, no authoring UI" boundary (docs de-staled across
+  WORKFLOWS/CONVENTIONS/CONTRACTS/EXTENDING/STATE/REFERENCES). Build + 39 tests green.

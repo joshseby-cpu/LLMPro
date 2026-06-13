@@ -28,6 +28,7 @@ final class EvalService {
     enum EvalError: LocalizedError {
         case runtimeNotReady
         case suiteMissing(String)
+        case invalidSuite(String)
         case helperEmittedError(String)
         case process(String)
         case runVanished
@@ -36,6 +37,7 @@ final class EvalService {
             switch self {
             case .runtimeNotReady:           "Python runtime is not ready."
             case .suiteMissing(let s):       "Evaluation suite not found: \(s)"
+            case .invalidSuite(let s):       s
             case .helperEmittedError(let s): "Helper error: \(s)"
             case .process(let s):            "Process error: \(s)"
             case .runVanished:               "Evaluation record vanished mid-run."
@@ -150,6 +152,162 @@ final class EvalService {
         if exit.code != 0 {
             throw EvalError.helperEmittedError(err ?? "humaneval_pull exited \(exit.code)")
         }
+    }
+
+    // MARK: – Custom suites (discovery / import / delete)
+
+    /// A user-supplied eval suite on disk under `evals/custom-<id>/`. `id` is the
+    /// folder suffix after "custom-"; `name` is a friendly label; `problemCount` is
+    /// the number of non-empty rows in its eval.jsonl.
+    struct CustomSuiteInfo: Identifiable, Hashable {
+        let id: String
+        let name: String
+        let problemCount: Int
+    }
+
+    /// Discover every custom suite already on disk: a `evals/custom-*` directory
+    /// containing a non-empty `eval.jsonl`. The friendly `name` comes from an
+    /// optional `suite.json` (`{"name": …}`), else the id; `problemCount` counts the
+    /// non-empty lines in `eval.jsonl`. Pure FileManager/JSON — never throws; an
+    /// unreadable dir is simply skipped. Sorted by name (case-insensitive).
+    func customSuites() -> [CustomSuiteInfo] {
+        let fm = FileManager.default
+        let root = PathResolver.evalsDir
+        guard let entries = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+        else { return [] }
+
+        var suites: [CustomSuiteInfo] = []
+        for dir in entries {
+            let folder = dir.lastPathComponent
+            guard folder.hasPrefix("custom-") else { continue }
+            let isDir = (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDir else { continue }
+
+            let evalFile = dir.appendingPathComponent("eval.jsonl")
+            guard let text = try? String(contentsOf: evalFile, encoding: .utf8) else { continue }
+            let count = text.split(separator: "\n", omittingEmptySubsequences: true)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+            guard count > 0 else { continue }
+
+            let id = String(folder.dropFirst("custom-".count))
+            let name = suiteName(in: dir) ?? id
+            suites.append(CustomSuiteInfo(id: id, name: name, problemCount: count))
+        }
+        return suites.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Read the friendly name from `<dir>/suite.json` (`{"name": …}`), or nil if it's
+    /// absent / unreadable / has no non-empty name.
+    private func suiteName(in dir: URL) -> String? {
+        let metaFile = dir.appendingPathComponent("suite.json")
+        guard let data = try? Data(contentsOf: metaFile),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = obj["name"] as? String else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Validate, then import a `.jsonl` file as a new custom suite. Reads `sourceURL`
+    /// as UTF-8 and requires every non-empty line to parse as a JSON object with a
+    /// non-empty string `prompt` AND a non-empty string `tests` (what
+    /// eval_pass_rate.py needs to grade a row). Throws `.invalidSuite` naming the
+    /// first offending line, or if there are zero valid rows.
+    ///
+    /// On success: mint a UUID, create `evals/custom-<id>/`, write the validated text
+    /// to `eval.jsonl` and a `suite.json` (`{"name", "problemCount"}`), and return the
+    /// new id (the folder suffix after "custom-").
+    @discardableResult
+    func importCustomSuite(from sourceURL: URL, name: String) throws -> String {
+        let text: String
+        do {
+            text = try String(contentsOf: sourceURL, encoding: .utf8)
+        } catch {
+            Log.error("Custom-suite import failed: could not read \(sourceURL.lastPathComponent)", .data, error: error)
+            throw EvalError.invalidSuite("Couldn't read that file as text. Make sure it's a UTF-8 .jsonl file.")
+        }
+
+        let validation = Self.validateSuiteText(text)
+        if let firstError = validation.firstError {
+            Log.error("Custom-suite import rejected: \(firstError)", .data)
+            throw EvalError.invalidSuite(firstError)
+        }
+        guard validation.rows > 0 else {
+            let msg = "That file has no usable problems. Each line needs a \"prompt\" and \"tests\"."
+            Log.error("Custom-suite import rejected: \(msg)", .data)
+            throw EvalError.invalidSuite(msg)
+        }
+
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmedName.isEmpty ? "Custom suite" : trimmedName
+        let id = UUID().uuidString
+        let dir = PathResolver.evalSuiteDir(for: "custom-\(id)")
+        let evalFile = dir.appendingPathComponent("eval.jsonl")
+        let metaFile = dir.appendingPathComponent("suite.json")
+
+        do {
+            try text.write(to: evalFile, atomically: true, encoding: .utf8)
+            let meta: [String: Any] = ["name": finalName, "problemCount": validation.rows]
+            let metaData = try JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted])
+            try metaData.write(to: metaFile)
+        } catch {
+            Log.error("Custom-suite import failed: could not write suite files", .data, error: error)
+            throw EvalError.invalidSuite("Couldn't save the suite to disk.")
+        }
+
+        Log.notice("Imported custom eval suite \"\(finalName)\" (\(validation.rows) problems) as custom-\(id)", .data)
+        return id
+    }
+
+    /// Delete a custom suite's folder (`evals/custom-<id>/`). Used by the picker's
+    /// delete affordance.
+    func deleteCustomSuite(id: String) throws {
+        let dir = PathResolver.evalSuiteDir(for: "custom-\(id)")
+        do {
+            try FileManager.default.removeItem(at: dir)
+            Log.notice("Deleted custom eval suite custom-\(id)", .data)
+        } catch {
+            Log.error("Failed to delete custom eval suite custom-\(id)", .data, error: error)
+            throw error
+        }
+    }
+
+    /// Pure validator for an eval-suite `.jsonl` body — no filesystem, so it's
+    /// unit-testable. Walks every non-empty line; a line is valid iff it parses as a
+    /// JSON object carrying a non-empty string `prompt` AND a non-empty string
+    /// `tests` (the two fields eval_pass_rate.py requires). Returns the count of
+    /// valid rows and, if any line is malformed, a friendly message naming the FIRST
+    /// offending line number (1-based, counting only non-empty lines as we go but
+    /// reporting the physical line number for the user). `firstError == nil` means
+    /// every non-empty line is valid.
+    nonisolated static func validateSuiteText(_ text: String) -> (rows: Int, firstError: String?) {
+        var validRows = 0
+        // Enumerate physical lines so the reported line number matches what the user
+        // sees in an editor (blank lines included in the count, skipped for parsing).
+        let lines = text.components(separatedBy: "\n")
+        for (index, rawLine) in lines.enumerated() {
+            let lineNumber = index + 1
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            guard let data = trimmed.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                return (validRows, "Line \(lineNumber) isn't a valid JSON object.")
+            }
+            guard let prompt = obj["prompt"] as? String,
+                  !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return (validRows, "Line \(lineNumber) is missing a non-empty \"prompt\".")
+            }
+            guard let tests = obj["tests"] as? String,
+                  !tests.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return (validRows, "Line \(lineNumber) is missing non-empty \"tests\".")
+            }
+            validRows += 1
+        }
+        return (validRows, nil)
     }
 
     // MARK: – Entry point

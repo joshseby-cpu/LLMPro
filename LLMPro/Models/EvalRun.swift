@@ -23,8 +23,9 @@ enum EvalStatus: String, Codable, CaseIterable {
 }
 
 /// A coding-eval suite that ships unit tests with each problem. The two built-ins
-/// map to `humaneval_pull.py` preset ids; `.custom` is a folder the user dropped
-/// under `evals/custom-<id>/` (no authoring UI this version).
+/// map to `humaneval_pull.py` preset ids; `.custom` is a folder under
+/// `evals/custom-<id>/` — created by the "Import suite…" button in the Test node
+/// (`EvalService.importCustomSuite`) or dropped in by hand.
 enum EvalSuite: String, Codable, CaseIterable, Identifiable {
     case humaneval = "humaneval"
     case mbppSanitized = "mbpp-sanitized"
@@ -44,7 +45,7 @@ enum EvalSuite: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .humaneval:     "Short, classic coding problems with built-in tests."
         case .mbppSanitized: "Beginner-to-intermediate Python tasks. More variety, slower to grade."
-        case .custom:        "Your own problems, dropped into the evals folder."
+        case .custom:        "Your own problems — import a .jsonl from the Test node."
         }
     }
 

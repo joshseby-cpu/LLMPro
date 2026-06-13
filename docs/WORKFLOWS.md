@@ -473,7 +473,8 @@ user clicks "Score it"
 EvalService.runEval():                          (@MainActor)
   1. ensureSuite(suite, customID:)              # lazily caches the suite's eval.jsonl:
        built-in  → spawn humaneval_pull.py <suite.pullPreset> <evals/<suiteID>/>
-       custom    → evals/custom-<uuid>/eval.jsonl already on disk (no UI to author it)
+       custom    → evals/custom-<uuid>/eval.jsonl already on disk (imported via the Test
+                                                                  node "Import suite…", or hand-dropped)
   2. insert EvalRun(status: .running, …) → modelContext              # status flips to running
   3. modelArg = resolveModelArg(model)          # bare folder → absolute path (same resolver)
   4. spawn eval_pass_rate.py --eval <eval.jsonl> --model <abs>
