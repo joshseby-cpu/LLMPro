@@ -472,10 +472,9 @@ the "Agent Skills" bullet under the Code-tab working section and the newest
 Recent-session-log entry.
 
 The single-agent *profile* library it was originally part of —
-[`AgentProfile`](../LLMPro/Models/AgentProfile.swift),
-[`AgentTemplate`](../LLMPro/Features/Code/AgentTemplate.swift) — remains **dead
+[`AgentProfile`](../LLMPro/Models/AgentProfile.swift) — remains **dead
 code** (compiles, unreferenced; `AgentProfile` stays in the SwiftData schema only).
-`AgentEditorView` was **deleted**. The old per-agent `AgentProfile.enabledSkillIDs`
+`AgentEditorView` and the dead `AgentTemplate.swift` were **deleted**. The old per-agent `AgentProfile.enabledSkillIDs`
 model is **superseded** — per-agent scoping now lives in the agent's `skills:`
 frontmatter, not a UI toggle list.
 
@@ -2747,7 +2746,13 @@ build + the 39-test suite, commit locally (push is the user's call). Running tal
   RESOLVED note above. `FuseError.llamaCppMissing` fail-fast guard +
   `PythonRuntime.installLlamaCpp` + Install buttons in Export & Settings. Build +
   39 tests green.
-- **Iter 6 — Resume button for orphaned jobs** (this commit): the Progress tab
+- **Iter 6 — Resume button for orphaned jobs** (`2ca6d78`): the Progress tab
   now offers a "Resume lesson" card for jobs orphaned by an app restart (see the
   RESOLVED note above). New `TrainingService.latestAdapterCheckpoint(in:)` +
   Monitor `resumeCard`/`attemptResume`. Build green.
+- **Iter 7 — delete dead `AgentTemplate.swift`** (this commit): the 8-preset
+  starter-template type for the removed switchable-agent flow was unreferenced
+  (grep-confirmed zero external uses) since the team model replaced it. Removed
+  the file, regenerated the project, and corrected the current-state doc
+  references (ARCHITECTURE/CONVENTIONS/WORKFLOWS/STATE/CLAUDE) that still called
+  it "dead code" rather than deleted. Build green.

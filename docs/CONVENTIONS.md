@@ -798,11 +798,10 @@ was replaced by a **fixed five-role team** ([`TeamRole`](../LLMPro/Services/Agen
 orchestrator · planner · researcher · coder · ui). The user talks **only to the
 Orchestrator**, which delegates to the others. There is no agent picker and no saved
 profiles. The old single-agent *profile* plumbing
-([`AgentProfile`](../LLMPro/Models/AgentProfile.swift),
-[`AgentTemplate`](../LLMPro/Features/Code/AgentTemplate.swift)) is now **dead
+([`AgentProfile`](../LLMPro/Models/AgentProfile.swift)) is now **dead
 code** — it still compiles but nothing references it (`AgentProfile` stays in the
 SwiftData schema only because the schema is additive-only); the old
-`AgentEditorView` was **deleted**. Don't reintroduce a
+`AgentEditorView` and the dead `AgentTemplate.swift` were **deleted**. Don't reintroduce a
 picker; the team is fixed by design. **Exception:** `SkillStore` /
 `SkillsManagerView` / the `use_skill` tool — also originally part of that library —
 were **revived as Agent Skills** and wired into the live team (see "Agent Skills:
@@ -1033,14 +1032,15 @@ cheap; don't regress them:
    layout burst can still happen when a very long Planner message finalizes and
    the parallel dispatch lands at once — but it recovers; it no longer hangs.)
 
-### Agent templates: one-click specialized programming agents
+### Agent templates: one-click specialized programming agents — REMOVED
 
-The New-agent flow offers [`AgentTemplate.all`](../LLMPro/Features/Code/AgentTemplate.swift)
-— 8 presets (frontend / backend / tests / refactor / debug / review / docs +
-general) that prefill the role instructions and the auto-approve toggles for a
-given kind of work (test/refactor/debug default `autoRunCommands` on). Templates
-are starter content, not a separate type: they just seed an `AgentProfile` the
-user can then edit. Add a role here rather than hard-coding behavior into the loop.
+An earlier design had a New-agent flow with `AgentTemplate.all` — 8 presets
+(frontend / backend / tests / refactor / debug / review / docs + general) that
+prefilled role instructions + auto-approve toggles. That switchable single-agent
+model was replaced by the fixed Orchestrator **team** (markdown-defined roles via
+`AgentStore` / `AgentsManagerView`), so `AgentTemplate.swift` went unreferenced and
+was **deleted**. To add a role now, add a markdown agent — see the team section
+above — rather than hard-coding behavior into the loop.
 
 ---
 

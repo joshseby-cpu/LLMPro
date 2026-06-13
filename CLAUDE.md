@@ -290,7 +290,7 @@ LLMPro/
 │   ├── Training/   (Teach) TrainingConfigView
 │   ├── Monitor/    (Progress) TrainingMonitorView
 │   ├── Chat/       (Try it out) ArenaView, ChatView, ChatModels
-│   ├── Code/       (Code) CodeView — agentic coding assistant + 3-pane IDE; FileExplorerView, CodeEditorView, MarkdownEditor, SkillsManagerView (Agent Skills, raw-markdown CRUD; links skill↔skill and skill↔agent), AgentsManagerView; AgentTemplate (dead; AgentEditorView deleted)
+│   ├── Code/       (Code) CodeView — agentic coding assistant + 3-pane IDE; FileExplorerView, CodeEditorView, MarkdownEditor, SkillsManagerView (Agent Skills, raw-markdown CRUD; links skill↔skill and skill↔agent), AgentsManagerView (AgentTemplate.swift + AgentEditorView deleted)
 │   ├── SelfImprove/ (Practice) SelfImproveView
 │   ├── Inspect/    (Inspect) ModelInspectorView — WeightsInspectorView (pure-Swift safetensors header parse via Core/SafetensorsHeader), AttentionInspectorView (one-forward MLX capture via inspect_attention.py), CoTInspectorView (live reasoning split, reuses OpenAIChatClient)
 │   ├── Export/     (Save & Use) ExportWizardView

@@ -950,7 +950,7 @@ Note the *agents* are no longer fully offline: the Researcher has `web_search` /
 > `AgentEditorView` picker and per-agent skill toggles backed by `AgentProfile` /
 > `AgentTemplate`. That was replaced by the fixed Orchestrator **team** (section 13)
 > with Markdown-defined roles. `AgentProfile` survives only as a (dead) SwiftData
-> schema pin; `AgentTemplate` is unreferenced dead code; `AgentEditorView` was deleted.
+> schema pin; `AgentTemplate.swift` and `AgentEditorView` were deleted.
 
 ---
 
