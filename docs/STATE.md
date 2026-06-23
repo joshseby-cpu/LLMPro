@@ -731,6 +731,21 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-06-23 (cont.) — GGUF export of Qwen3.6/MTP archs fixed (`--no-mtp`).**
+  Exported Qwen3.6 GGUFs failed to load in llama.cpp/Unsloth with
+  `missing tensor 'blk.64.attn_norm.weight'`. Root cause: Qwen3.6 (`qwen35`)
+  declares a multi-token-prediction layer (`mtp_num_hidden_layers=1` → block 64 on a
+  64-layer model), but **mlx-lm drops the MTP weights** when building the MLX model —
+  so conversion wrote the MTP/`nextn` metadata without the tensors, and the loader
+  then demanded block 64. Fix (`665740f`): `FuseService.mtpExclusionArgs` detects
+  MTP-in-config (self-gating — key only exists on Qwen3.5/3.6/Step3.5) and passes
+  `convert_hf_to_gguf.py --no-mtp`, producing a clean trunk-only GGUF (MTP is only a
+  spec-decoding speedup). Applied in `convertModelToGGUF` + `fuseAndConvertExternalGGUF`.
+  Re-exported the user's SeeSharp.gguf and verified: 64 blocks, no `blk.64`, no nextn
+  KV. NOTE: this only works because the loader already supports `qwen35` (the error
+  was tensor-level, not "unknown architecture") — Qwen3.6 GGUF still needs a recent
+  llama.cpp.
+
 - **Session 2026-06-23 — GGUF export fixed + per-model export added.** GGUF export
   was effectively broken; now works end-to-end (validated live: qwen2.5-0.5b → valid
   Q8_0 GGUF). Three fixes + one feature:
