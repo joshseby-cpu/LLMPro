@@ -240,12 +240,16 @@ final class PythonRuntime {
     }
 
     /// Install llama.cpp's GGUF converter on demand: shallow-clone the repo into
-    /// `PathResolver.llamaCppDir` (skipped if already present) and `uv pip install
-    /// gguf` (the converter's only runtime dep) into the venv. Mirrors
-    /// `installMergekit` — same `resolveUV`/`runUV` plumbing and progress
-    /// streaming. Called from the Export screen / Settings before a two-step
-    /// fuse → GGUF export of a non-natively-exportable architecture. Returns
-    /// true on success.
+    /// `PathResolver.llamaCppDir` (skipped if already present) and `uv pip install`
+    /// its runtime deps — `gguf` (the writer lib) AND `torch`, which
+    /// `convert_hf_to_gguf.py` imports at module load (without it the convert step
+    /// fails with "No module named 'torch'"). The project's base venv is
+    /// deliberately torch-free (it uses MLX), so torch is added here, on demand,
+    /// only for users who actually export non-natively-exportable architectures
+    /// (Qwen / Gemma / Phi) to GGUF. Mirrors `installMergekit` — same
+    /// `resolveUV`/`runUV` plumbing and progress streaming. Called from the Export
+    /// screen / Settings before a two-step fuse → GGUF export. Returns true on
+    /// success.
     func installLlamaCpp(progress: @escaping @MainActor (String) -> Void) async -> Bool {
         do {
             let dir = PathResolver.llamaCppDir
@@ -264,14 +268,15 @@ final class PythonRuntime {
                     "https://github.com/ggerganov/llama.cpp", dir.path
                 ])
             }
-            // `gguf` is the converter's writer library; the clone ships
-            // requirements but we only need this one dep for convert_hf_to_gguf.py.
-            await MainActor.run { progress("Installing the GGUF writer (gguf)…") }
+            // convert_hf_to_gguf.py needs `gguf` (its writer lib) AND `torch`
+            // (imported at module load). torch is a large download (~hundreds of
+            // MB) — flag it in the progress so the wait isn't a surprise.
+            await MainActor.run { progress("Installing converter deps (gguf + torch — torch is a large download)…") }
             let uv = try await resolveUV()
             try await runUV(uv, [
                 "pip", "install",
                 "--python", PathResolver.venvPython.path,
-                "gguf"
+                "gguf", "torch"
             ])
             Log.notice("llama.cpp GGUF converter installed at \(dir.path)", .model)
             await MainActor.run { progress("llama.cpp converter ready.") }
