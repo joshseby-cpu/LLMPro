@@ -26,6 +26,21 @@ actor FuseService {
         return FileManager.default.fileExists(atPath: converter.path)
     }
 
+    /// Resolve a bare local-model name to its absolute directory before handing it
+    /// to mlx-lm. mlx-lm reads a slash-free string as an HF repo id and tries to
+    /// download it (load-bearing rule #4) — so a fine-tune whose base is a custom
+    /// local model (GGUF import, strip-vision/abliterate output, etc.) would fail
+    /// the fuse with a 401 from HuggingFace. Mirrors `InferenceService` /
+    /// `MLXServerService` / `EvalService`. HF repo ids (with a slash) pass through.
+    private static func resolveModelArg(_ repoOrName: String) async -> String {
+        if let dir = await MainActor.run(body: {
+            ModelRegistry.shared.localModels.first(where: { $0.repoID == repoOrName })?.directory.path
+        }) {
+            return dir
+        }
+        return repoOrName
+    }
+
     /// Fuse a LoRA adapter back into the base model, producing safetensors.
     func fuse(
         baseModel: String,
@@ -35,11 +50,12 @@ actor FuseService {
     ) async throws {
         guard await PythonRuntime.shared.isReady, let python = await PythonRuntime.shared.pythonURL
         else { throw FuseError.runtimeNotReady }
+        let model = await Self.resolveModelArg(baseModel)
         try await ProcessRunner.runCapturing(
             executable: python,
             arguments: [
                 "-m", "mlx_lm", "fuse",
-                "--model", baseModel,
+                "--model", model,
                 "--adapter-path", adapterPath,
                 "--save-path", savePath
             ],
@@ -59,11 +75,12 @@ actor FuseService {
     ) async throws {
         guard await PythonRuntime.shared.isReady, let python = await PythonRuntime.shared.pythonURL
         else { throw FuseError.runtimeNotReady }
+        let model = await Self.resolveModelArg(baseModel)
         try await ProcessRunner.runCapturing(
             executable: python,
             arguments: [
                 "-m", "mlx_lm", "fuse",
-                "--model", baseModel,
+                "--model", model,
                 "--adapter-path", adapterPath,
                 "--save-path", savePath,
                 "--export-gguf",
