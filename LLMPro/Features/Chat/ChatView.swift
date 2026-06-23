@@ -33,7 +33,8 @@ struct ChatPaneView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(session.messages) { msg in
-                        MessageBubble(message: msg).id(msg.id)
+                        MessageBubble(message: msg, session: session,
+                                      isLast: msg.id == session.messages.last?.id).id(msg.id)
                     }
                     if let err = session.error {
                         Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(.red).padding(.horizontal, 8)
@@ -68,21 +69,49 @@ struct ChatPaneView: View {
 
 private struct MessageBubble: View {
     let message: ChatMessage
+    var session: ChatSession
+    let isLast: Bool
+
     var body: some View {
         HStack(alignment: .top) {
             Image(systemName: message.role == .user ? "person.circle.fill" : "sparkle")
                 .foregroundStyle(message.role == .user ? .blue : .purple)
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.role.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
-                Text(message.text.isEmpty && message.isStreaming ? "▍" : message.text)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if message.text.isEmpty && message.isStreaming {
+                    Text("▍").font(.system(.body, design: .monospaced))
+                } else {
+                    MessageContentView(text: message.text)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if message.role == .assistant && !message.isStreaming && !message.text.isEmpty {
+                    actionRow
+                }
             }
         }
         .padding(8)
         .background(message.role == .user ? Color.accentColor.opacity(0.08) : Color.gray.opacity(0.08),
                     in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 14) {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.text, forType: .string)
+            } label: { Label("Copy", systemImage: "doc.on.doc").font(.caption2) }
+            .buttonStyle(.borderless)
+            if isLast {
+                Button { session.regenerateLast() } label: {
+                    Label("Try again", systemImage: "arrow.clockwise").font(.caption2)
+                }
+                .buttonStyle(.borderless)
+                .disabled(session.isGenerating)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.top, 2)
     }
 }
 

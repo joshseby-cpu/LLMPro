@@ -18,6 +18,8 @@ struct DatasetDetailView: View {
     @State private var isNewRow: Bool = false
     @State private var confirmDeleteDataset: Bool = false
     @State private var confirmRowDeletionIndex: Int?
+    @State private var showLint: Bool = false
+    @State private var showInsights: Bool = false
 
     var body: some View {
         content
@@ -26,6 +28,12 @@ struct DatasetDetailView: View {
         .sheet(item: $editingRow) { row in
             DatasetRowEditorView(initial: row, isNew: isNewRow) { updated in
                 applyRowEdit(row, updated: updated)
+            }
+        }
+        .sheet(isPresented: $showLint) {
+            DatasetLintSheet(rows: rows) { cleaned in
+                rows = cleaned
+                dirty = true
             }
         }
         .alert("Delete this dataset?", isPresented: $confirmDeleteDataset) {
@@ -48,6 +56,11 @@ struct DatasetDetailView: View {
             splitPicker
                 .padding(.horizontal, 16)
                 .padding(.top, 6)
+            if !loading && !rows.isEmpty {
+                insightsBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+            }
             Divider().padding(.vertical, 8)
             rowList
                 .frame(maxHeight: .infinity)
@@ -76,6 +89,29 @@ struct DatasetDetailView: View {
             }
             .keyboardShortcut("s", modifiers: [.command])
             .disabled(!dirty || saving)
+        }
+    }
+
+    /// Insights toggle + a one-click "Check" that opens the linter. A plain toggle
+    /// button (not a DisclosureGroup) so the adjacent Check button stays its own
+    /// hit target.
+    private var insightsBar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button { withAnimation { showInsights.toggle() } } label: {
+                    Label("Insights", systemImage: showInsights ? "chevron.down" : "chevron.right")
+                        .font(.callout)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Button { showLint = true } label: {
+                    Label("Check", systemImage: "checkmark.seal")
+                }
+                .buttonStyle(.bordered)
+            }
+            if showInsights {
+                DatasetInsightsView(rows: rows).padding(.top, 8)
+            }
         }
     }
 

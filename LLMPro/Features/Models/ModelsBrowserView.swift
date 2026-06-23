@@ -36,6 +36,17 @@ struct ModelsBrowserView: View {
 
     @State private var showGGUFImport = false
     @State private var ggufExportTarget: ModelRegistry.DetectedModel?
+    @State private var notesTarget: ModelRegistry.DetectedModel?
+    @State private var favorites = FavoritesStore.shared
+
+    /// Local models with pinned favorites floated to the top (stable otherwise).
+    private var sortedLocalModels: [ModelRegistry.DetectedModel] {
+        registry.localModels.enumerated().sorted { a, b in
+            let pa = favorites.isModelPinned(a.element.id), pb = favorites.isModelPinned(b.element.id)
+            if pa != pb { return pa }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
 
     var body: some View {
         NavigationStack {
@@ -54,6 +65,9 @@ struct ModelsBrowserView: View {
             }
             .sheet(item: $ggufExportTarget) { target in
                 GGUFExportSheet(model: target)
+            }
+            .sheet(item: $notesTarget) { target in
+                ModelNotesSheet(modelID: target.id, modelName: target.displayName)
             }
         }
     }
@@ -127,7 +141,7 @@ struct ModelsBrowserView: View {
                     Text(registry.isScanning ? "Scanning…" : "No local models yet — download one above.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(registry.localModels) { local in
+                    ForEach(sortedLocalModels) { local in
                         LocalModelRow(
                             model: local,
                             isInUse: isModelInUse(local),
@@ -139,6 +153,12 @@ struct ModelsBrowserView: View {
                             onExportGGUFTapped: { ggufExportTarget = local }
                         )
                         .contextMenu {
+                            Button(favorites.isModelPinned(local.id) ? "Unpin" : "Pin to top",
+                                   systemImage: favorites.isModelPinned(local.id) ? "star.slash" : "star") {
+                                favorites.toggleModel(local.id)
+                            }
+                            Button("Notes & tags…", systemImage: "tag") { notesTarget = local }
+                            Divider()
                             Button("Show in Finder") {
                                 NSWorkspace.shared.activateFileViewerSelecting([local.directory])
                             }
@@ -425,12 +445,33 @@ private struct LocalModelRow: View {
     let onTrainCodingTapped: () -> Void
     let onExportGGUFTapped: () -> Void
 
+    @State private var favorites = FavoritesStore.shared
+    @State private var meta = ModelMetaStore.shared
+
     var body: some View {
         HStack(spacing: 10) {
+            Button {
+                favorites.toggleModel(model.id)
+            } label: {
+                Image(systemName: favorites.isModelPinned(model.id) ? "star.fill" : "star")
+                    .foregroundStyle(favorites.isModelPinned(model.id) ? Color.yellow : Color.secondary.opacity(0.5))
+            }
+            .buttonStyle(.borderless)
+            .help(favorites.isModelPinned(model.id) ? "Unpin" : "Pin to top")
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.displayName).font(.headline)
                 Text("\(model.architecture) · \(model.quantization) · \(model.humanSize)")
                     .font(.caption).foregroundStyle(.secondary)
+                let tags = meta.meta(for: model.id).tags
+                if !tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(tags, id: \.self) { tag in
+                            Text(tag).font(.system(size: 9))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(.tint.opacity(0.15), in: Capsule())
+                        }
+                    }
+                }
             }
             diffusionBadge
             Spacer()

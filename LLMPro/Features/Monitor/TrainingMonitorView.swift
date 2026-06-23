@@ -9,6 +9,7 @@ struct TrainingMonitorView: View {
     @State private var showTechnical = false
     @State private var resuming = false
     @State private var resumeError: String?
+    @State private var showHistory = false
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,17 @@ struct TrainingMonitorView: View {
                 }
             }
             .navigationTitle("Progress")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showHistory = true
+                    } label: {
+                        Label("Past lessons", systemImage: "clock.arrow.circlepath")
+                    }
+                    .help("View and delete previous training runs")
+                }
+            }
+            .sheet(isPresented: $showHistory) { TrainingHistoryView() }
             // start() is idempotent/self-healing. We deliberately do NOT stop()
             // on disappear: SystemMetrics.shared is an app-lifecycle-owned
             // singleton (started in RootView) that Dashboard and others read —

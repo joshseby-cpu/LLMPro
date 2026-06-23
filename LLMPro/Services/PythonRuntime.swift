@@ -288,6 +288,83 @@ final class PythonRuntime {
         }
     }
 
+    /// True once the compiled llama.cpp binaries exist (built by
+    /// `buildLlamaCppTools`). `llama-quantize` makes real k-quants (Q4_K_M etc.)
+    /// the Python converter can't, and `llama-cli` runs the post-export coherence
+    /// self-test. Cheap file-existence check.
+    func llamaToolsBuilt() -> Bool {
+        let bin = PathResolver.llamaCppDir.appendingPathComponent("build/bin")
+        let fm = FileManager.default
+        return fm.isExecutableFile(atPath: bin.appendingPathComponent("llama-quantize").path)
+            && fm.isExecutableFile(atPath: bin.appendingPathComponent("llama-completion").path)
+    }
+
+    /// Find a usable `cmake` (Homebrew first, then a couple of fallbacks).
+    private func resolveCMake() throws -> URL {
+        for candidate in ["/opt/homebrew/bin/cmake", "/usr/local/bin/cmake", "/opt/local/bin/cmake"] {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return URL(fileURLWithPath: candidate)
+            }
+        }
+        throw RuntimeError.cmakeNotFound
+    }
+
+    /// Build llama.cpp's `llama-quantize` + `llama-completion` from the cloned
+    /// source (cmake, Metal on, libcurl off). This is the heavy step that unlocks
+    /// real k-quants (Q4_K_M/Q5_K_M/Q6_K) and the in-app GGUF coherence self-test —
+    /// the Python `convert_hf_to_gguf.py` can only emit f16/bf16/q8_0 and can't run
+    /// a model. Clones the converter first if needed. ~a few minutes on first build;
+    /// subsequent calls are no-ops once the binaries exist. Returns true on success.
+    func buildLlamaCppTools(progress: @escaping @MainActor (String) -> Void) async -> Bool {
+        do {
+            if llamaToolsBuilt() {
+                await MainActor.run { progress("llama.cpp tools already built.") }
+                return true
+            }
+            // Need the source clone present (installLlamaCpp does the clone + deps).
+            if !llamaCppInstalled() {
+                await MainActor.run { progress("Cloning llama.cpp source first…") }
+                guard await installLlamaCpp(progress: progress) else { return false }
+            }
+            let cmake = try resolveCMake()
+            let dir = PathResolver.llamaCppDir
+            let buildDir = dir.appendingPathComponent("build")
+            let cores = max(2, ProcessInfo.processInfo.activeProcessorCount - 2)
+
+            await MainActor.run { progress("Configuring llama.cpp build (cmake)…") }
+            try await runCMake(cmake, [
+                "-S", dir.path, "-B", buildDir.path,
+                "-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_CURL=OFF", "-DGGML_METAL=ON"
+            ])
+            await MainActor.run { progress("Building llama-quantize + llama-completion (this takes a few minutes)…") }
+            try await runCMake(cmake, [
+                "--build", buildDir.path, "--config", "Release",
+                "-j", "\(cores)", "--target", "llama-quantize", "llama-completion"
+            ])
+            guard llamaToolsBuilt() else {
+                await MainActor.run { progress("Build finished but binaries are missing — see the log.") }
+                return false
+            }
+            Log.notice("llama.cpp tools built at \(buildDir.path)/bin", .model)
+            await MainActor.run { progress("llama.cpp tools ready (k-quants + self-test enabled).") }
+            return true
+        } catch {
+            Log.error("llama.cpp tools build failed", .model, error: error)
+            await MainActor.run { progress("Build failed: \(error.localizedDescription)") }
+            return false
+        }
+    }
+
+    private func runCMake(_ cmake: URL, _ args: [String]) async throws {
+        appendLog("$ cmake \(args.joined(separator: " "))")
+        try await ProcessRunner.runCapturing(
+            executable: cmake,
+            arguments: args,
+            onStdout: { [weak self] line in Task { @MainActor in self?.appendLog(line) } },
+            onStderr: { [weak self] line in Task { @MainActor in self?.appendLog(line) } }
+        )
+    }
+
     /// Returns true if `mlx_lm_lora` (the DPO / preference-tuning trainer) is
     /// importable in the venv. Cheap (~50 ms). It's an optional add-on (like
     /// mergekit), so it's intentionally NOT part of verifyMLXLM / the Ready gate.
@@ -365,12 +442,15 @@ final class PythonRuntime {
     enum RuntimeError: LocalizedError {
         case uvNotFound
         case gitNotFound
+        case cmakeNotFound
         var errorDescription: String? {
             switch self {
             case .uvNotFound:
                 return "Could not find `uv`. Install it from https://docs.astral.sh/uv/ or bundle a uv binary in Resources."
             case .gitNotFound:
                 return "Could not find `git`. Install Xcode Command Line Tools (`xcode-select --install`) and try again."
+            case .cmakeNotFound:
+                return "Could not find `cmake`, needed to build the llama.cpp tools. Install it with `brew install cmake` and try again."
             }
         }
     }

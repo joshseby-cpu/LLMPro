@@ -14,6 +14,17 @@ struct DatasetsView: View {
     @State private var renameTarget: DatasetRecord?
     @State private var renameDraft: String = ""
     @State private var deletionTarget: DatasetRecord?
+    @State private var favorites = FavoritesStore.shared
+
+    /// Datasets with pinned favorites floated to the top.
+    private var sortedDatasets: [DatasetRecord] {
+        datasets.enumerated().sorted { a, b in
+            let pa = favorites.isDatasetPinned(a.element.id.uuidString)
+            let pb = favorites.isDatasetPinned(b.element.id.uuidString)
+            if pa != pb { return pa }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
 
     // Shrink dataset state — pre-filled from the target when promptShrink is called.
     @State private var shrinkTarget: DatasetRecord?
@@ -161,7 +172,7 @@ struct DatasetsView: View {
                 Text("No datasets yet — grab one from the catalog above or drop a JSONL file.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(datasets) { ds in
+            ForEach(sortedDatasets) { ds in
                 datasetRow(ds: ds)
             }
         }
@@ -172,6 +183,14 @@ struct DatasetsView: View {
             editingDataset = ds
         } label: {
             HStack {
+                Button {
+                    favorites.toggleDataset(ds.id.uuidString)
+                } label: {
+                    Image(systemName: favorites.isDatasetPinned(ds.id.uuidString) ? "star.fill" : "star")
+                        .foregroundStyle(favorites.isDatasetPinned(ds.id.uuidString) ? Color.yellow : Color.secondary.opacity(0.5))
+                }
+                .buttonStyle(.borderless)
+                .help(favorites.isDatasetPinned(ds.id.uuidString) ? "Unpin" : "Pin to top")
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(ds.name).font(.headline)

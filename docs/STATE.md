@@ -731,6 +731,150 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-06-23 (cont.) — feature batch round 2 (9 more, ideated via workflow).**
+  Ran a 6-agent round-2 ideation workflow (`llmpro-feature-ideation-2`) merging fresh ideas
+  with the deferred backlog → ranked batch; shipped the high-value, low-risk subset (build
+  clean between each):
+  1. **Overlaid loss-curve comparison** — `TrainingComparisonView` (Swift Charts overlay of
+     `decodedMetrics()` train loss across selected runs); "Compare" toolbar button in
+     `TrainingHistoryView`.
+  2. **Markdown run report** — `TrainingRunReport` (markdown gen + NSSavePanel) +
+     `TrainingRunReportView` (in-app preview); "View/Export report…" in the Past lessons
+     context menu.
+  3. **Dock progress badge** — `DockProgressService` sets `NSApp.dockTile.badgeLabel`
+     ("38/50") from `JobRegistry` step transitions; cleared when idle.
+  4. **Pin/favorite models + datasets** — `FavoritesStore` (JSON, no schema); star button +
+     pinned-first sort in `ModelsBrowserView` + `DatasetsView`.
+  5. **Model notes & tags** — `ModelMetaStore` (JSON keyed by `DetectedModel.id`) +
+     `ModelNotesSheet`; tag chips in the model row, "Notes & tags…" context menu.
+  6. **Regenerate response** — `ChatSession.regenerateLast()` + a "Try again" button on the
+     last assistant message.
+  7. **Copy code blocks** — `CodeBlockParser` (fence scanner) + `MessageContentView` (per-block
+     Copy + per-message Copy), replacing the plain `Text` in `ChatView.MessageBubble`.
+  8. **Prompt library** — `PromptLibraryStore` (8 built-in coding prompts + custom JSON) via a
+     "Prompts" menu in ArenaView's sampling row.
+  9. (run-report preview counted under 2.) Stores 4,5,7,9 all clone the `SystemPromptPresetStore`
+     pattern (JSON under app-support, no SwiftData/modelContainer change → `LLMProApp` untouched).
+  Deferred to future solo sessions (per workflow, higher blast radius): training-job-queue,
+  live-token-counter (mlx_lm tok/s line is discarded — needs a Researcher pass), reusable
+  training-presets (touches the Teach flow), model-card + compare, eval-leaderboard,
+  regression-prompt-set, HF-safetensors "host to cloud" export (touches the export engine).
+  _Pending: push the whole day's work._
+
+- **Session 2026-06-23 (cont.) — feature batch (9 new features, ideated via workflow).**
+  Ran a 7-agent ideation workflow (`llmpro-feature-ideation`) → ranked buildable batch,
+  then shipped it (build clean between each, all Debug-verified):
+  1. **Completion notifications** — `NotificationService` (UserNotifications, lazy auth).
+     Posts a friendly banner when Teach/Practice/Export finishes (success or fail).
+     Hooks: `JobRegistry.markCompleted/markFailed`, `SelfImproveService` completion,
+     the two export views.
+  2. **Keep-awake** — `KeepAwakeService` holds `caffeinate -imsu` while ≥1 job runs
+     (refcount on `JobRegistry.runningJobs`); opt-out toggle in Settings → Runtime → Power.
+  3. **Menu bar status** — `JobStatusMenuBar` + a `MenuBarExtra` scene in `LLMProApp`
+     (inserted only while a job runs); reuses `TrainingNarrator` for phase/ETA/stars,
+     with Open-Progress + Stop.
+  4. **Storage** — `StorageService` scans every PathResolver dir → per-category sizes +
+     free space; `StorageSettingsView` (new Settings tab) shows the breakdown + a
+     proportional bar + reveal/clear. Clearable = regenerable only (exports/logs/llama.cpp
+     build); user data is reveal-only.
+  5. **Cache cleanup** — `StorageService.clear()` wipes a clearable category's contents.
+  6. **Dataset insights** — `DatasetInsightsService` (row/msg/token counts, role balance,
+     length histogram, dup count) + `DatasetInsightsView` (disclosure in DatasetDetailView).
+  7. **Dataset linter** — `DatasetLinter` (missing prompt/reply, empty msgs, dups, over-long)
+     + `DatasetLintSheet` with non-destructive "Make a clean copy" → sets rows + dirty.
+  8. **Export chat to Markdown** — `ConversationMarkdownExporter` (@MainActor; NSSavePanel);
+     "Export chat…" button in ArenaView (one or both arena columns).
+  9. **Sampling controls + system-prompt presets** — activated the previously-dead
+     `InferenceParams.topP`/`seed` with UI in ArenaView; `SystemPromptPresetStore`
+     (6 built-ins + custom presets saved to `system_prompt_presets.json`) via a Persona menu.
+  Bonus: Settings → Runtime now has a **"Build llama.cpp tools"** button (k-quants + self-test).
+  Deferred (per workflow, mostly because they'd touch the uncommitted TrainingMonitorView/
+  ExportWizardView or want their own session): dock badge, orphan-finder, dataset rebalancer,
+  overlaid loss curves, prompt library, regression set, command palette, training queue,
+  training-run report, pin/favorites, live token counter, regenerate/stop-sequences.
+  _Pending: push the whole day's work._
+
+- **Session 2026-06-23 (cont.) — hardened GGUF export: --dequantize, real k-quants, self-test.**
+  Multi-agent research (workflow `mlx-to-gguf-feasibility`, 8 agents) corrected the
+  earlier "llama.cpp can't run qwen35" call: it CAN (Simon Willison ran Unsloth's
+  Qwen3.6-27B Q4_K_M coherently). The real cause of LLMPro's Qwen3.6 garbage is a
+  **double-applied Qwen3-Next RMSNorm `+1` shift**: MLX bakes it into saved weights,
+  `convert_hf_to_gguf.py` (conversion/qwen.py) re-applies it → ~2× wrong norms → token
+  soup. Intrinsic to converting the MLX build of a hybrid arch; the hybrid block stays
+  (rationale comment corrected). For STANDARD archs the path was just under-hardened —
+  fixed:
+  1. `FuseService.fuse(dequantize:)` → GGUF exports now pass `--dequantize` so a
+     quantized MLX base (MLX affine `.scales`/`.biases`) becomes an HF checkpoint the
+     converter can read (was a silent failure for quantized bases).
+  2. Build llama.cpp from source: `PythonRuntime.buildLlamaCppTools` (cmake, Metal on,
+     curl off) compiles `llama-quantize` + `llama-completion` into
+     `runtime/llama.cpp/build/bin/`. Unlocks real **k-quants** (Q4_K_M/Q5_K_M/Q6_K) and
+     the self-test. (NOTE: this llama.cpp split completion out of `llama-cli`, which now
+     rejects `-no-cnv` — the self-test uses `llama-completion -st`.)
+  3. `GGUFQuant` enum (shared by both export UIs): base types (f16/bf16/q8_0) go straight
+     through the converter; k-quants are convert-to-f16-then-`llama-quantize`.
+  4. `FuseService.verifyGGUF` — post-export coherence **self-test**: runs
+     `llama-completion` and only reports success if the GGUF emits coherent UTF-8 (no
+     U+FFFD). "A green UI is not a pass" applied to exports — catches the garbage case.
+  5. Both export surfaces updated: `GGUFExportSheet` (per-model) + `ExportWizardView`
+     (Save & Use) get a k-quant picker, a "Build llama.cpp tools" button gating
+     k-quants/self-test, and a self-test result card. ExportWizard's GGUF path is now
+     unified (always fuse `--dequantize` → convert → optional quantize → self-test);
+     dropped the llama-only `mlx_lm --export-gguf` branch + `isNativelyGGUFExportable`.
+  Validated end-to-end on this machine: fp16 GGUF → `llama-quantize` Q4_K_M (469M) →
+  `llama-completion` self-test → coherent "Paris", exit 0. Build clean (Debug). Default
+  quant is now **Q4_K_M**. _Pending: push._
+
+- **Session 2026-06-23 (cont.) — hybrid-SSM GGUF export now BLOCKED (was warn).**
+  User exported the Qwen3.6 fine-tune again and LM Studio failed at generation:
+  `PredictWorker::Execute - caught exception: Failed to parse input at pos 0: t�`
+  (invalid UTF-8 = garbage token IDs) and a chat-template with no role separators
+  (`'You are a helpful assistantHelloHi there…'`). Confirms the prior hybrid-SSM
+  diagnosis. Per user choice, upgraded the guardrail from warn-but-allow to a hard
+  **block**: `FuseService.ggufRoundTripWarning` is now treated as blocking by both
+  callers. `GGUFExportSheet` shows a red "Can't export this architecture to GGUF"
+  card (own if/else branch) and `canExport` requires `roundTripWarning == nil`.
+  `ExportWizardView` gained `ggufBlock(for:)` (config-based via resolved local-model
+  dir, with repo-id-marker fallback for HF-cache bases), a red block card in the GGUF
+  options, a disabled "Run export" when `target == .gguf && ggufBlockReason != nil`,
+  and a defensive guard in `run()`'s `.gguf` branch so a doomed multi-GB export can
+  never spawn. Build clean (Debug). _Pending: push._
+
+- **Session 2026-06-23 (cont.) — delete previous training runs.** The Progress tab
+  only ever showed the most-recent run with no way to clear out old ones. Added a
+  "Past lessons" toolbar button → `TrainingHistoryView` sheet: a `@Query`'d list of
+  every `TrainingJob` (most-recent first) with friendly status badge, date, and
+  on-disk adapter size (measured off-main via a `nonisolated static` sweep — the
+  `DirectoryEnumerator` fast-enumeration is illegal from async contexts). Per-row
+  trash + swipe delete (disabled while running) + "Delete all finished". Delete =
+  remove SwiftData record + `JobRegistry.remove(jobID:)` (new; refuses a live
+  process) + `removeItem(adapters/<uuid>/)`. Does NOT touch the dataset, base model,
+  or any fused `…-trained` model. New file added to `project.yml` via `xcodegen`.
+  Build clean (Debug). **Follow-up:** the **Save & Use** export list shows the same
+  runs (plus Practice runs), so added context-menu + swipe **Delete** there too, with
+  a confirm alert. Centralized the delete logic into `TrainingArtifactDeletion`
+  (`deleteJob` / `deleteRun`) shared by both `TrainingHistoryView` and
+  `ExportWizardView`; `deleteRun` removes `selfimprove/<uuid>/` for Practice runs and
+  guards the in-flight statuses (generating/testing/training/evaluating). _Pending: push._
+
+- **Session 2026-06-23 (cont.) — hybrid-SSM GGUF guardrail (Qwen3.6 garbage output).**
+  After the `--no-mtp` fix the SeeSharp (Qwen3.6-27B, `qwen3_5`) GGUF *loaded and ran*
+  in LM Studio but emitted mixed-language token-soup (`_6Logy的画面ubberFrame…`).
+  Diagnosis: `qwen3_5` is a **hybrid** arch (standard attention + linear-attention/SSM
+  Mamba-style layers + MTP head). llama.cpp's `convert_hf_to_gguf.py` round-trips an
+  **MLX-format** hybrid-SSM checkpoint poorly — even the SSM control tensors came out
+  partially Q8_0. The decisive source-vs-GGUF A/B was **impossible** (the source model
+  `models/Qwen3.6-27B-bf16-trained` had been deleted; models dir empty), but the garbage
+  signature + llama.cpp's immature hybrid-SSM support point to an **upstream conversion/
+  runtime limitation, not an LLMPro bug**. Fix (guardrail, not a converter change):
+  `FuseService.ggufRoundTripWarning(forModelDir:)` (nonisolated static — reads config.json)
+  flags hybrid/experimental archs (MTP head, `model_type`/arch containing
+  qwen3_5/qwen35/mamba/ssm/linear_attn/hybrid, or `layer_types` with linear/mamba/ssm
+  layers). `GGUFExportSheet` shows a non-blocking "Experimental architecture" card before
+  export with MLX-instead guidance ("runs correctly in Try it out / Code"). Build clean.
+  Known-good GGUF archs remain plain llama/mistral/mixtral/qwen2/gemma2/phi3-style; hybrid
+  archs should be run in MLX rather than exported. _Pending: push these commits._
+
 - **Session 2026-06-23 (cont.) — GGUF export of Qwen3.6/MTP archs fixed (`--no-mtp`).**
   Exported Qwen3.6 GGUFs failed to load in llama.cpp/Unsloth with
   `missing tensor 'blk.64.attn_norm.weight'`. Root cause: Qwen3.6 (`qwen35`)

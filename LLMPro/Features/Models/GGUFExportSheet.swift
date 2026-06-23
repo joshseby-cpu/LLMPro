@@ -1,24 +1,5 @@
 import SwiftUI
 
-/// The output precision the user picks for a direct per-model GGUF export. Each
-/// case maps to a llama.cpp `convert_hf_to_gguf.py --outtype` value.
-private enum GGUFFormat: String, CaseIterable, Identifiable {
-    // Only the out-types convert_hf_to_gguf.py actually accepts
-    // ({f32,f16,bf16,q8_0,…}). Q4_K_M and other K-quants are produced by
-    // llama.cpp's separate `llama-quantize` binary (not built from a source
-    // clone), so they're intentionally not offered here.
-    case q8_0, f16, bf16
-    var id: String { rawValue }
-    var outType: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .q8_0: "Q8_0 — 8-bit, small & near-lossless (recommended for Ollama / LM Studio)"
-        case .f16:  "F16 — full precision (largest)"
-        case .bf16: "BF16 — full precision (bfloat16)"
-        }
-    }
-}
-
 /// Direct "Export to GGUF" for a single local model — no adapter, no fuse step.
 /// Converts a full-precision (fp16/bf16) text model straight to a `.gguf` file
 /// you can drop into Ollama or LM Studio. Quantized and diffusion models can't
@@ -27,15 +8,26 @@ struct GGUFExportSheet: View {
     let model: ModelRegistry.DetectedModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var format: GGUFFormat = .q8_0
+    @State private var quant: GGUFQuant = .q4_k_m
     @State private var outputName: String = ""
     @State private var log: [String] = []
     @State private var exporting = false
     @State private var error: String?
     @State private var exportedPath: URL?
+    @State private var selfTest: GGUFSelfTest?
 
     @State private var llamaCppInstalled = false
     @State private var installingLlamaCpp = false
+    /// The compiled llama.cpp binaries (llama-quantize + llama-cli). Needed for
+    /// k-quants (Q4_K_M etc.) and the post-export coherence self-test.
+    @State private var toolsBuilt = false
+    @State private var buildingTools = false
+
+    /// Set when the model's architecture isn't reliably round-tripped by llama.cpp
+    /// (hybrid linear-attention/SSM or MTP-head models — e.g. Qwen3.5/3.6). These
+    /// produce a GGUF that loads but emits garbage, so export is **blocked** (not
+    /// just warned) — `canExport` requires this to be nil.
+    @State private var roundTripWarning: String?
 
     /// True when the model can't be converted directly (quantized or diffusion).
     private var isConvertible: Bool { !model.isDiffusion && !isQuantized }
@@ -52,12 +44,15 @@ struct GGUFExportSheet: View {
             header
             if !isConvertible {
                 notConvertibleNote
+            } else if roundTripWarning != nil {
+                blockedArchNote
             } else if !llamaCppInstalled {
                 converterMissingSection
             } else {
                 optionsSection
             }
             if let exportedPath { successSection(exportedPath) }
+            if let selfTest { selfTestCard(selfTest) }
             if let error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
             if exporting || !log.isEmpty { logPanel }
             Spacer(minLength: 0)
@@ -67,7 +62,11 @@ struct GGUFExportSheet: View {
         .frame(minWidth: 540, minHeight: 560)
         .onAppear {
             if outputName.isEmpty { outputName = sanitized(model.displayName) }
-            Task { llamaCppInstalled = await FuseService.shared.llamaCppInstalled() }
+            roundTripWarning = FuseService.ggufRoundTripWarning(forModelDir: model.directory.path)
+            Task {
+                llamaCppInstalled = await FuseService.shared.llamaCppInstalled()
+                toolsBuilt = await FuseService.shared.llamaToolsInstalled()
+            }
         }
     }
 
@@ -118,6 +117,18 @@ struct GGUFExportSheet: View {
         .card()
     }
 
+    private var blockedArchNote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Can't export this architecture to GGUF", systemImage: "xmark.octagon")
+                .font(.headline).foregroundStyle(.red)
+            Text(roundTripWarning ?? "")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
     private var optionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -130,11 +141,61 @@ struct GGUFExportSheet: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Format").font(.caption).foregroundStyle(.secondary)
-                Picker("Format", selection: $format) {
-                    ForEach(GGUFFormat.allCases) { Text($0.displayName).tag($0) }
+                Picker("Format", selection: $quant) {
+                    ForEach(GGUFQuant.allCases) { q in
+                        Text(q.displayName + (q.isKQuant && !toolsBuilt ? " — needs tools" : "")).tag(q)
+                    }
                 }
                 .labelsHidden()
                 .pickerStyle(.radioGroup)
+            }
+            if quant.isKQuant && !toolsBuilt { toolsNeededNote }
+            else if toolsBuilt {
+                Label("Exports are self-tested — the app runs the GGUF and checks the output before declaring success.",
+                      systemImage: "checkmark.seal")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
+    /// Shown when a k-quant is picked but the compiled tools aren't built yet.
+    private var toolsNeededNote: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Q4_K_M/Q5_K_M/Q6_K and the coherence self-test need llama.cpp's compiled tools. Build them once (a few minutes), or pick Q8_0/F16/BF16 which don't need them.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Task { await buildTools() }
+            } label: {
+                if buildingTools {
+                    HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Building llama.cpp tools…") }
+                } else {
+                    Label("Build llama.cpp tools", systemImage: "hammer")
+                }
+            }
+            .disabled(buildingTools)
+            .tint(.brand)
+        }
+    }
+
+    private func selfTestCard(_ test: GGUFSelfTest) -> some View {
+        let (icon, color, title): (String, Color, String) = {
+            switch test.outcome {
+            case .passed:  return ("checkmark.seal.fill", .green, "Self-test passed — the GGUF runs and generates coherent text")
+            case .failed:  return ("xmark.octagon.fill", .red, "Self-test failed — the GGUF did not generate usable output")
+            case .skipped: return ("info.circle", .secondary, "Self-test skipped")
+            }
+        }()
+        return VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: icon).font(.headline).foregroundStyle(color)
+            if !test.sample.isEmpty {
+                Text(test.sample).font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary).textSelection(.enabled)
+                    .lineLimit(4).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(test.detail).font(.caption).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -188,9 +249,12 @@ struct GGUFExportSheet: View {
 
     private var canExport: Bool {
         isConvertible
+            && roundTripWarning == nil   // hybrid/experimental archs are blocked
             && llamaCppInstalled
+            && !(quant.isKQuant && !toolsBuilt)  // k-quants need the compiled tools
             && !exporting
             && !installingLlamaCpp
+            && !buildingTools
             && !sanitized(outputName).isEmpty
     }
 
@@ -210,10 +274,26 @@ struct GGUFExportSheet: View {
         }
     }
 
+    private func buildTools() async {
+        buildingTools = true
+        error = nil
+        defer { buildingTools = false }
+        let ok = await PythonRuntime.shared.buildLlamaCppTools { msg in
+            log.append(msg)
+            if log.count > 500 { log.removeFirst(log.count - 500) }
+        }
+        llamaCppInstalled = await FuseService.shared.llamaCppInstalled()
+        toolsBuilt = await FuseService.shared.llamaToolsInstalled()
+        if !ok {
+            error = "Couldn't build the llama.cpp tools. See the output below or Settings → Logs."
+        }
+    }
+
     private func runExport() async {
         exporting = true
         error = nil
         exportedPath = nil
+        selfTest = nil
         log.removeAll()
         defer { Task { @MainActor in exporting = false } }
 
@@ -229,16 +309,20 @@ struct GGUFExportSheet: View {
             }
         }
 
+        NotificationService.shared.primeAuthorization()
         do {
-            try await FuseService.shared.convertModelToGGUF(
+            let test = try await FuseService.shared.convertModelToGGUF(
                 modelPath: model.directory.path,
                 ggufPath: ggufURL.path,
-                outType: format.outType,
+                quant: quant,
                 onProgress: progress
             )
             exportedPath = ggufURL
+            selfTest = test
+            NotificationService.shared.exportFinished(name: name, success: test.outcome != .failed)
         } catch {
             self.error = error.localizedDescription
+            NotificationService.shared.exportFinished(name: name, success: false)
         }
     }
 

@@ -144,6 +144,7 @@ final class SelfImproveService {
                 live.endedAt = Date()
                 try? context.save()
                 live.writeSidecar()
+                NotificationService.shared.practiceFinished(name: live.name, success: true)
             }
             status.phase = .completed
             status.headline = "Done — see Try it out to chat with the improved model."

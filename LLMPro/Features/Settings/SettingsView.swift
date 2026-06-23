@@ -8,16 +8,20 @@ struct SettingsView: View {
     @State private var llamaCppInstalled: Bool = false
     @State private var installingLlamaCpp: Bool = false
     @State private var llamaCppStatus: String = ""
+    @State private var toolsBuilt: Bool = false
+    @State private var buildingTools: Bool = false
+    @AppStorage(KeepAwakeService.prefKey) private var keepAwake: Bool = true
 
     var body: some View {
         TabView {
             runtime_tab.tabItem { Label("Runtime", systemImage: "terminal") }
+            StorageSettingsView().tabItem { Label("Storage", systemImage: "internaldrive") }
             paths_tab.tabItem { Label("Paths", systemImage: "folder") }
             logs_tab.tabItem { Label("Logs", systemImage: "doc.text.magnifyingglass") }
             hf_tab.tabItem { Label("HuggingFace", systemImage: "person.crop.circle") }
         }
         .padding()
-        .frame(minWidth: 600, minHeight: 400)
+        .frame(minWidth: 600, minHeight: 440)
     }
 
     /// Live tail of the app log (`llmpro.log`) — the first place to look when
@@ -63,6 +67,14 @@ struct SettingsView: View {
                     NSWorkspace.shared.open(PathResolver.logsDir)
                 }
             }
+            Section("Power") {
+                Toggle("Keep my Mac awake during training", isOn: $keepAwake)
+                    .onChange(of: keepAwake) { _, _ in
+                        KeepAwakeService.shared.refresh(runningCount: JobRegistry.shared.runningJobs.count)
+                    }
+                Text("Holds a power assertion (caffeinate) while a Teach or Practice run is going, so sleep doesn't pause it.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             Section("GGUF export tools") {
                 LabeledContent("llama.cpp converter",
                                value: llamaCppInstalled ? "Installed" : "Not installed")
@@ -79,15 +91,30 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(installingLlamaCpp)
+                LabeledContent("k-quant + self-test tools",
+                               value: toolsBuilt ? "Built" : "Not built")
+                Button {
+                    Task { await buildTools() }
+                } label: {
+                    if buildingTools {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Building…") }
+                    } else {
+                        Text(toolsBuilt ? "Rebuild llama.cpp tools" : "Build llama.cpp tools (k-quants + self-test)")
+                    }
+                }
+                .disabled(buildingTools)
                 if !llamaCppStatus.isEmpty {
                     Text(llamaCppStatus).font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Needed to export Qwen / Gemma / Phi fine-tunes to GGUF (Ollama / LM Studio).")
+                Text("Converter exports Qwen / Gemma / Phi fine-tunes to GGUF. Building the tools (a few minutes) adds Q4_K_M/Q5_K_M/Q6_K and a coherence self-test.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .task { llamaCppInstalled = runtime.llamaCppInstalled() }
+        .task {
+            llamaCppInstalled = runtime.llamaCppInstalled()
+            toolsBuilt = runtime.llamaToolsBuilt()
+        }
     }
 
     private func installLlamaCpp() async {
@@ -97,6 +124,17 @@ struct SettingsView: View {
         llamaCppInstalled = runtime.llamaCppInstalled()
         if !ok && llamaCppStatus.isEmpty {
             llamaCppStatus = "Install failed — see Logs."
+        }
+    }
+
+    private func buildTools() async {
+        buildingTools = true
+        defer { buildingTools = false }
+        let ok = await runtime.buildLlamaCppTools { msg in llamaCppStatus = msg }
+        llamaCppInstalled = runtime.llamaCppInstalled()
+        toolsBuilt = runtime.llamaToolsBuilt()
+        if !ok && llamaCppStatus.isEmpty {
+            llamaCppStatus = "Build failed — see Logs."
         }
     }
 

@@ -51,6 +51,10 @@ struct ExportWizardView: View {
     @Query(sort: \SelfImproveRun.createdAt, order: .reverse) private var runs: [SelfImproveRun]
 
     @State private var selectedSource: ExportSource?
+    @State private var deletionTarget: ExportSource?
+    /// Non-nil when the selected source's architecture can't be run as a GGUF
+    /// (hybrid linear-attention/SSM, e.g. Qwen3.5/3.6). Blocks the GGUF target.
+    @State private var ggufBlockReason: String?
     @State private var target: ExportTarget = .gguf
     @State private var ollamaTag: String = ""
     @State private var template: OllamaChatTemplate = .qwen
@@ -62,6 +66,11 @@ struct ExportWizardView: View {
     @State private var lmstudioFusedName: String = ""
     @State private var llamaCppInstalled: Bool = false
     @State private var installingLlamaCpp: Bool = false
+    @State private var quant: GGUFQuant = .q4_k_m
+    /// Compiled llama.cpp tools (llama-quantize + llama-cli) — needed for k-quants
+    /// and the post-export coherence self-test.
+    @State private var toolsBuilt: Bool = false
+    @State private var buildingTools: Bool = false
 
     /// Completed fine-tunes — Teach jobs and Practice runs — whose adapter
     /// weights are on disk. The single list the user exports from.
@@ -84,7 +93,10 @@ struct ExportWizardView: View {
             .navigationTitle("Export")
             .onAppear {
                 ollamaInstalled = FuseService.shared.locateOllama() != nil
-                Task { llamaCppInstalled = await FuseService.shared.llamaCppInstalled() }
+                Task {
+                    llamaCppInstalled = await FuseService.shared.llamaCppInstalled()
+                    toolsBuilt = await FuseService.shared.llamaToolsInstalled()
+                }
             }
         }
     }
@@ -97,6 +109,44 @@ struct ExportWizardView: View {
                 Text(source.subtitle).font(.caption2).foregroundStyle(.tertiary)
             }
             .tag(source)
+            .contextMenu {
+                Button(role: .destructive) { deletionTarget = source } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) { deletionTarget = source } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
+        .alert("Delete this run?", isPresented: deletionPresented, presenting: deletionTarget) { source in
+            Button("Delete", role: .destructive) { delete(source) }
+            Button("Cancel", role: .cancel) {}
+        } message: { source in
+            Text("Removes \"\(source.name)\" and its trained files from this Mac. The dataset and base model are kept. You can't undo this.")
+        }
+    }
+
+    private var deletionPresented: Binding<Bool> {
+        Binding(get: { deletionTarget != nil }, set: { if !$0 { deletionTarget = nil } })
+    }
+
+    /// Delete the underlying Teach job or Practice run behind an export row.
+    private func delete(_ source: ExportSource) {
+        let message: String?
+        if let job = jobs.first(where: { $0.id == source.id }) {
+            message = TrainingArtifactDeletion.deleteJob(job, context: modelContext)
+        } else if let run = runs.first(where: { $0.id == source.id }) {
+            message = TrainingArtifactDeletion.deleteRun(run, context: modelContext)
+        } else {
+            message = "Couldn't find that item to delete."
+        }
+        if let message {
+            error = message
+        } else {
+            if selectedSource == source { selectedSource = nil }
+            error = nil
         }
     }
 
@@ -132,13 +182,17 @@ struct ExportWizardView: View {
                             if running { ProgressView().controlSize(.small) }
                             else { Label("Run export", systemImage: "square.and.arrow.up") }
                         }
-                        .disabled(running)
+                        .disabled(running || installingLlamaCpp || buildingTools
+                                  || (target == .gguf && !ggufExportReady))
                         Spacer()
                     }
                     if let error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
                     logPanel
                 }
                 .padding(16)
+            }
+            .task(id: selectedSource) {
+                ggufBlockReason = selectedSource.flatMap(ggufBlock)
             }
         } else {
             ContentUnavailableView("Pick a fine-tune", systemImage: "tray",
@@ -153,12 +207,25 @@ struct ExportWizardView: View {
             Picker("Chat template", selection: $template) {
                 ForEach(OllamaChatTemplate.allCases) { Text($0.displayName).tag($0) }
             }
-            if !ollamaInstalled {
-                Label("Ollama CLI not found — install from https://ollama.com or copy the .gguf manually.",
-                      systemImage: "info.circle").foregroundStyle(.orange)
-            }
-            if !isNativelyGGUFExportable(source) {
-                converterSection
+            if let ggufBlockReason {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Can't export this architecture to GGUF", systemImage: "xmark.octagon")
+                        .font(.headline).foregroundStyle(.red)
+                    Text(ggufBlockReason)
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Picker("Format", selection: $quant) {
+                    ForEach(GGUFQuant.allCases) { q in
+                        Text(q.displayName + (q.isKQuant && !toolsBuilt ? " — needs tools" : "")).tag(q)
+                    }
+                }
+                if !ollamaInstalled {
+                    Label("Ollama CLI not found — install from https://ollama.com or copy the .gguf manually.",
+                          systemImage: "info.circle").foregroundStyle(.orange)
+                }
+                toolsSection
             }
         }
         .onAppear {
@@ -172,36 +239,48 @@ struct ExportWizardView: View {
         }
     }
 
-    /// Shown under the GGUF options when the selected model's architecture isn't
-    /// directly GGUF-exportable (Qwen/Gemma/Phi). Export then needs llama.cpp's
-    /// converter — surface a one-click installer instead of letting the run fail
-    /// with a confusing spawn error.
+    /// Converter + compiled-tools readiness for the GGUF target. The Python
+    /// converter handles f16/bf16/q8_0; k-quants (Q4_K_M etc.) and the post-export
+    /// coherence self-test need the compiled llama.cpp tools (built from source).
     @ViewBuilder
-    private var converterSection: some View {
+    private var toolsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if llamaCppInstalled {
-                Label("This architecture needs a two-step fuse + llama.cpp conversion. The converter is installed — you're ready to export.",
-                      systemImage: "checkmark.circle")
-                    .foregroundStyle(.green)
-            } else {
-                Label("This architecture isn't directly GGUF-exportable. It needs the llama.cpp converter — install it once and you're set.",
-                      systemImage: "info.circle")
-                    .foregroundStyle(.orange)
-                Button {
-                    Task { await installConverter() }
-                } label: {
+            if !llamaCppInstalled {
+                Label("GGUF export needs llama.cpp's converter. Install it once and you're set.",
+                      systemImage: "info.circle").foregroundStyle(.orange)
+                Button { Task { await installConverter() } } label: {
                     if installingLlamaCpp {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Installing llama.cpp converter…")
-                        }
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Installing converter…") }
                     } else {
                         Label("Install llama.cpp converter", systemImage: "arrow.down.circle")
                     }
                 }
-                .disabled(installingLlamaCpp || running)
+                .disabled(installingLlamaCpp || running).tint(.brand)
+            } else if quant.isKQuant && !toolsBuilt {
+                Label("Q4_K_M/Q5_K_M/Q6_K and the coherence self-test need llama.cpp's compiled tools. Build them once (a few minutes), or pick Q8_0/F16/BF16.",
+                      systemImage: "info.circle").foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { Task { await buildTools() } } label: {
+                    if buildingTools {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Building llama.cpp tools…") }
+                    } else {
+                        Label("Build llama.cpp tools", systemImage: "hammer")
+                    }
+                }
+                .disabled(buildingTools || running).tint(.brand)
+            } else {
+                Label(toolsBuilt
+                        ? "Ready — exports are self-tested (the app runs the GGUF and checks the output) before being declared done."
+                        : "Converter installed — ready to export. Build the tools for k-quants + a self-test.",
+                      systemImage: "checkmark.circle").foregroundStyle(.green)
             }
         }
+    }
+
+    /// True when a GGUF export can actually run right now (not blocked, converter
+    /// present, and the compiled tools present if a k-quant is selected).
+    private var ggufExportReady: Bool {
+        ggufBlockReason == nil && llamaCppInstalled && !(quant.isKQuant && !toolsBuilt)
     }
 
     private func installConverter() async {
@@ -215,6 +294,21 @@ struct ExportWizardView: View {
         llamaCppInstalled = await FuseService.shared.llamaCppInstalled()
         if !ok {
             error = "Couldn't install the llama.cpp converter. See the output below or Settings → Logs."
+        }
+    }
+
+    private func buildTools() async {
+        buildingTools = true
+        error = nil
+        defer { buildingTools = false }
+        let ok = await PythonRuntime.shared.buildLlamaCppTools { msg in
+            log.append(msg)
+            if log.count > 500 { log.removeFirst(log.count - 500) }
+        }
+        llamaCppInstalled = await FuseService.shared.llamaCppInstalled()
+        toolsBuilt = await FuseService.shared.llamaToolsInstalled()
+        if !ok {
+            error = "Couldn't build the llama.cpp tools. See the output below or Settings → Logs."
         }
     }
 
@@ -236,13 +330,27 @@ struct ExportWizardView: View {
         }
     }
 
-    private func isNativelyGGUFExportable(_ source: ExportSource) -> Bool {
-        let arch = source.baseModelRepoID.lowercased()
-        return arch.contains("llama") || arch.contains("mistral") || arch.contains("mixtral")
+    /// Reason this source can't be exported to a *working* GGUF, or nil if it can.
+    /// Hybrid linear-attention/SSM architectures (Qwen3.5/3.6) convert + load but
+    /// llama.cpp runs them as garbage — so the GGUF target is blocked. Prefers the
+    /// base model's `config.json` (most accurate); falls back to repo-id markers
+    /// for HF-cache bases we can't resolve to a local directory.
+    private func ggufBlock(for source: ExportSource) -> String? {
+        if let dir = ModelRegistry.shared.localModels.first(where: { $0.repoID == source.baseModelRepoID })?.directory.path,
+           let reason = FuseService.ggufRoundTripWarning(forModelDir: dir) {
+            return reason
+        }
+        let id = source.baseModelRepoID.lowercased()
+        let markers = ["qwen3_5", "qwen35", "qwen3.5", "qwen3.6", "mamba", "hybrid", "-ssm"]
+        if markers.contains(where: id.contains) {
+            return "This model uses a hybrid / experimental architecture (linear-attention/SSM). llama.cpp can't run the converted GGUF correctly — it loads but produces garbled output. Run it in LLMPro's Try it out / Code tabs instead, or fine-tune a GGUF-friendly base (Qwen2.5, Llama 3.x, Gemma 2, Mistral)."
+        }
+        return nil
     }
 
     private func run(for source: ExportSource) async {
         running = true; error = nil; log.removeAll()
+        NotificationService.shared.primeAuthorization()
         defer { Task { @MainActor in running = false } }
 
         let exportsDir = PathResolver.exportsDir.appendingPathComponent(source.id.uuidString, isDirectory: true)
@@ -293,25 +401,30 @@ struct ExportWizardView: View {
                     }
                 }
             case .gguf:
+                // Belt-and-suspenders: the Run button is disabled for blocked
+                // archs, but never spawn a doomed multi-GB export even if it isn't.
+                if let reason = ggufBlock(for: source) {
+                    progress("[blocked] " + reason)
+                    error = "GGUF export isn't available for this architecture."
+                    return
+                }
                 let savePath = exportsDir.appendingPathComponent("fused").path
                 let ggufPath = exportsDir.appendingPathComponent("\(ollamaTag).gguf").path
-                if isNativelyGGUFExportable(source) {
-                    try await FuseService.shared.fuseToGGUF(baseModel: source.baseModelRepoID,
-                                                            adapterPath: source.adapterPath,
-                                                            savePath: savePath,
-                                                            ggufPath: ggufPath,
-                                                            onProgress: progress)
-                } else {
-                    try await FuseService.shared.fuseAndConvertExternalGGUF(
-                        baseModel: source.baseModelRepoID,
-                        adapterPath: source.adapterPath,
-                        fp16Path: savePath,
-                        ggufPath: ggufPath,
-                        llamaCppDir: PathResolver.llamaCppDir,
-                        onProgress: progress
-                    )
-                }
+                // Unified path: fuse (--dequantize) → convert → (k-quant) → self-test.
+                let test = try await FuseService.shared.fuseAndConvertExternalGGUF(
+                    baseModel: source.baseModelRepoID,
+                    adapterPath: source.adapterPath,
+                    fp16Path: savePath,
+                    ggufPath: ggufPath,
+                    quant: quant,
+                    onProgress: progress
+                )
                 progress("GGUF written to \(ggufPath)")
+                switch test.outcome {
+                case .passed:  progress("✅ Self-test passed — it runs and generates: \(test.sample.prefix(120))")
+                case .failed:  progress("⚠️ Self-test FAILED — the GGUF did not generate usable output (\(test.detail)). \(test.sample.prefix(120))")
+                case .skipped: progress("ℹ️ Self-test skipped (build the llama.cpp tools to enable it).")
+                }
                 if ollamaInstalled {
                     try await FuseService.shared.installInOllama(ggufPath: ggufPath,
                                                                  tag: ollamaTag,

@@ -293,21 +293,53 @@ because mlx-lm treats a string with no `/` as an HF repo id, any local custom mo
 failed with "exited with code 1". **HF repo ids (containing `/`) still pass through
 unchanged.** See [`CONVENTIONS.md`](CONVENTIONS.md#local-model-paths-must-be-resolved-before-being-passed-to-mlx-lm).
 
-### `mlx_lm fuse` — merge LoRA + GGUF export
+### GGUF export pipeline (fuse → convert → quantize → self-test)
 
-Used by [`FuseService.swift`](../LLMPro/Services/FuseService.swift).
+Used by [`FuseService.swift`](../LLMPro/Services/FuseService.swift). The Save & Use
+adapter export and the per-model "Export to GGUF" share one converter
+(`convertDirToGGUF`) + one self-test (`verifyGGUF`). The pipeline:
 
-```
-python -m mlx_lm fuse \
-  --model <base> \
-  --adapter-path <adapter-dir> \
-  --save-path <out-dir> \
-  [--export-gguf --gguf-path <gguf-file>] \
-  [--dequantize]
-```
+1. **Fuse** (adapter export only) — merge the LoRA and **dequantize** to an HF
+   checkpoint the converter can read (an MLX-quantized base is affine
+   `.scales`/`.biases`, NOT an HF/llama.cpp quant format):
+   ```
+   python -m mlx_lm fuse --model <base> --adapter-path <dir> --save-path <out> --dequantize
+   ```
+   (`FuseService.fuse(dequantize: true)`. The plain "Fused safetensors" export keeps
+   the default, no `--dequantize`.) We no longer use mlx_lm's `--export-gguf` (it
+   hardcodes `general.architecture=llama` and refuses quantized inputs).
+2. **Convert** HF dir → GGUF via llama.cpp's `convert_hf_to_gguf.py`:
+   ```
+   python convert_hf_to_gguf.py <dir> --outfile <gguf> --outtype {f16|bf16|q8_0} [--no-mtp]
+   ```
+   `--outtype` only accepts `f32/f16/bf16/q8_0/tq1_0/tq2_0/auto` — NOT k-quants.
+3. **Quantize** (k-quants only) — base type is `f16`, then the compiled
+   `llama-quantize` makes the k-quant and the temp f16 is deleted:
+   ```
+   <build/bin>/llama-quantize <f16.gguf> <out.gguf> {Q4_K_M|Q5_K_M|Q6_K} <nthreads>
+   ```
+4. **Self-test** (`verifyGGUF`) — run the GGUF and require coherent UTF-8 before
+   declaring success ("a green UI is not a pass"):
+   ```
+   <build/bin>/llama-completion -m <gguf> -p "The capital of France is" -n 24 -st -ngl 999 --no-warmup --temp 0
+   ```
+   Fails the export if the output is empty or contains U+FFFD (the hybrid-arch
+   garbage signature). **NOTE**: this llama.cpp split completion out of `llama-cli`
+   (which now rejects `-no-cnv`) — use `llama-completion`.
 
-**Architecture limitation**: `--export-gguf` only works for `llama / mistral /
-mixtral`. For Qwen / Gemma / Phi we fall back to llama.cpp's `convert_hf_to_gguf.py`.
+`llama-quantize` + `llama-completion` are built from source by
+`PythonRuntime.buildLlamaCppTools` (cmake `-DGGML_METAL=ON -DLLAMA_CURL=OFF`, targets
+`llama-quantize llama-completion`) into `runtime/llama.cpp/build/bin/`. The Python
+`convert_hf_to_gguf.py` alone (f16/bf16/q8_0) needs only `installLlamaCpp`.
+
+**Architecture limitation (hard block)**: converting the **MLX build** of a hybrid
+Qwen3.5/3.6 (`qwen3_5`, Gated-DeltaNet linear-attention + MTP) is broken — MLX bakes
+Qwen3-Next's zero-centered RMSNorm `+1` shift into the saved weights and
+`convert_hf_to_gguf.py` (conversion/qwen.py) applies `+1` again → ~2× wrong norms →
+garbled output. (llama.cpp's *runtime* runs `qwen35` GGUFs fine; it's the MLX→convert
+input that's wrong.) `FuseService.ggufRoundTripWarning` detects these archs and both
+export UIs hard-block them. Standard archs (llama/qwen2.5/gemma2/mistral/phi3/qwen3-dense)
+convert + run correctly — validated end-to-end: MLX → f16 → Q4_K_M → self-test coherent.
 
 ### `mlx_lm convert` — quantize HF model to MLX format
 

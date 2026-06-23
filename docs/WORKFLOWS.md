@@ -402,6 +402,33 @@ exact config keeps the LoRA architecture resume-compatible.
 [`ProcessRunner.swift`](../LLMPro/Core/ProcessRunner.swift),
 [`TrainingJob.swift`](../LLMPro/Models/TrainingJob.swift).
 
+### 5b. Delete a previous training run
+
+```
+Progress tab toolbar → "Past lessons" → TrainingHistoryView sheet
+  @Query all TrainingJob (createdAt desc) → rows (status badge · date · adapter size)
+  user taps trash (or swipes) on a finished run → confirm alert
+    delete(job):
+      guard job.status != .running
+      JobRegistry.shared.remove(jobID:)          // refuses if process still alive
+      FileManager.removeItem(job.adapterURL)      // adapters/<uuid>/
+      modelContext.delete(job); save
+  "Delete all finished" → same per-job delete over every non-running run
+```
+
+The same delete is also on each **Save & Use** export-list row (context-menu +
+swipe → confirm), which can additionally delete Practice runs (`SelfImproveRun` →
+`selfimprove/<uuid>/`). Both paths route through the shared
+`TrainingArtifactDeletion.deleteJob` / `.deleteRun`.
+
+Keeps the dataset, base model, and any fused `…-trained` model — only the run's
+record + adapter/run folder are removed. **Files**:
+[`TrainingArtifactDeletion.swift`](../LLMPro/Services/TrainingArtifactDeletion.swift),
+[`TrainingHistoryView.swift`](../LLMPro/Features/Monitor/TrainingHistoryView.swift),
+[`ExportWizardView.swift`](../LLMPro/Features/Export/ExportWizardView.swift),
+[`JobRegistry.swift`](../LLMPro/Services/JobRegistry.swift),
+[`TrainingJob.swift`](../LLMPro/Models/TrainingJob.swift).
+
 ---
 
 ## 6. Chat with a fine-tuned model

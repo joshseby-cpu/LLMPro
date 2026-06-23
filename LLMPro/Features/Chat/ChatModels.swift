@@ -51,6 +51,18 @@ final class ChatSession {
         error = nil
     }
 
+    /// Re-run the last turn: drop the trailing assistant reply (and its empty
+    /// streaming placeholder) and re-send the last user message. Useful when the
+    /// model's answer was off — a different sample (esp. with temp > 0) often helps.
+    func regenerateLast() {
+        guard !isGenerating else { return }
+        while let last = messages.last, last.role == .assistant { messages.removeLast() }
+        guard let lastUser = messages.last, lastUser.role == .user else { return }
+        let prompt = lastUser.text
+        messages.removeLast()   // send() re-appends it
+        send(prompt)
+    }
+
     func send(_ prompt: String) {
         guard !isGenerating else { return }
         messages.append(ChatMessage(role: .user, text: prompt, isStreaming: false))

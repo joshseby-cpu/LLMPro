@@ -43,6 +43,14 @@ struct ArenaView: View {
     @State private var systemPrompt: String = "You are a careful, expert programming assistant. Prefer correct, idiomatic code with minimal commentary."
     @State private var temperature: Double = 0.4
     @State private var maxTokens: Int = 512
+    @State private var topP: Double = 0.95
+    @State private var seedText: String = ""
+    @State private var presetStore = SystemPromptPresetStore.shared
+    @State private var showSavePreset = false
+    @State private var newPresetName = ""
+    @State private var promptLib = PromptLibraryStore.shared
+    @State private var showSavePrompt = false
+    @State private var newPromptName = ""
     @State private var arenaMode: Bool = true
     @State private var modelText: String = "mlx-community/Llama-3.2-3B-Instruct-4bit"
     @State private var adapterText: String = ""
@@ -166,8 +174,92 @@ struct ArenaView: View {
                 Button("Apply") { applyModelChange() }
             }
             TextField("System prompt", text: $systemPrompt, axis: .vertical).lineLimit(2...4)
+            samplingRow
         }
         .padding(10)
+        .alert("Save system prompt preset", isPresented: $showSavePreset) {
+            TextField("Name", text: $newPresetName)
+            Button("Save") {
+                presetStore.add(name: newPresetName, prompt: systemPrompt)
+                newPresetName = ""
+            }
+            Button("Cancel", role: .cancel) { newPresetName = "" }
+        } message: {
+            Text("Save the current system prompt so you can reapply it later.")
+        }
+        .alert("Save prompt", isPresented: $showSavePrompt) {
+            TextField("Name", text: $newPromptName)
+            Button("Save") {
+                promptLib.add(name: newPromptName, text: prompt)
+                newPromptName = ""
+            }
+            Button("Cancel", role: .cancel) { newPromptName = "" }
+        } message: {
+            Text("Save the current prompt to your library to reuse later.")
+        }
+    }
+
+    /// Sampling controls (top-p + seed — previously unexposed) plus the
+    /// system-prompt preset menu and a "Export chat…" action.
+    private var samplingRow: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 4) {
+                Text("Top-p").font(.caption)
+                Slider(value: $topP, in: 0.1...1.0)
+                Text(String(format: "%.2f", topP)).font(.caption.monospacedDigit())
+            }.frame(width: 200)
+            HStack(spacing: 4) {
+                Text("Seed").font(.caption)
+                TextField("random", text: $seedText).frame(width: 80).textFieldStyle(.roundedBorder)
+            }
+            Menu {
+                ForEach(presetStore.all) { preset in
+                    Button(preset.name) {
+                        systemPrompt = preset.prompt
+                        applyModelChange()
+                    }
+                }
+                Divider()
+                Button("Save current as preset…") { showSavePreset = true }
+                if !presetStore.custom.isEmpty {
+                    Menu("Delete custom preset") {
+                        ForEach(presetStore.custom) { preset in
+                            Button(preset.name, role: .destructive) { presetStore.remove(preset) }
+                        }
+                    }
+                }
+            } label: {
+                Label("Persona", systemImage: "person.bubble")
+            }
+            .frame(width: 130)
+            Menu {
+                ForEach(promptLib.all) { p in
+                    Button(p.name) { prompt = p.text }
+                }
+                Divider()
+                Button("Save current prompt…") { showSavePrompt = true }
+                    .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if !promptLib.custom.isEmpty {
+                    Menu("Delete saved prompt") {
+                        ForEach(promptLib.custom) { p in
+                            Button(p.name, role: .destructive) { promptLib.remove(p) }
+                        }
+                    }
+                }
+            } label: {
+                Label("Prompts", systemImage: "text.badge.plus")
+            }
+            .frame(width: 130)
+            Spacer()
+            Button {
+                let sessions = arenaMode ? [baseSession, adapterSession] : [adapterSession]
+                ConversationMarkdownExporter.exportWithPanel(
+                    title: "LLMPro conversation", suggestedName: "conversation.md", sessions: sessions)
+            } label: {
+                Label("Export chat…", systemImage: "square.and.arrow.up")
+            }
+            .disabled(!ConversationMarkdownExporter.hasContent(arenaMode ? [baseSession, adapterSession] : [adapterSession]))
+        }
     }
 
     private var inputBar: some View {
@@ -341,6 +433,8 @@ struct ArenaView: View {
         params.systemPrompt = systemPrompt
         params.temperature = temperature
         params.maxTokens = maxTokens
+        params.topP = topP
+        params.seed = Int(seedText.trimmingCharacters(in: .whitespaces))   // nil (random) if blank/invalid
         baseSession.model = modelText
         baseSession.adapterPath = nil
         baseSession.params = params

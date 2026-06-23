@@ -35,5 +35,14 @@ struct LLMProApp: App {
             SettingsView()
                 .environment(pythonRuntime)
         }
+
+        // Live training/practice status in the menu bar — only inserted while a
+        // job is running (the `.constant` re-evaluates as `jobRegistry` changes).
+        MenuBarExtra(isInserted: .constant(!jobRegistry.runningJobs.isEmpty)) {
+            JobStatusMenuBarContent(jobRegistry: jobRegistry)
+        } label: {
+            Image(systemName: "graduationcap.fill")
+        }
+        .menuBarExtraStyle(.window)
     }
 }

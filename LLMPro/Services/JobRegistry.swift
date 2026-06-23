@@ -50,6 +50,10 @@ final class JobRegistry {
             $0.status = .running
             $0.startedAt = Date()
         }
+        // First long job is a natural moment to ask for notification permission.
+        NotificationService.shared.primeAuthorization()
+        KeepAwakeService.shared.refresh(runningCount: runningJobs.count)
+        DockProgressService.refresh(Array(jobs.values))
     }
 
     func recordStep(jobID: UUID, _ step: TrainingStep) {
@@ -58,6 +62,7 @@ final class JobRegistry {
             $0.steps.append(step)
             if $0.steps.count > 5000 { $0.steps.removeFirst($0.steps.count - 5000) }
         }
+        DockProgressService.refresh(Array(jobs.values))
     }
 
     func recordLog(jobID: UUID, _ line: String) {
@@ -69,7 +74,12 @@ final class JobRegistry {
 
     func markCompleted(jobID: UUID) {
         update(jobID) { $0.status = .completed }
+        if let name = jobs[jobID]?.name {
+            NotificationService.shared.trainingFinished(name: name, success: true)
+        }
         processes.removeValue(forKey: jobID)
+        KeepAwakeService.shared.refresh(runningCount: runningJobs.count)
+        DockProgressService.refresh(Array(jobs.values))
     }
 
     func markFailed(jobID: UUID, _ reason: String) {
@@ -77,14 +87,33 @@ final class JobRegistry {
             $0.status = .failed
             $0.logTail.append("[error] " + reason)
         }
+        if let name = jobs[jobID]?.name {
+            NotificationService.shared.trainingFinished(name: name, success: false)
+        }
         Log.error("Training job \(jobID) failed: \(reason)", .training)
         processes.removeValue(forKey: jobID)
+        KeepAwakeService.shared.refresh(runningCount: runningJobs.count)
+        DockProgressService.refresh(Array(jobs.values))
     }
 
     func stop(jobID: UUID) {
         processes[jobID]?.terminate()
         update(jobID) { $0.status = .cancelled }
         processes.removeValue(forKey: jobID)
+        KeepAwakeService.shared.refresh(runningCount: runningJobs.count)
+        DockProgressService.refresh(Array(jobs.values))
+    }
+
+    /// Forget a job entirely — used when the user deletes a past run. Refuses a
+    /// job that still has a live process so we never orphan a running training
+    /// (callers gate on status too; this is the belt-and-suspenders check).
+    /// Returns false if the job is still running, true once removed.
+    @discardableResult
+    func remove(jobID: UUID) -> Bool {
+        if let proc = processes[jobID], isProcessAlive(proc.pid) { return false }
+        processes.removeValue(forKey: jobID)
+        jobs.removeValue(forKey: jobID)
+        return true
     }
 
     func stopAll() async {
