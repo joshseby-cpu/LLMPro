@@ -41,6 +41,30 @@ actor FuseService {
         return repoOrName
     }
 
+    /// llama.cpp's `qwen35` / Step3.5 loader expects a multi-token-prediction
+    /// (MTP / "NextN") block when the model's config declares MTP layers — it shows
+    /// up as an extra block N (e.g. `blk.64.*` on a 64-layer model). But the **MLX**
+    /// builds of these models drop the MTP weights while the config still advertises
+    /// them, so a straight conversion writes the MTP metadata without the tensors →
+    /// the GGUF fails to load with `missing tensor 'blk.N.attn_norm.weight'`.
+    /// `convert_hf_to_gguf.py --no-mtp` excludes the MTP head, producing a clean
+    /// trunk-only GGUF that loads (MTP is only a speculative-decoding speedup). The
+    /// flag is valid only for Qwen3.5/3.6/Step3.5, so gate on the config actually
+    /// declaring MTP layers (the key only exists on those archs → self-gating).
+    private static func mtpExclusionArgs(forModelDir dir: String) -> [String] {
+        let cfg = URL(fileURLWithPath: dir).appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: cfg),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [] }
+        func mtpLayers(_ d: [String: Any]) -> Int {
+            (d["mtp_num_hidden_layers"] as? Int) ?? (d["num_nextn_predict_layers"] as? Int) ?? 0
+        }
+        var n = mtpLayers(json)
+        if n == 0, let tc = json["text_config"] as? [String: Any] { n = mtpLayers(tc) }
+        if n > 0 { Log.notice("GGUF export: model declares \(n) MTP layer(s) but MLX builds drop them — adding --no-mtp", .model) }
+        return n > 0 ? ["--no-mtp"] : []
+    }
+
     /// Fuse a LoRA adapter back into the base model, producing safetensors.
     func fuse(
         baseModel: String,
@@ -114,7 +138,8 @@ actor FuseService {
         else { throw FuseError.runtimeNotReady }
         try await ProcessRunner.runCapturing(
             executable: python,
-            arguments: [converter.path, fp16Path, "--outfile", ggufPath, "--outtype", "f16"],
+            arguments: [converter.path, fp16Path, "--outfile", ggufPath, "--outtype", "f16"]
+                + Self.mtpExclusionArgs(forModelDir: fp16Path),
             environment: ["PYTHONUNBUFFERED": "1"],
             onStdout: { line in onProgress?(line) },
             onStderr: { line in onProgress?(line) }
@@ -146,7 +171,8 @@ actor FuseService {
         let model = await Self.resolveModelArg(modelPath)
         try await ProcessRunner.runCapturing(
             executable: python,
-            arguments: [converter.path, model, "--outfile", ggufPath, "--outtype", outType],
+            arguments: [converter.path, model, "--outfile", ggufPath, "--outtype", outType]
+                + Self.mtpExclusionArgs(forModelDir: model),
             environment: ["PYTHONUNBUFFERED": "1"],
             onStdout: { line in onProgress?(line) },
             onStderr: { line in onProgress?(line) }
