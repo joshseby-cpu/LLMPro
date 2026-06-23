@@ -35,6 +35,7 @@ struct ModelsBrowserView: View {
     @State private var lmstudioInstalledAt: URL?
 
     @State private var showGGUFImport = false
+    @State private var ggufExportTarget: ModelRegistry.DetectedModel?
 
     var body: some View {
         NavigationStack {
@@ -50,6 +51,9 @@ struct ModelsBrowserView: View {
             }
             .sheet(isPresented: $showGGUFImport) {
                 GGUFImportView()
+            }
+            .sheet(item: $ggufExportTarget) { target in
+                GGUFExportSheet(model: target)
             }
         }
     }
@@ -131,13 +135,15 @@ struct ModelsBrowserView: View {
                             onDeleteTapped: { deletionTarget = local },
                             onDuplicateTapped: { promptDuplicate(of: local) },
                             onLMStudioTapped: { promptLMStudio(of: local) },
-                            onTrainCodingTapped: { trainForCoding(local) }
+                            onTrainCodingTapped: { trainForCoding(local) },
+                            onExportGGUFTapped: { ggufExportTarget = local }
                         )
                         .contextMenu {
                             Button("Show in Finder") {
                                 NSWorkspace.shared.activateFileViewerSelecting([local.directory])
                             }
                             Button("Train for coding agent") { trainForCoding(local) }
+                            Button("Export to GGUF…") { ggufExportTarget = local }
                             Button("Duplicate…") { promptDuplicate(of: local) }
                             Button("Send to LM Studio…") { promptLMStudio(of: local) }
                             Button("Modify…") { modifyTarget = local }
@@ -417,6 +423,7 @@ private struct LocalModelRow: View {
     let onDuplicateTapped: () -> Void
     let onLMStudioTapped: () -> Void
     let onTrainCodingTapped: () -> Void
+    let onExportGGUFTapped: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -459,6 +466,14 @@ private struct LocalModelRow: View {
             .buttonStyle(.borderless)
             .foregroundStyle(Color.brand)
             .help("Duplicate as a new independent local model (APFS clonefile — usually instant)")
+            Button {
+                onExportGGUFTapped()
+            } label: {
+                Image(systemName: "arrow.down.doc")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.indigo)
+            .help("Export to GGUF for Ollama / LM Studio")
             Button {
                 onLMStudioTapped()
             } label: {

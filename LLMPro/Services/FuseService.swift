@@ -121,6 +121,38 @@ actor FuseService {
         )
     }
 
+    /// Convert a plain HF-format model directory straight to GGUF — no adapter,
+    /// no fuse step. This is the direct per-model export used by the Models tab:
+    /// llama.cpp's `convert_hf_to_gguf.py` reads a full-precision (fp16/bf16) text
+    /// model dir and writes a single GGUF. Only valid for non-quantized text
+    /// models (the caller gates out MLX-quantized and diffusion checkpoints).
+    /// Fails fast if the converter isn't installed (like
+    /// `fuseAndConvertExternalGGUF`) so we never spawn a non-existent script.
+    func convertModelToGGUF(
+        modelPath: String,
+        ggufPath: String,
+        outType: String = "f16",
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws {
+        guard await PythonRuntime.shared.isReady, let python = await PythonRuntime.shared.pythonURL
+        else { throw FuseError.runtimeNotReady }
+
+        let converter = PathResolver.llamaCppDir.appendingPathComponent("convert_hf_to_gguf.py")
+        guard FileManager.default.fileExists(atPath: converter.path) else {
+            Log.error("GGUF export blocked: \(converter.path) not found — llama.cpp converter not installed", .model)
+            throw FuseError.llamaCppMissing
+        }
+
+        let model = await Self.resolveModelArg(modelPath)
+        try await ProcessRunner.runCapturing(
+            executable: python,
+            arguments: [converter.path, model, "--outfile", ggufPath, "--outtype", outType],
+            environment: ["PYTHONUNBUFFERED": "1"],
+            onStdout: { line in onProgress?(line) },
+            onStderr: { line in onProgress?(line) }
+        )
+    }
+
     /// Install a fine-tuned GGUF into Ollama under the given model tag.
     func installInOllama(
         ggufPath: String,
