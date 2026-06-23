@@ -731,6 +731,27 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-06-23 — GGUF export fixed + per-model export added.** GGUF export
+  was effectively broken; now works end-to-end (validated live: qwen2.5-0.5b → valid
+  Q8_0 GGUF). Three fixes + one feature:
+  1. `installLlamaCpp` only pip-installed `gguf`, but `convert_hf_to_gguf.py` imports
+     `torch` at module load → every non-Llama GGUF export died with "No module named
+     torch". Now installs `gguf + torch` (base venv stays torch-free; torch added
+     on-demand). (`819bcc2`)
+  2. `FuseService.fuse`/`fuseToGGUF` passed the bare base-model name to `mlx_lm fuse
+     --model` → mlx-lm treated it as an HF repo id → **401** (load-bearing rule #4).
+     Added `FuseService.resolveModelArg` applied in both. (`52162fa`)
+  3. **New: per-model "Export to GGUF"** in the Models tab (row action + context menu)
+     → `GGUFExportSheet` → `FuseService.convertModelToGGUF` (runs convert_hf_to_gguf
+     directly on a model dir, no adapter/fuse). Gates out quantized + diffusion models
+     with a friendly note; installs the converter on demand. Completes the loop
+     download → train → test → use/export. (`654b969`)
+  - **Gotcha for future work:** `convert_hf_to_gguf.py --outtype` only accepts
+     `f32/f16/bf16/q8_0/tq*` — **NOT** K-quants like `q4_k_m` (those need llama.cpp's
+     separate `llama-quantize` binary, which a `--depth 1` source clone doesn't build).
+     The sheet offers Q8_0/F16/BF16. Adding Q4_K_M later means building/bundling
+     `llama-quantize` and a post-convert quantize step.
+
 - **Session 2026-06-13 (cont.) — Full stress test (clean).** Three layers:
   (1) unit suite 53/53 pass; (2) UI sweep of the live app — rapid all-13-tab
   init/teardown (no hang), every tab verified rendering after the visual refresh
