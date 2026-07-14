@@ -29,6 +29,14 @@ struct LLMProApp: App {
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
+        .commands {
+            CommandGroup(after: .toolbar) {
+                Button("Command Palette…") {
+                    NotificationCenter.default.post(name: .openCommandPalette, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+            }
+        }
         .modelContainer(for: [TrainingJob.self, LocalModel.self, DatasetRecord.self, AppSettings.self, SelfImproveRun.self, AgentProfile.self, EvalRun.self])
 
         Settings {

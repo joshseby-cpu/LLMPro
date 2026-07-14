@@ -153,9 +153,9 @@ it's the doc that explains *why* the app is shaped this way.
 ```
 ┌──────────────── SwiftUI app (macOS 14+, Apple Silicon) ─────────────────┐
 │                                                                          │
-│  Sidebar:   Home · Models · Lessons · Teach · Progress · Try it out      │
-│             · Code · Practice · Fusion · Memory · Inspect · Save & Use    │
-│             · Settings                                                    │
+│  Sidebar:   Home · Models · Lessons · Teach · Progress · Chat ·          │
+│             Story · Try it out · Code · Practice · Fusion · Memory · Inspect ·    │
+│             Save & Use · Settings                                         │
 │                                                                          │
 │  @Observable view models  ←→  SwiftData (@Model)                        │
 │                  ↑                                                       │
@@ -177,7 +177,7 @@ it's the doc that explains *why* the app is shaped this way.
         python diffusion_generate.py     (DiffusionGemma masked/block-diffusion chat — NOT mlx_lm; vendored optiq.vlm decoder; non-fine-tunable guest — also works in Code via diffusion_server.py)
         python -m mlx_lm server --port <free> ...     (Code tab: long-lived agent server)
         python diffusion_server.py --port <free> ...  (Code tab: DiffusionGemma agent server — NOT mlx_lm; stdlib http.server around the vendored decoder; OpenAI-compatible; Gemma↔OpenAI tool translation)
-        python -m mlx_lm fuse  --export-gguf ...      (export)
+        python -m mlx_lm fuse --dequantize ...        (export: fuse to an HF fp16 checkpoint, then llama.cpp's convert_hf_to_gguf.py [+ llama-quantize for k-quants + a llama-completion self-test], or a "Host to the cloud" safetensors package)
         python hf_download.py            (model download, JSON-event progress)
         python prepare_coding_dataset.py (curated dataset preset → chat JSONL)
         python download_hf_dataset.py    (arbitrary HF dataset → chat JSONL)
@@ -196,7 +196,7 @@ hf/                     HuggingFace cache (HF_HOME) — models AND datasets
 adapters/<job-uuid>/    one folder per training job: config.yaml + adapters.safetensors + job.json + training.log
 datasets/<ds-uuid>/     train.jsonl + valid.jsonl + test.jsonl (chat schema; OR a preference set {prompt,chosen,rejected[,system]} for DPO)
 models/<custom-name>/   modified models: text-only strips, abliterated copies, manual imports
-exports/<job-uuid>/     GGUF / fused safetensors output from the Save & Use flow
+exports/<job-uuid>/     Save & Use output: fused/ safetensors, <tag>.gguf, cloud/ (HF fp16 + README); per-model GGUF export writes exports/<model-displayName>/ instead
 selfimprove/<run-uuid>/ Practice run: seed.jsonl, eval.jsonl, run.json, round_N/dataset/, results.jsonl
 evals/                  Scored Test-node harness (EvalService): <suiteID>/eval.jsonl (built-in suites), custom-<uuid>/eval.jsonl (user suites, on-disk only), <run-uuid>/eval_run.json (per-EvalRun sidecar)
 skills/<skill-id>/      Code-tab Agent Skills (live): one SKILL.md package per folder (use_skill, 3-stage progressive disclosure)
@@ -289,7 +289,7 @@ LLMPro/
 │   ├── Datasets/   (Lessons) DatasetsView, DatasetDetailView, DatasetRowEditorView, HuggingFaceDatasetSearchView
 │   ├── Training/   (Teach) TrainingConfigView
 │   ├── Monitor/    (Progress) TrainingMonitorView
-│   ├── Chat/       (Try it out) ArenaView, ChatView, ChatModels
+│   ├── Chat/       (Chat) ChatConversationView — dedicated single-model chat w/ saved history (ConversationStore); (Try it out) ArenaView; shared ChatView/MessageBubble, ChatModels/ChatSession
 │   ├── Code/       (Code) CodeView — agentic coding assistant + 3-pane IDE; FileExplorerView, CodeEditorView, MarkdownEditor, SkillsManagerView (Agent Skills, raw-markdown CRUD; links skill↔skill and skill↔agent), AgentsManagerView (AgentTemplate.swift + AgentEditorView deleted)
 │   ├── SelfImprove/ (Practice) SelfImproveView
 │   ├── Inspect/    (Inspect) ModelInspectorView — WeightsInspectorView (pure-Swift safetensors header parse via Core/SafetensorsHeader), AttentionInspectorView (one-forward MLX capture via inspect_attention.py), CoTInspectorView (live reasoning split, reuses OpenAIChatClient)

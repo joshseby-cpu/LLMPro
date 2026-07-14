@@ -60,6 +60,7 @@ struct GGUFExportSheet: View {
         }
         .padding(20)
         .frame(minWidth: 540, minHeight: 560)
+        .interactiveDismissDisabled(exporting)
         .onAppear {
             if outputName.isEmpty { outputName = sanitized(model.displayName) }
             roundTripWarning = FuseService.ggufRoundTripWarning(forModelDir: model.directory.path)
@@ -241,9 +242,15 @@ struct GGUFExportSheet: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.brand)
                 .disabled(!canExport)
-            if exporting { ProgressView().controlSize(.small) }
+            if exporting {
+                ProgressView().controlSize(.small)
+                Text("Exporting — leave this open until it finishes.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Spacer()
             Button("Done") { dismiss() }
+                .disabled(exporting)   // dismissing mid-export would leave it running blind
+                .help(exporting ? "Export in progress" : "Close")
         }
     }
 

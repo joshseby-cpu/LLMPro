@@ -80,13 +80,19 @@ final class StorageService {
     }
 
     /// Delete the CONTENTS of a clearable category (keep the folder itself).
+    /// The live log file is skipped — `LogFileSink` holds an open handle seeked
+    /// past its old end, so unlinking it would silently kill all logging for the
+    /// rest of the session (writes would go to an anonymous inode).
     func clear(_ category: Category) async {
         guard category.clearable else { return }
         let url = category.url
+        let keep: Set<String> = category.id == "logs" ? [Log.fileURL.lastPathComponent] : []
         await Task.detached(priority: .utility) {
             let fm = FileManager.default
             guard let entries = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) else { return }
-            for entry in entries { try? fm.removeItem(at: entry) }
+            for entry in entries where !keep.contains(entry.lastPathComponent) {
+                try? fm.removeItem(at: entry)
+            }
         }.value
         await scan()
     }

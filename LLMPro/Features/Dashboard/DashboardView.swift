@@ -7,6 +7,8 @@ struct DashboardView: View {
     @Environment(JobRegistry.self) private var jobRegistry
     @Query(sort: \TrainingJob.createdAt, order: .reverse) private var jobs: [TrainingJob]
     @Query(sort: \DatasetRecord.createdAt, order: .reverse) private var datasets: [DatasetRecord]
+    @Query(sort: \EvalRun.createdAt, order: .reverse) private var evals: [EvalRun]
+    @Query(sort: \SelfImproveRun.createdAt, order: .reverse) private var practiceRuns: [SelfImproveRun]
     @State private var registry = ModelRegistry.shared
     @State private var metrics = SystemMetrics.shared
 
@@ -19,9 +21,21 @@ struct DashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     hero
-                    nextStepCard
+                    GettingStartedChecklist(
+                        hasModel: !registry.localModels.isEmpty,
+                        hasDataset: !datasets.isEmpty,
+                        hasFinishedJob: jobs.contains { $0.status == .completed })
+                    DashboardQuickActions(
+                        hasModel: !registry.localModels.isEmpty,
+                        hasDataset: !datasets.isEmpty)
                     quickStats
-                    recentJobs
+                    RecentActivityFeed(
+                        jobs: Array(jobs), datasets: Array(datasets),
+                        evals: Array(evals), practiceRuns: Array(practiceRuns),
+                        onRenameJob: { job in
+                            renameText = job.name
+                            renameTarget = job
+                        })
                     Spacer(minLength: 12)
                 }
                 .padding(24)
@@ -73,66 +87,8 @@ struct DashboardView: View {
         }
     }
 
-    private struct NextStep {
-        let title: String
-        let body: String
-        let icon: String
-        let actionLabel: String?
-        let actionSection: SidebarSection?
-    }
-
-    private var nextStep: NextStep {
-        if registry.localModels.isEmpty {
-            return NextStep(
-                title: "Step 1 — Get a model",
-                body: "Models are like blank textbooks. Open the Models tab and download one. Llama 3.2 3B is a great first try.",
-                icon: "1.circle.fill",
-                actionLabel: "Open Models", actionSection: .models)
-        }
-        if datasets.isEmpty {
-            return NextStep(
-                title: "Step 2 — Get a lesson",
-                body: "Open the Lessons tab and tap Prepare on \"CodeAlpaca 20K\". It's a starter pack of coding examples.",
-                icon: "2.circle.fill",
-                actionLabel: "Open Lessons", actionSection: .datasets)
-        }
-        if jobs.isEmpty {
-            return NextStep(
-                title: "Step 3 — Teach it",
-                body: "You have everything you need. Open Teach to start a lesson — LLMPro will pick the best settings for you.",
-                icon: "3.circle.fill",
-                actionLabel: "Open Teach", actionSection: .training)
-        }
-        return NextStep(
-            title: "You're all set.",
-            body: "Tap Teach to run another lesson, or Try it out to chat with what you trained.",
-            icon: "checkmark.seal.fill",
-            actionLabel: nil, actionSection: nil)
-    }
-
-    private var nextStepCard: some View {
-        let step = nextStep
-        return HStack(alignment: .top, spacing: 16) {
-            Image(systemName: step.icon)
-                .font(.largeTitle)
-                .foregroundStyle(Theme.brandGradient)
-                .frame(width: 44)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(step.title).font(.title3.bold())
-                Text(step.body).font(.callout).foregroundStyle(.secondary)
-                if let label = step.actionLabel, let section = step.actionSection {
-                    Button(label) {
-                        NotificationCenter.default.post(name: .switchSidebar, object: section)
-                    }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 4)
-                }
-            }
-            Spacer()
-        }
-        .card(padding: 20, cornerRadius: 16)
-    }
+    // The single next-step card + NextStep struct were superseded by
+    // GettingStartedChecklist (whole-journey view with live done states).
 
     private var quickStats: some View {
         Grid(horizontalSpacing: 16, verticalSpacing: 16) {
@@ -172,67 +128,8 @@ struct DashboardView: View {
         .card(padding: 14, cornerRadius: 12)
     }
 
-    private var recentJobs: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Recent lessons", systemImage: "clock.arrow.circlepath")
-            if jobs.isEmpty {
-                Text("No lessons yet. Open Teach to start one.").foregroundStyle(.secondary).font(.callout)
-            } else {
-                ForEach(jobs.prefix(8)) { job in
-                    HStack(spacing: 12) {
-                        Text(statusEmoji(for: job.status)).font(.title3)
-                        VStack(alignment: .leading) {
-                            Text(job.name).font(.headline)
-                            Text(job.baseModelRepoID).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        statusPill(for: job.status)
-                        if let loss = job.lastLoss {
-                            Text(String(format: "loss %.2f", loss)).font(.caption.monospacedDigit())
-                        }
-                    }
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                    .contextMenu {
-                        Button("Rename…") {
-                            renameText = job.name
-                            renameTarget = job
-                        }
-                    }
-                    Divider()
-                }
-            }
-        }
-    }
-
-    private func statusEmoji(for status: JobStatus) -> String {
-        switch status {
-        case .running:   "📚"
-        case .completed: "🎉"
-        case .failed:    "⚠️"
-        case .cancelled: "⏹"
-        case .orphaned:  "🔄"
-        case .queued:    "⌛"
-        }
-    }
-
-    private func statusPill(for status: JobStatus) -> some View {
-        let (label, color): (String, Color) = {
-            switch status {
-            case .running:   ("Learning",  .green)
-            case .completed: ("Done",      .brand)
-            case .failed:    ("Problem",   .red)
-            case .cancelled: ("Stopped",   .secondary)
-            case .orphaned:  ("Recovered", .orange)
-            case .queued:    ("Waiting",   .gray)
-            }
-        }()
-        return Text(label)
-            .font(.caption.bold())
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background(color.opacity(0.18), in: Capsule())
-            .foregroundStyle(color)
-    }
+    // recentJobs / statusEmoji / statusPill were superseded by RecentActivityFeed
+    // (a unified stream across jobs, lessons, report cards, and Practice runs).
 }
 
 extension Notification.Name {

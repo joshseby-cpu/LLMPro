@@ -63,6 +63,9 @@ struct TrainingConfigView: View {
     // Advanced overrides
     @State private var showAdvanced: Bool = false
     @State private var advanced: TrainingConfig = .default
+    @State private var presetStore = TrainingPresetStore.shared
+    @State private var showSavePresetAlert = false
+    @State private var newPresetName = ""
 
     // MoE expert targeting (only consulted when the selected base is MoE).
     // `pickSpecific = false` (default) means tune every expert via shared
@@ -507,11 +510,55 @@ struct TrainingConfigView: View {
         .padding(.top, 8)
     }
 
+    /// Saved training recipes — snapshot/apply the Advanced knobs. Lives inside
+    /// the Advanced disclosure so the primary AutoTuner flow stays knob-free.
+    private var presetBar: some View {
+        HStack(spacing: 10) {
+            Menu {
+                if presetStore.presets.isEmpty {
+                    Text("No saved recipes yet")
+                } else {
+                    ForEach(presetStore.presets) { preset in
+                        Button(preset.name) {
+                            advanced = TrainingPresetStore.applying(preset, to: advanced)
+                        }
+                    }
+                    Divider()
+                    Menu("Delete recipe") {
+                        ForEach(presetStore.presets) { preset in
+                            Button(preset.name, role: .destructive) { presetStore.remove(preset) }
+                        }
+                    }
+                }
+            } label: {
+                Label("Recipes", systemImage: "book.pages")
+            }
+            .frame(width: 140)
+            Button {
+                showSavePresetAlert = true
+            } label: {
+                Label("Save current as recipe…", systemImage: "plus.square.on.square")
+            }
+            Spacer()
+        }
+        .alert("Save training recipe", isPresented: $showSavePresetAlert) {
+            TextField("Name (e.g. \"27B careful LoRA\")", text: $newPresetName)
+            Button("Save") {
+                presetStore.add(name: newPresetName, config: advanced)
+                newPresetName = ""
+            }
+            Button("Cancel", role: .cancel) { newPresetName = "" }
+        } message: {
+            Text("Snapshots the Advanced settings so you can reapply them on any model + lesson.")
+        }
+    }
+
     @ViewBuilder
     private var advancedForm: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("These fields override the auto-picked values when set. Leave them as auto-detected to keep things simple.")
                 .font(.caption).foregroundStyle(.secondary)
+            presetBar
 
             Form {
                 Section {

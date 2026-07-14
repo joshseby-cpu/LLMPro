@@ -83,6 +83,16 @@ final class JobRegistry {
     }
 
     func markFailed(jobID: UUID, _ reason: String) {
+        // A user-cancelled job's SIGTERM exit routes some callers here — a
+        // deliberate stop is not a failure. Keep .cancelled and skip the
+        // failure notification (defense in depth; TrainingService's exit
+        // handler also checks this).
+        guard jobs[jobID]?.status != .cancelled else {
+            processes.removeValue(forKey: jobID)
+            KeepAwakeService.shared.refresh(runningCount: runningJobs.count)
+            DockProgressService.refresh(Array(jobs.values))
+            return
+        }
         update(jobID) {
             $0.status = .failed
             $0.logTail.append("[error] " + reason)

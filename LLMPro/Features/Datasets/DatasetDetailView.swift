@@ -34,6 +34,9 @@ struct DatasetDetailView: View {
             DatasetLintSheet(rows: rows) { cleaned in
                 rows = cleaned
                 dirty = true
+                // Persist immediately — every other edit path auto-saves, and an
+                // unsaved clean was silently discarded on close / split switch.
+                Task { await save() }
             }
         }
         .alert("Delete this dataset?", isPresented: $confirmDeleteDataset) {
@@ -261,8 +264,14 @@ struct DatasetDetailView: View {
     private func loadCurrent() async {
         loading = true
         loadError = nil
+        // Parse off the main actor — a large JSONL froze the UI (dead spinner)
+        // when decoded inline. DatasetEditorService is pure file IO, no actor.
+        let dir = dataset.directoryURL
+        let currentSplit = split
         do {
-            let loaded = try DatasetEditorService.load(directory: dataset.directoryURL, split: split)
+            let loaded = try await Task.detached(priority: .userInitiated) {
+                try DatasetEditorService.load(directory: dir, split: currentSplit)
+            }.value
             self.rows = loaded
             self.dirty = false
         } catch {
@@ -274,9 +283,16 @@ struct DatasetDetailView: View {
     private func save() async {
         saving = true
         defer { saving = false }
+        // Encode + rewrite off the main actor — every row edit auto-saves, and a
+        // full-file rewrite of a big dataset stuttered the UI when done inline.
+        let snapshot = rows
+        let dir = dataset.directoryURL
+        let currentSplit = split
         do {
-            try DatasetEditorService.save(rows: rows, to: dataset.directoryURL, split: split)
-            updateRowCount(for: split, count: rows.count)
+            try await Task.detached(priority: .userInitiated) {
+                try DatasetEditorService.save(rows: snapshot, to: dir, split: currentSplit)
+            }.value
+            updateRowCount(for: currentSplit, count: snapshot.count)
             dirty = false
             try? modelContext.save()
         } catch {

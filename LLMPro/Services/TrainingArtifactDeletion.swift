@@ -14,9 +14,19 @@ enum TrainingArtifactDeletion {
     private static let activePracticeStatuses: Set<SelfImproveStatus> =
         [.generating, .testing, .training, .evaluating]
 
+    /// Whether a job is genuinely running RIGHT NOW. The SwiftData record's status
+    /// can be stale: `.running` survives a crash/force-quit (the exit-watcher Task
+    /// dies with the app and nothing reconciles the record on relaunch), which
+    /// would otherwise make the run permanently undeletable. The live registry is
+    /// the source of truth — `recoverOrphans()` only reports `.running` after
+    /// verifying the pid is alive AND is our venv python.
+    static func isLive(_ job: TrainingJob) -> Bool {
+        JobRegistry.shared.jobs[job.id]?.status == .running
+    }
+
     /// Delete a Teach fine-tune (`TrainingJob`) — record + `adapters/<uuid>/`.
     static func deleteJob(_ job: TrainingJob, context: ModelContext) -> String? {
-        guard job.status != .running else { return "That lesson is still running — stop it first." }
+        guard !isLive(job) else { return "That lesson is still running — stop it first." }
         let id = job.id
         let adapterURL = job.adapterURL
         // Drop the live entry first (refuses if a process is somehow still alive).

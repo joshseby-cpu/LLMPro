@@ -71,6 +71,13 @@ enum PathResolver {
     /// its prompt before each task and appends new lessons after each task, so it
     /// improves across sessions without any fine-tuning. User-editable Markdown.
     static var agentMemoryDir: URL { appSupport.appendingPathComponent("agentmemory", isDirectory: true).ensured() }
+    /// Saved chat conversations for the Chat tab — one `<uuid>.json` per
+    /// conversation (`ConversationStore`), so a big transcript rewrites only its
+    /// own file. Independent of SwiftData / the training loop.
+    static var conversationsDir: URL { appSupport.appendingPathComponent("conversations", isDirectory: true).ensured() }
+    /// Saved Story-mode projects — one `<uuid>.json` per story (`StoryStore`), each
+    /// holding the premise/settings + all chapters. Independent of SwiftData.
+    static var storiesDir: URL { appSupport.appendingPathComponent("stories", isDirectory: true).ensured() }
 
     static func adapterDir(for jobID: UUID) -> URL {
         adaptersDir.appendingPathComponent(jobID.uuidString, isDirectory: true).ensured()

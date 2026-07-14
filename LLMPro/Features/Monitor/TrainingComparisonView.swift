@@ -14,8 +14,13 @@ struct TrainingComparisonView: View {
     private struct LossPoint: Identifiable { let id = UUID(); let iter: Int; let loss: Double }
     private struct RunSeries: Identifiable { let id: UUID; let name: String; let points: [LossPoint] }
 
-    private var candidates: [RunSeries] {
-        jobs.compactMap { job in
+    // Decoded ONCE on appear — decodedMetrics() unpacks each run's full metrics
+    // blob, which is far too heavy to redo on every body evaluation (every
+    // checkbox toggle re-decoded every run several times).
+    @State private var candidates: [RunSeries] = []
+
+    private func decodeCandidates() {
+        candidates = jobs.compactMap { job in
             let pts = job.decodedMetrics().filter { !$0.isEval }.compactMap { s -> LossPoint? in
                 guard let l = s.trainLoss else { return nil }
                 return LossPoint(iter: s.iter, loss: l)
@@ -44,6 +49,7 @@ struct TrainingComparisonView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .frame(minWidth: 580, minHeight: 540)
             .onAppear {
+                decodeCandidates()
                 if selected.isEmpty { selected = Set(candidates.prefix(2).map(\.id)) }
             }
         }

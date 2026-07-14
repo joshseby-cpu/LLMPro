@@ -558,33 +558,42 @@ ExportWizardView:
   user selects a completed job → detail pane
 
 Detail pane:
-  Picker: target = .adapter | .fusedSafetensors | .gguf
-  (if .gguf) Ollama tag field + chat-template picker + warning if non-Llama arch
+  Picker: target = .adapter | .fusedSafetensors | .gguf | .cloud
+  (if .gguf) Ollama tag field + chat-template picker + GGUFQuant format picker
+             + hybrid-arch hard block (ggufBlock) + converter/tools install buttons
 
 user clicks "Run export" → run(for: job)
   exportsDir = PathResolver.exportsDir/<jobID>/
-  
+
   .adapter:
     zipDirectory(job.adapterURL, to: exportsDir/<jobName>-adapter.zip)
       uses NSFileCoordinator.coordinate(readingItemAt:, options: .forUploading)
       which creates a temp zip, then moves it
-  
+
   .fusedSafetensors:
     FuseService.fuse(baseModel, adapterPath, savePath: exportsDir/fused/, onProgress:)
       spawns `python -m mlx_lm fuse --model <base> --adapter-path <adapter> --save-path <out>`
-  
-  .gguf:
-    isNativelyGGUFExportable(job) — checks if architecture is llama/mistral/mixtral
-      yes: FuseService.fuseToGGUF(...)  → mlx_lm fuse --export-gguf
-      no:  FuseService.fuseAndConvertExternalGGUF(...)
-           → fuse to fp16 safetensors, then llama.cpp/convert_hf_to_gguf.py
+    (optional) install into ~/.lmstudio/models/LLMPro/<name>/
+
+  .gguf:  (ONE unified path for every arch — the llama-only `mlx_lm fuse
+           --export-gguf` shortcut and isNativelyGGUFExportable() were removed)
+    tag sanitized up-front (it doubles as the output file stem)
+    FuseService.fuseAndConvertExternalGGUF(base, adapter, fp16Path, ggufPath, quant)
+      1. fuse --dequantize → HF-layout fp16 checkpoint
+      2. convert_hf_to_gguf.py (f16/bf16/q8_0 direct; k-quants convert to a temp
+         f16 then llama-quantize; temp cleaned up on success AND failure)
+      3. verifyGGUF — llama-completion self-test with a 3-minute watchdog
     if ollamaInstalled:
       FuseService.installInOllama(ggufPath, tag, chatTemplate)
         builds a Modelfile from chatTemplate.modelfileBody
         runs `ollama create <tag> -f Modelfile`
-      
+
+  .cloud:  (see §16)
+    fuse --dequantize → exports/<id>/cloud/ + README with vLLM/TGI commands
+
   All progress streams via onProgress closure → appends to log[] which renders in
-  a monospace panel.
+  a monospace panel. Each source row also offers "Model card…" (ModelCardPreviewView)
+  and the toolbar has "Report cards" (EvalLeaderboardView).
 ```
 
 **Files involved**: [`ExportWizardView.swift`](../LLMPro/Features/Export/ExportWizardView.swift),
@@ -1026,3 +1035,111 @@ ModelInspectorView:
 [`WeightsInspectService.swift`](../LLMPro/Services/WeightsInspectService.swift),
 [`AttentionInspectService.swift`](../LLMPro/Services/AttentionInspectService.swift),
 [`inspect_attention.py`](../LLMPro/Resources/helpers/inspect_attention.py).
+
+---
+
+## 16. Host a fine-tune in the cloud (Save & Use → "Host to the cloud")
+
+```
+Save & Use → pick a fine-tune → Target: "Host to the cloud" → Run export
+  ExportWizardView.run() case .cloud:
+    FuseService.fuse(baseModel:, adapterPath:, savePath: exports/<id>/cloud/, dequantize: true)
+      → python -m mlx_lm fuse --model <abs> --adapter-path <dir> --save-path <cloud/> --dequantize
+    ModelCardBuilder.cloudREADME(modelName:baseModel:) → cloud/README.md
+      (vLLM `vllm serve` + TGI docker commands, VRAM rule of thumb)
+    reveal in Finder
+```
+
+Output is full-precision HF-layout safetensors — what vLLM / TGI / SGLang consume
+directly. Works for **every** architecture, including hybrid Qwen3.5/3.6 whose
+MLX→GGUF path is blocked (CONTRACTS §"GGUF export pipeline"). **Files**:
+[`ExportWizardView.swift`](../LLMPro/Features/Export/ExportWizardView.swift),
+[`FuseService.swift`](../LLMPro/Services/FuseService.swift),
+[`ModelCardBuilder.swift`](../LLMPro/Services/ModelCardBuilder.swift).
+
+## 17. Jump anywhere (⌘K command palette)
+
+```
+⌘K (or View menu → Command Palette…)
+  LLMProApp .commands → posts .openCommandPalette
+  RootView .onReceive → sheet(CommandPaletteView)
+    type → prefix-then-contains ranking over the 13 tabs → ↩ or click
+    → posts .switchSidebar(section) → RootView selection changes
+```
+
+**Files**: [`CommandPaletteView.swift`](../LLMPro/Features/Shared/CommandPaletteView.swift),
+[`LLMProApp.swift`](../LLMPro/App/LLMProApp.swift), [`RootView.swift`](../LLMPro/App/RootView.swift).
+
+## 18. Chat with a model (the Chat tab)
+
+```
+Sidebar → "Chat" (.chatDirect) → ChatConversationView
+  ConversationStore.shared loads conversations/*.json (most-recent first)
+  .task → registry.scan(); auto-select the most recent conversation
+
+Left rail:
+  "New chat" → store.create(model, systemPrompt, temperature) → selectedID = new
+  row select → onChange(selectedID):
+     persist()  (keyed on sessionConvID = the OUTGOING conversation)
+     discardIfEmpty(old)
+     loadSession(new):  session?.stop(); build ChatSession(model, messages, params);
+                        sessionConvID = new.id
+
+Right pane (for the loaded session):
+  top bar: model Menu (changeModel → session.model + persist),
+           Persona Menu (SystemPromptPresetStore → session.params.systemPrompt),
+           Temp slider (→ session.params.temperature), Export (ConversationMarkdownExporter),
+           Clear (session.clear + persist)
+  transcript: ForEach(session.messages){ MessageBubble } + autoscroll
+     onChange(session.isGenerating == false) → persist()   (capture completed turn)
+  input bar: Send (⌘↩) → session.send(text); persist()   |   Stop (⌘.) → session.stop()
+
+persist(): finalized turns (drop empty/streaming assistant) → StoredConversation
+           keyed by sessionConvID; auto-title from first user message; store.update → JSON
+onDisappear: persist(); session.stop(); discardIfEmpty(sessionConvID)
+```
+
+Distinct from **§6 "Try it out"** (ArenaView): Chat is casual single-model
+conversation with saved history; Try it out is the base-vs-fine-tune arena + the
+scored "Score it" node + DPO preference capture. Both share `ChatSession`,
+`InferenceService`, `MessageBubble`, and the persona presets. **Files**:
+[`ChatConversationView.swift`](../LLMPro/Features/Chat/ChatConversationView.swift),
+[`ConversationStore.swift`](../LLMPro/Services/ConversationStore.swift),
+[`ChatModels.swift`](../LLMPro/Features/Chat/ChatModels.swift),
+[`ChatView.swift`](../LLMPro/Features/Chat/ChatView.swift).
+
+## 19. Write a story (the Story tab)
+
+```
+Sidebar → "Story" (.story) → StoryView
+  StoryStore.shared loads stories/*.json (most-recent first); auto-select the latest
+  select a project → onChange(selectedID): persist() (keyed on generatorProjID = OUTGOING);
+     discardIfEmpty(old); loadGenerator(new):
+        generator?.stop(); StoryGenerator(project); onPersist = persist; generatorProjID = new.id
+
+StoryEditorPane (@Bindable generator):
+  premise + settings (genre / creativity / words-per-chapter / target / style / outline)
+  "Write opening/next chapter" → persist(); generator.writeNextChapter(instruction):
+     appendOneChapter: append blank Chapter n; buildChapterPrompt(style+premise+outline+
+        rolling summaries + prev-chapter tail); InferenceService.stream → append tokens to
+        chapters[i].text; onPersist(); then summarize(chapter) → chapters[i].summary; onPersist()
+  "Write to N" → generator.autoWriteToTarget(): loop appendOneChapter until targetChapters or Stop
+  "Plan outline" → generator.planOutline() → project.outline
+  chapter menu: Revise… (ReviseSheet → reviseChapter: blank+re-stream, restore original if empty),
+                Edit text… (ChapterEditSheet → replace chapter, clear stale summary), Copy, Delete
+  Stop (⌘.) → generator.stop() (bumps `generation`; cancels the Task → InferenceService
+              onTermination kills the mlx_lm subprocess)
+  Export → StoryMarkdownExporter (title + premise + chapters → .md)
+
+persist(): store.update(generator.project) keyed by generatorProjID
+onDisappear: persist(); generator.stop(); discardIfEmpty
+```
+
+Coherence across 15+ chapters comes from the **rolling summaries** (not full prior
+text) + outline, so each chapter's prompt stays within a sane token budget. Content
+latitude is the chosen local model's (an uncensored model writes without refusals);
+the UI adds no filter. **Files**:
+[`StoryView.swift`](../LLMPro/Features/Story/StoryView.swift),
+[`StoryGenerator.swift`](../LLMPro/Services/StoryGenerator.swift),
+[`StoryStore.swift`](../LLMPro/Services/StoryStore.swift),
+[`InferenceService.swift`](../LLMPro/Services/InferenceService.swift).

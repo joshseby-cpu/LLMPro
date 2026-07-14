@@ -82,7 +82,12 @@ struct ArenaView: View {
     @State private var prefDataset: DatasetRecord?
     @State private var prefCount: Int = 0
 
-    init() {
+    // The RootView-stashed .openChatWithModel payload — consumed on mount/change
+    // (the view may not exist when the notification fires; see PendingModelHandoff).
+    @Binding var pendingHandoff: PendingModelHandoff?
+
+    init(pendingHandoff: Binding<PendingModelHandoff?> = .constant(nil)) {
+        self._pendingHandoff = pendingHandoff
         // Default to a general base — the whole point of LLMPro is to take a non-coder
         // and turn it into one. The adapter side is what makes it a coder.
         let initialModel = "mlx-community/Llama-3.2-3B-Instruct-4bit"
@@ -122,10 +127,9 @@ struct ArenaView: View {
             .onAppear {
                 loadPreferenceCount()
                 refreshCustomSuites()
+                consumePendingHandoff()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .openChatWithModel)) { note in
-                handleHandoff(note.object)
-            }
+            .onChange(of: pendingHandoff) { _, _ in consumePendingHandoff() }
             .alert("Couldn't import that suite",
                    isPresented: Binding(get: { importError != nil },
                                         set: { if !$0 { importError = nil } })) {
@@ -142,21 +146,19 @@ struct ArenaView: View {
         }
     }
 
-    /// Apply an incoming `.openChatWithModel` payload (a `ModelHandoff` with model +
-    /// optional adapter + autoScore, or a bare `String` model id — dual-decode kept
-    /// so older posters still work). A `ModelHandoff` carrying `autoScore == true`
-    /// kicks off a scored eval immediately on arrival.
-    private func handleHandoff(_ object: Any?) {
-        if let h = object as? ModelHandoff {
-            modelText = h.model
-            adapterText = h.adapterPath ?? ""
-            if let p = h.adapterPath, !p.isEmpty { arenaMode = true }
-            applyModelChange()
-            if h.autoScore { autoScore() }
-        } else if let repo = object as? String {
-            modelText = repo
-            applyModelChange()
-        }
+    /// Consume the RootView-stashed `.openChatWithModel` payload (survives the
+    /// first-mount race — see `PendingModelHandoff`). Clears the binding first so
+    /// a re-render can't double-apply; `autoScore == true` kicks off a scored eval
+    /// immediately on arrival.
+    private func consumePendingHandoff() {
+        guard let pending = pendingHandoff else { return }
+        pendingHandoff = nil
+        let h = pending.payload
+        modelText = h.model
+        adapterText = h.adapterPath ?? ""
+        if let p = h.adapterPath, !p.isEmpty { arenaMode = true }
+        applyModelChange()
+        if h.autoScore { autoScore() }
     }
 
     private var controls: some View {
@@ -262,6 +264,12 @@ struct ArenaView: View {
         }
     }
 
+    /// True while either visible pane is streaming — gates Send (a mid-generation
+    /// send used to silently discard the typed prompt) and swaps in a Stop button.
+    private var isGeneratingAny: Bool {
+        (arenaMode && baseSession.isGenerating) || adapterSession.isGenerating
+    }
+
     private var inputBar: some View {
         VStack(spacing: 8) {
             scoreControls
@@ -271,11 +279,20 @@ struct ArenaView: View {
                     .frame(minHeight: 60, maxHeight: 160)
                     .padding(6)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                Button {
-                    send()
-                } label: { Label("Send", systemImage: "paperplane.fill") }
-                .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if isGeneratingAny {
+                    Button(role: .destructive) {
+                        baseSession.stop()
+                        adapterSession.stop()
+                    } label: { Label("Stop", systemImage: "stop.fill") }
+                        .keyboardShortcut(".", modifiers: [.command])
+                        .help("Stop generating (⌘.)")
+                } else {
+                    Button {
+                        send()
+                    } label: { Label("Send", systemImage: "paperplane.fill") }
+                    .keyboardShortcut(.return, modifiers: [.command])
+                    .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }
         .padding(10)
@@ -444,8 +461,13 @@ struct ArenaView: View {
     }
 
     private func send() {
+        // Never clear the field while a generation is in flight — ChatSession.send
+        // would refuse it and the typed prompt would be silently lost.
+        guard !isGeneratingAny else { return }
         let p = prompt
         prompt = ""
+        // Marks the Home checklist's "Try it out" step done (first prompt ever sent).
+        UserDefaults.standard.set(true, forKey: "onboarding.triedChat")
         applyModelChange()
         if arenaMode { baseSession.send(p) }
         adapterSession.send(p)

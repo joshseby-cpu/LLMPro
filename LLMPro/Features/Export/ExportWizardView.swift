@@ -2,13 +2,14 @@ import SwiftUI
 import SwiftData
 
 enum ExportTarget: String, CaseIterable, Identifiable {
-    case adapter, fusedSafetensors, gguf
+    case adapter, fusedSafetensors, gguf, cloud
     var id: String { rawValue }
     var displayName: String {
         switch self {
         case .adapter:          "LoRA adapter (zip)"
         case .fusedSafetensors: "Fused safetensors"
         case .gguf:             "GGUF for Ollama / LM Studio"
+        case .cloud:            "Host to the cloud"
         }
     }
 }
@@ -71,6 +72,8 @@ struct ExportWizardView: View {
     /// and the post-export coherence self-test.
     @State private var toolsBuilt: Bool = false
     @State private var buildingTools: Bool = false
+    @State private var modelCardTarget: ExportSource?
+    @State private var showLeaderboard: Bool = false
 
     /// Completed fine-tunes — Teach jobs and Practice runs — whose adapter
     /// weights are on disk. The single list the user exports from.
@@ -91,6 +94,18 @@ struct ExportWizardView: View {
                 detail.frame(minWidth: 480)
             }
             .navigationTitle("Export")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showLeaderboard = true
+                    } label: {
+                        Label("Report cards", systemImage: "trophy")
+                    }
+                    .help("Score history across all your models — see what's improving")
+                }
+            }
+            .sheet(isPresented: $showLeaderboard) { EvalLeaderboardView() }
+            .sheet(item: $modelCardTarget) { source in ModelCardPreviewView(source: source) }
             .onAppear {
                 ollamaInstalled = FuseService.shared.locateOllama() != nil
                 Task {
@@ -176,6 +191,14 @@ struct ExportWizardView: View {
                     if target == .adapter {
                         Text("Zips the raw LoRA adapter directory — load with `--adapter-path` in mlx-lm.").font(.callout)
                     }
+                    if target == .cloud {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Makes a full-precision safetensors folder that cloud runtimes (vLLM, TGI, SGLang) serve directly — works for every architecture, including ones GGUF can't handle.")
+                                .font(.callout)
+                            Text("Includes a README with the exact serve commands. Output: `exports/<id>/cloud/`.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
 
                     HStack {
                         Button { Task { await run(for: source) } } label: {
@@ -184,6 +207,12 @@ struct ExportWizardView: View {
                         }
                         .disabled(running || installingLlamaCpp || buildingTools
                                   || (target == .gguf && !ggufExportReady))
+                        Button {
+                            modelCardTarget = source
+                        } label: {
+                            Label("Model card…", systemImage: "doc.richtext")
+                        }
+                        .help("Preview and save a shareable Markdown summary of this fine-tune")
                         Spacer()
                     }
                     if let error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
@@ -408,8 +437,16 @@ struct ExportWizardView: View {
                     error = "GGUF export isn't available for this architecture."
                     return
                 }
+                // The tag doubles as the output file stem — sanitize BEFORE the
+                // long fuse so a '/' or an emptied field can't fail an hour in.
+                let stem = ollamaTag
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "/", with: "-")
+                    .replacingOccurrences(of: ":", with: "-")
+                let safeStem = stem.isEmpty ? "model-tuned" : stem
+                if safeStem != ollamaTag { ollamaTag = safeStem }
                 let savePath = exportsDir.appendingPathComponent("fused").path
-                let ggufPath = exportsDir.appendingPathComponent("\(ollamaTag).gguf").path
+                let ggufPath = exportsDir.appendingPathComponent("\(safeStem).gguf").path
                 // Unified path: fuse (--dequantize) → convert → (k-quant) → self-test.
                 let test = try await FuseService.shared.fuseAndConvertExternalGGUF(
                     baseModel: source.baseModelRepoID,
@@ -433,6 +470,24 @@ struct ExportWizardView: View {
                     progress("✅ Installed as Ollama model: \(ollamaTag)")
                     progress("Try: ollama run \(ollamaTag) 'write fizzbuzz in rust'")
                 }
+            case .cloud:
+                // Full-precision HF safetensors — the arch-agnostic cloud format
+                // (vLLM/TGI/SGLang read this directly; no GGUF conversion involved).
+                let cloudDir = exportsDir.appendingPathComponent("cloud", isDirectory: true)
+                try await FuseService.shared.fuse(
+                    baseModel: source.baseModelRepoID,
+                    adapterPath: source.adapterPath,
+                    savePath: cloudDir.path,
+                    dequantize: true,
+                    onProgress: progress
+                )
+                let readme = ModelCardBuilder.cloudREADME(
+                    modelName: source.name, baseModel: source.baseModelRepoID)
+                try? readme.write(to: cloudDir.appendingPathComponent("README.md"),
+                                  atomically: true, encoding: .utf8)
+                progress("✅ Cloud package ready: \(cloudDir.path)")
+                progress("README.md inside has the vLLM / TGI serve commands.")
+                NSWorkspace.shared.activateFileViewerSelecting([cloudDir])
             }
         } catch {
             self.error = error.localizedDescription

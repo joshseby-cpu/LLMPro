@@ -190,19 +190,31 @@ actor FuseService {
         if let kquant = quant.quantizeType {
             guard llamaToolsInstalled() else { throw FuseError.llamaToolsMissing }
             let tmpF16 = ggufPath + ".f16.tmp.gguf"
-            onProgress?("Converting to f16 (step 1/2)…")
-            try await runConverter(outfile: tmpF16, outType: "f16")
-            onProgress?("Quantizing to \(kquant) (step 2/2)…")
-            try await ProcessRunner.runCapturing(
-                executable: Self.llamaQuantizeBin,
-                arguments: [tmpF16, ggufPath, kquant],
-                environment: ["PYTHONUNBUFFERED": "1"],
-                onStdout: { line in onProgress?(line) },
-                onStderr: { line in onProgress?(line) }
-            )
-            try? FileManager.default.removeItem(atPath: tmpF16)
+            // The temp f16 is multi-GB — never leave it behind, success or failure.
+            defer { try? FileManager.default.removeItem(atPath: tmpF16) }
+            do {
+                onProgress?("Converting to f16 (step 1/2)…")
+                try await runConverter(outfile: tmpF16, outType: "f16")
+                onProgress?("Quantizing to \(kquant) (step 2/2)…")
+                try await ProcessRunner.runCapturing(
+                    executable: Self.llamaQuantizeBin,
+                    arguments: [tmpF16, ggufPath, kquant],
+                    environment: ["PYTHONUNBUFFERED": "1"],
+                    onStdout: { line in onProgress?(line) },
+                    onStderr: { line in onProgress?(line) }
+                )
+            } catch {
+                // Don't leave a partial (unusable) output .gguf either.
+                try? FileManager.default.removeItem(atPath: ggufPath)
+                throw error
+            }
         } else {
-            try await runConverter(outfile: ggufPath, outType: quant.convertOutType)
+            do {
+                try await runConverter(outfile: ggufPath, outType: quant.convertOutType)
+            } catch {
+                try? FileManager.default.removeItem(atPath: ggufPath)
+                throw error
+            }
         }
     }
 
@@ -219,14 +231,32 @@ actor FuseService {
         onProgress?("Running self-test (loading the GGUF and generating)…")
         let collected = LineSink()
         do {
-            try await ProcessRunner.runCapturing(
+            // Spawn (not runCapturing) so a wedged model load can't hang the
+            // export forever — the watchdog SIGTERMs after 3 minutes, the streams
+            // end, and the too-little-output check below reports the failure.
+            let proc = try await ProcessRunner.spawn(
                 executable: Self.llamaCompletionBin,
                 arguments: ["-m", ggufPath, "-p", "The capital of France is",
                             "-n", "24", "-st", "-ngl", "999", "--no-warmup", "--temp", "0"],
-                environment: ["PYTHONUNBUFFERED": "1"],
-                onStdout: { line in collected.append(line); onProgress?(line) },
-                onStderr: { line in onProgress?(line) }
+                environment: ["PYTHONUNBUFFERED": "1"]
             )
+            let watchdog = Task {
+                try? await Task.sleep(for: .seconds(180))
+                if !Task.isCancelled {
+                    onProgress?("[self-test] timed out after 3 minutes — stopping it")
+                    proc.terminate()
+                }
+            }
+            let errDrain = Task {
+                for await line in proc.stderr { onProgress?(line) }
+            }
+            for await line in proc.stdout {
+                collected.append(line)
+                onProgress?(line)
+            }
+            _ = try? await proc.exit.value
+            watchdog.cancel()
+            await errDrain.value
         } catch {
             return GGUFSelfTest(outcome: .failed, sample: "", detail: "couldn't run self-test: \(error.localizedDescription)")
         }

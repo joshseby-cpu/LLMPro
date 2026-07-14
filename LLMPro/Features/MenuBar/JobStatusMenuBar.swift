@@ -66,5 +66,18 @@ struct JobStatusMenuBarContent: View {
         }
     }
 
-    private func activate() { NSApp.activate(ignoringOtherApps: true) }
+    /// Bring the app forward AND re-open the main window if it was closed —
+    /// `activate` alone does nothing visible when no window exists (the app stays
+    /// alive after last-window-close so training survives), which made these
+    /// buttons appear dead exactly when they're most useful.
+    private func activate() {
+        NSApp.activate(ignoringOtherApps: true)
+        let visible = NSApp.windows.contains { $0.isVisible && $0.canBecomeMain }
+        if !visible {
+            // Re-open the closed WindowGroup window (same path the Dock icon uses).
+            if let main = NSApp.windows.first(where: { $0.canBecomeMain }) {
+                main.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
 }

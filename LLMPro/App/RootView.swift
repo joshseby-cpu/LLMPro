@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
-    case dashboard, models, datasets, training, monitor, chat, code, selfImprove, fusion, memory, inspect, export, settings
+    case dashboard, models, datasets, training, monitor, chatDirect, story, chat, code, selfImprove, fusion, memory, inspect, export, settings
 
     var id: String { rawValue }
     var title: String {
@@ -12,6 +12,8 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .datasets:    "Lessons"
         case .training:    "Teach"
         case .monitor:     "Progress"
+        case .chatDirect:  "Chat"
+        case .story:       "Story"
         case .chat:        "Try it out"
         case .code:        "Code"
         case .selfImprove: "Practice"
@@ -29,6 +31,8 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .datasets:    "books.vertical"
         case .training:    "graduationcap"
         case .monitor:     "chart.line.uptrend.xyaxis"
+        case .chatDirect:  "message"
+        case .story:       "book.closed"
         case .chat:        "bubble.left.and.bubble.right"
         case .code:        "chevron.left.forwardslash.chevron.right"
         case .selfImprove: "arrow.triangle.2.circlepath"
@@ -52,6 +56,12 @@ struct RootView: View {
     // when the user arrived straight from another tab. Set on notification receipt
     // alongside `selection = .training`; consumed and cleared by `TrainingConfigView`.
     @State private var pendingTrainingHandoff: PendingTrainingHandoff?
+    // Same first-mount race, for the other two hand-off destinations: the payload
+    // of .openChatWithModel / .openCodeWithModel is stashed here (RootView is
+    // always alive) and consumed by ArenaView / CodeView once mounted.
+    @State private var pendingChatHandoff: PendingModelHandoff?
+    @State private var pendingCodeHandoff: PendingModelHandoff?
+    @State private var showCommandPalette = false
 
     var body: some View {
         Group {
@@ -65,6 +75,10 @@ struct RootView: View {
                 }
                 .navigationSplitViewStyle(.balanced)
                 .task { SystemMetrics.shared.start() }   // one long-lived poller for all tabs
+                .sheet(isPresented: $showCommandPalette) { CommandPaletteView() }
+                .onReceive(NotificationCenter.default.publisher(for: .openCommandPalette)) { _ in
+                    showCommandPalette = true
+                }
             }
         }
         // Belt-and-suspenders brand tint so custom views/controls pick up the
@@ -85,7 +99,9 @@ struct RootView: View {
         }
         .modifier(SidebarNotificationRouter(
             selection: $selection,
-            pendingTrainingHandoff: $pendingTrainingHandoff))
+            pendingTrainingHandoff: $pendingTrainingHandoff,
+            pendingChatHandoff: $pendingChatHandoff,
+            pendingCodeHandoff: $pendingCodeHandoff))
     }
 
     @ViewBuilder
@@ -96,8 +112,10 @@ struct RootView: View {
         case .datasets:    DatasetsView()
         case .training:    TrainingConfigView(pendingHandoff: $pendingTrainingHandoff)
         case .monitor:     TrainingMonitorView()
-        case .chat:        ArenaView()
-        case .code:        CodeView()
+        case .chatDirect:  ChatConversationView()
+        case .story:       StoryView()
+        case .chat:        ArenaView(pendingHandoff: $pendingChatHandoff)
+        case .code:        CodeView(pendingHandoff: $pendingCodeHandoff)
         case .selfImprove: SelfImproveView()
         case .fusion:      FusionView()
         case .memory:      MemoryView()
@@ -132,9 +150,19 @@ struct RootView: View {
 /// is unchanged — the same notifications drive the same selection.
 private struct SidebarNotificationRouter: ViewModifier {
     @Binding var selection: SidebarSection
-    // Stash the Teach hand-off payload here so it survives `TrainingConfigView` not
-    // existing yet on a first-ever visit; the view consumes it once it mounts.
+    // Stash the hand-off payloads here so they survive the destination view not
+    // existing yet on a first-ever visit; each view consumes its binding once it
+    // mounts (or immediately via .onChange when already mounted).
     @Binding var pendingTrainingHandoff: PendingTrainingHandoff?
+    @Binding var pendingChatHandoff: PendingModelHandoff?
+    @Binding var pendingCodeHandoff: PendingModelHandoff?
+
+    /// Posters send either a full `ModelHandoff` or a bare `String` model id.
+    private func decodeHandoff(_ object: Any?) -> ModelHandoff? {
+        if let h = object as? ModelHandoff { return h }
+        if let repo = object as? String { return ModelHandoff(model: repo) }
+        return nil
+    }
 
     func body(content: Content) -> some View {
         content
@@ -156,10 +184,16 @@ private struct SidebarNotificationRouter: ViewModifier {
                 }
                 selection = .training
             }
-            .onReceive(NotificationCenter.default.publisher(for: .openChatWithModel)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .openChatWithModel)) { note in
+                if let h = decodeHandoff(note.object) {
+                    pendingChatHandoff = PendingModelHandoff(payload: h)
+                }
                 selection = .chat
             }
-            .onReceive(NotificationCenter.default.publisher(for: .openCodeWithModel)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .openCodeWithModel)) { note in
+                if let h = decodeHandoff(note.object) {
+                    pendingCodeHandoff = PendingModelHandoff(payload: h)
+                }
                 selection = .code
             }
     }

@@ -68,6 +68,24 @@ struct PendingTrainingHandoff: Equatable, Identifiable {
     }
 }
 
+// A pending Try-it-out / Code pre-fill that RootView holds on behalf of
+// `ArenaView` / `CodeView` — the same first-mount race `PendingTrainingHandoff`
+// fixes for Teach: the detail pane lazily instantiates the destination view, so
+// a `.openChatWithModel` / `.openCodeWithModel` posted from another tab was
+// delivered before the receiving view existed and its payload (model + adapter +
+// autoScore) was silently dropped — "Grade it" / "Try it out" / "Use in Code"
+// only switched tabs. RootView stashes the payload here and hands it down as a
+// Binding; the view consumes on appear or on change, then nils it. Equality is
+// token-identity so back-to-back identical hand-offs still fire `.onChange`.
+struct PendingModelHandoff: Equatable, Identifiable {
+    let id = UUID()
+    let payload: ModelHandoff
+
+    static func == (lhs: PendingModelHandoff, rhs: PendingModelHandoff) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 extension Notification.Name {
     /// Open the Code tab and load this model (+ adapter) into the Orchestrator team.
     /// Object: a `ModelHandoff` (or `String` model id).

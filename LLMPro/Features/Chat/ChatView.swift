@@ -67,7 +67,10 @@ struct ChatPaneView: View {
     }
 }
 
-private struct MessageBubble: View {
+/// One chat turn — role glyph, markdown/code-rendered content, and (for the last
+/// finished assistant turn) copy + "Try again". Shared by `ChatPaneView` (the
+/// arena panes) and the dedicated Chat tab's `ChatConversationView`.
+struct MessageBubble: View {
     let message: ChatMessage
     var session: ChatSession
     let isLast: Bool

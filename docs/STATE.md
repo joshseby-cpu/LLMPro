@@ -731,6 +731,165 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-01 (cont.) — hide reasoning `<think>` blocks; Story Mode.**
+  **Think-block hiding:** reasoning models (Qwen3/DeepSeek-R1) emit `<think>…</think>`
+  before the answer (some templates emit only the closing `</think>`). New
+  `Core/ReasoningStripper.visible(_:streaming:)` removes it: complete pairs anywhere,
+  a lone trailing close (keep only what follows the last `</think>`), and — when
+  `streaming` — an unclosed opening tag (hide reasoning-in-progress so it doesn't
+  flash). Applied at the shared render layer (`MessageContentView`, `streaming:true`
+  — covers Chat, Story, arena live streaming) AND stripped from stored text on
+  completion in `ChatSession` (chat history/export/context) and `StoryGenerator`
+  (chapter prose, summaries, outline) so reasoning never pollutes summaries, rolling
+  context, or exports. Verified against 8 edge cases. The Inspect → "Watch it think"
+  tab is unaffected (separate reasoning channel — deliberately shows CoT).
+  **Story Mode** (the tab this session added — see the entry below) was live when
+  its adversarial-review workflow was interrupted by a session exit; re-run pending.
+
+- **Session 2026-07-01 (cont.) — Story Mode tab (long-form chaptered writing).**
+  New `.story` sidebar tab: write a premise, pick a model, generate a story
+  chapter-by-chapter (rolling per-chapter summaries keep 15+ chapters coherent
+  without blowing the context window), revise any chapter, auto-write to a target
+  count, plan an outline, export to Markdown. Saved projects. `StoryStore` +
+  `StoryGenerator` (self-persists to the store — no View-capturing closure) +
+  `StoryView`/`StoryMarkdownExporter`. No content filter — latitude is the chosen
+  model + the user's freeform style text. Build clean; installed.
+  **Adversarial review (28 agents, 19 confirmed / 4 rejected) → applied 18:**
+  - **Delete-during-generation resurrected the story** (HIGH): a superseded generator
+    task's late `save()` re-added the just-deleted project (list + JSON). Fixed at the
+    store: `StoryStore.update` is now non-resurrecting (no-ops for an unknown id).
+  - **Continuity was broken** (HIGH): the empty stub chapter was appended BEFORE building
+    the prompt, so `storySoFar()` fed an empty "previous chapter" tail. Now the prompt is
+    built first.
+  - **Rename reverted** (HIGH): renaming the open story was overwritten by the generator's
+    stale title on the next save — now synced.
+  - Auto-write no longer counts a truncated/errored chapter as done (streamText reports
+    success); outline restore-on-stop; style edits persist on focus-loss; forward-compat
+    tolerant `StoryProject.init(from:)`; chapters renumber after a delete (no duplicate
+    "Chapter N"); summaries cover the whole chapter (head+tail if long); **maxTokens now
+    reserves budget for a reasoning model's hidden think tokens** (was truncating chapters
+    to empty); chapter delete confirms; discardIfEmpty keeps style/genre/outline work;
+    revise sees other chapters' summaries; LazyVStack chapter list; edit re-summarizes;
+    streaming follow-scroll. Deferred (LOW): app-lifetime generator ownership so a long
+    auto-write survives a tab switch (same view-scoped tradeoff as the Chat tab). Build clean.
+
+- **Session 2026-07-01 (cont.) — new dedicated Chat tab (saved conversations).**
+  Added a `.chatDirect` sidebar tab **"Chat"** (icon `message`, before "Try it out")
+  for casual single-model conversation with persistent history — distinct from the
+  arena/eval-heavy "Try it out". New: `ConversationStore` (one `conversations/<uuid>.json`
+  per chat) + `ChatConversationView` (left rail of saved chats: new/rename/delete;
+  right: model picker + Persona + temp + export + clear + transcript + Send/Stop).
+  Reuses `ChatSession`/`InferenceService` streaming and the now-internal `MessageBubble`
+  (markdown/code render, copy, regenerate). Works with any local model incl. `…-trained`
+  fine-tunes and DiffusionGemma. **Design note / caught bug:** persistence keys on a
+  separate `sessionConvID` (the conversation the live session was built from), NOT
+  `selectedID` — otherwise `onChange(selectedID)` (which fires after the id already
+  changed) would write the outgoing transcript into the incoming conversation. The
+  outgoing session is `stop()`-ed before a new one loads. Ran a 4-dimension adversarial
+  review workflow (17 agents, 11 confirmed / 2 rejected) and applied ALL of it:
+  - **ChatSession Stop→Send race** (HIGH, also affected the arena): the finished task's
+    tail unconditionally nulled `generationTask`/`isGenerating`, so a fast Stop→Send let
+    the OLD task clobber the NEW generation's handle → orphaned subprocess. Added a
+    `generation` counter bumped on send/stop; the tail only resets shared fields if still
+    current.
+  - **"Try again"/aborted-regen data-loss** (HIGH): a failed regeneration stripped the
+    good stored answer to nothing. `persist()` now refuses to overwrite a stored answer
+    with a worse "trailing user turn, fewer messages" state, and keeps non-empty partial
+    replies (switch-away mid-stream no longer loses 95%-streamed text).
+  - Unsent draft no longer bleeds between conversations (`input=""` in loadSession);
+    delete confirms; a chat opened on a deleted model no longer silently rewrites its
+    stored model (fallback tracked); temp slider persists on drag-end only (was rewriting
+    JSON + re-sorting every tick); loading a conversation scrolls to the latest; unreadable
+    conversation JSON is logged not silently dropped.
+  Build clean; installed. _Pending: push._
+
+- **Session 2026-07-01 (cont.) — review fixes: 24 of 42 confirmed findings applied.**
+  The `llmpro-full-review` workflow (6 dimensions → 43 adversarial verifiers, 42
+  confirmed / 1 rejected) surfaced real bugs; fixed this session (build clean between
+  batches):
+  - **Cross-tab hand-offs actually work now** (HIGH): `.openChatWithModel` /
+    `.openCodeWithModel` payloads were ALWAYS dropped when the target tab wasn't
+    mounted (plain switch in RootView.detail; NotificationCenter has no replay) — so
+    "Grade it"/"Try it out"/"Use in Code" only switched tabs on first visit. Fixed by
+    extending the `pendingTrainingHandoff` stash pattern: `PendingModelHandoff` +
+    RootView stashes + ArenaView/CodeView consume on mount/change (direct `.onReceive`s
+    removed — single delivery path, no double-apply).
+  - **Stale `.running` records deletable** (HIGH): a crash/force-quit leaves the
+    SwiftData record `.running` forever (exit-watcher dies with the app) — deletion was
+    permanently blocked. `TrainingArtifactDeletion.isLive()` now trusts the registry
+    (pid-verified), not the record; history-view gates mirror it.
+  - **resume() gets watchers** (HIGH): the standalone resume spawn had no exit/stdout/
+    stderr pipeline (resumed jobs stuck `.running`, empty log) — now delegates to
+    `start(resumeAdapterFile:)`.
+  - **caffeinate can't leak** (HIGH): now `-w <app pid>` (dies with the app), spawn-race
+    reconciliation, `stopForQuit()` in applicationWillTerminate; Practice runs now hold
+    the assertion too (was Teach-only).
+  - **Quit no longer orphans Practice** (HIGH): applicationShouldTerminate now counts
+    SelfImproveService and cancels it on Stop-and-Quit / Detach-and-Quit.
+  - **Dataset perf** (3× HIGH): JSONL load + save moved off the main actor;
+    DatasetInsightsView + DatasetLintSheet compute once off-main instead of per body
+    eval (froze the UI on big lessons). Lint "clean copy" now auto-saves (was silently
+    discarded on close/split-switch — the only non-persisting edit path).
+  - **Arena**: Stop button (⌘.) while generating; a mid-generation Send no longer
+    silently discards the typed prompt.
+  - **User Stop ≠ failure**: a deliberate stop was recorded `.failed` with a scary
+    "killed by signal 15 / out of memory" message + failure notification — exit handler
+    + markFailed now honor `.cancelled`. Practice cancel between subprocesses no longer
+    falls through to "Done 🎉" (round-loop + runOneRound guards).
+  - **Recreate venv**: confirm dialog + disabled while any job runs (was instant wipe).
+  - **Storage → Clear logs** keeps the live llmpro.log (unlinking it silently killed all
+    logging for the session). **k-quant temp f16 + partial output** cleaned on failure.
+    **verifyGGUF** got a 3-min watchdog (spawn + SIGTERM; a wedged load can't hang the
+    export). **MLXServerService** start-race can't orphan a multi-GB server anymore.
+    **GGUF sheet** can't be dismissed mid-export. **Ollama tag** sanitized up-front.
+  - **Notifications**: UNUserNotificationCenter delegate installed — banners show while
+    frontmost, click opens the right tab (re-opening the window if closed). Menu-bar
+    Open buttons also re-open the closed window. TrainingComparisonView decodes metrics
+    once. Model **tags now filter** the Models list (were write-only).
+  - Docs: WORKFLOWS §7 rewritten (unified GGUF path), CLAUDE.md export line + exports/
+    layout, CONTRACTS logs/ + exports/ layout, ARCHITECTURE Settings tabs row.
+  **Deferred (honest list)**: ModelRegistry.scan still enumerates on-main (large
+  refactor of a critical service); full ARCHITECTURE/CLAUDE.md module-table backfill
+  (Inspect tab rows etc.); live token counter + regenerate-stream polish; GGUF export
+  cancellation (needs process-handle plumbing through the export UIs).
+
+- **Session 2026-07-01 — round-3 batch: 9 features + full-project review.**
+  Ran a 6-dimension adversarially-verified review workflow (`llmpro-full-review`)
+  over the whole tree + shipped the remaining vetted backlog (build clean between
+  each):
+  1. **Getting-started checklist** — `GettingStartedChecklist` replaces the Home
+     single-step card: all 4 loop stages with live done states (models/lessons/
+     finished-job + `onboarding.triedChat` set by ArenaView's first send);
+     collapses to a dismissible 🎉 banner when complete.
+  2. **Recent activity feed** — `RecentActivityFeed`: unified time-sorted stream
+     over TrainingJob + DatasetRecord + EvalRun + SelfImproveRun with deep links;
+     replaces `recentJobs` (rename preserved via closure).
+  3. **Quick actions + tip of the day** — `DashboardQuickActions`: 4 prerequisite-
+     aware launcher tiles + 15 curated rotating tips (day-of-year + offset).
+  4. **Model card** — `ModelCardView` ("About this model…" context menu): config
+     facts (layers/heads/vocab/context), ~param count from safetensors headers
+     (off-main), lineage (fine-tunes from this base), latest report-card score,
+     notes/tags, GGUF-ready badge.
+  5. **Model compare** — `ModelCompareView` ("Compare…" in the Local models
+     header): two-column facts grid, differing rows highlighted in brand.
+  6. **Host to the cloud export** — new `ExportTarget.cloud`: fuse `--dequantize`
+     → full-precision HF safetensors + a README (`ModelCardBuilder.cloudREADME`)
+     with exact vLLM/TGI serve commands. Arch-agnostic — the honest cross-OS/cloud
+     path for hybrid archs (Qwen3.6) that GGUF can't run.
+  7. **Model card generator** — `ModelCardBuilder.modelCard` + `ModelCardPreviewView`
+     ("Model card…" in Save & Use): HF-style markdown with training details +
+     eval table; copy/save.
+  8. **Report cards (eval leaderboard)** — `EvalLeaderboardView` (trophy toolbar
+     button in Save & Use): score-over-time chart, best-per-artifact leaderboard
+     (🥇🥈🥉), full run history.
+  9. **Training recipes** — `TrainingPresetStore` + preset bar inside Teach's
+     Advanced disclosure (AutoTuner primary flow untouched); apply keeps per-run
+     model/data/adapter paths. `training_presets.json`.
+  10. **⌘K command palette** — `CommandPaletteView` + `.openCommandPalette`
+     notification; menu item added via `.commands` in LLMProApp; RootView hosts
+     the sheet. Prefix-then-contains ranking over all 13 tabs.
+  Review findings applied separately (see next entry once merged). _Pending: push._
+
 - **Session 2026-06-23 (cont.) — feature batch round 2 (9 more, ideated via workflow).**
   Ran a 6-agent round-2 ideation workflow (`llmpro-feature-ideation-2`) merging fresh ideas
   with the deferred backlog → ranked batch; shipped the high-value, low-risk subset (build

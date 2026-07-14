@@ -132,6 +132,14 @@ final class MLXServerService {
             state = .failed("Couldn't launch the model server: \(error.localizedDescription)")
             return
         }
+        // A second start()/stop() during the spawn await bumps `generation`; if we
+        // assigned self.process anyway we'd overwrite the successor's handle and
+        // orphan OUR child — a multi-GB server with no owner. We lost the race:
+        // kill the process we just made and defer to the newer call.
+        guard gen == generation else {
+            proc.terminate()
+            return
+        }
         self.process = proc
         tail(proc.stdout)
         tail(proc.stderr)

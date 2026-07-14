@@ -11,13 +11,40 @@ struct DatasetLintSheet: View {
     let onClean: ([ChatRow]) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    private var issues: [DatasetLinter.Issue] { DatasetLinter.lint(rows) }
+    // Lint + clean are each a full O(dataset) scan — computed ONCE off the main
+    // actor when the sheet appears (not per body evaluation, which beach-balled
+    // on big lessons).
+    @State private var found: [DatasetLinter.Issue] = []
+    @State private var cleanedRows: [ChatRow] = []
+    @State private var analyzed = false
 
     var body: some View {
-        let found = issues
+        Group {
+            if analyzed {
+                results
+            } else {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Checking this lesson…").font(.callout).foregroundStyle(.secondary)
+                }
+                .frame(minWidth: 520, minHeight: 420)
+            }
+        }
+        .task {
+            let snapshot = rows
+            let (issues, cleaned) = await Task.detached(priority: .userInitiated) {
+                (DatasetLinter.lint(snapshot), DatasetLinter.cleaned(snapshot))
+            }.value
+            found = issues
+            cleanedRows = cleaned
+            analyzed = true
+        }
+    }
+
+    private var results: some View {
         let errors = found.filter { $0.severity == .error }.count
         let warnings = found.filter { $0.severity == .warning }.count
-        let cleanedCount = DatasetLinter.cleaned(rows).count
+        let cleanedCount = cleanedRows.count
         let dropped = rows.count - cleanedCount
 
         return VStack(alignment: .leading, spacing: 14) {
@@ -47,7 +74,7 @@ struct DatasetLintSheet: View {
             }
 
             if dropped > 0 {
-                Text("“Make a clean copy” removes \(dropped) problem row\(dropped == 1 ? "" : "s") (missing prompt/reply, empty, or duplicate), keeping \(cleanedCount).")
+                Text("“Keep the clean copy” removes \(dropped) problem row\(dropped == 1 ? "" : "s") (missing prompt/reply, empty, or duplicate), keeps \(cleanedCount), and saves the lesson.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -55,10 +82,10 @@ struct DatasetLintSheet: View {
             HStack {
                 if dropped > 0 {
                     Button {
-                        onClean(DatasetLinter.cleaned(rows))
+                        onClean(cleanedRows)
                         dismiss()
                     } label: {
-                        Label("Make a clean copy (\(cleanedCount) rows)", systemImage: "sparkles")
+                        Label("Keep the clean copy (\(cleanedCount) rows)", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent).tint(.brand)
                 }

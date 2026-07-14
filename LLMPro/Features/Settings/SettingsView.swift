@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var toolsBuilt: Bool = false
     @State private var buildingTools: Bool = false
     @AppStorage(KeepAwakeService.prefKey) private var keepAwake: Bool = true
+    @State private var confirmRecreateVenv = false
 
     var body: some View {
         TabView {
@@ -60,12 +61,25 @@ struct SettingsView: View {
             LabeledContent("Python", value: runtime.pythonURL?.path ?? "—")
             Section {
                 Button("Recreate venv") {
-                    try? FileManager.default.removeItem(at: PathResolver.venvDir)
-                    Task { await runtime.bootstrap() }
+                    confirmRecreateVenv = true
                 }
+                .disabled(!JobRegistry.shared.runningJobs.isEmpty || SelfImproveService.shared.isRunning)
+                .help(JobRegistry.shared.runningJobs.isEmpty && !SelfImproveService.shared.isRunning
+                      ? "Delete and rebuild the Python runtime"
+                      : "Can't rebuild the runtime while a job is running")
                 Button("Open logs folder") {
                     NSWorkspace.shared.open(PathResolver.logsDir)
                 }
+            }
+            .confirmationDialog("Rebuild the Python runtime?",
+                                isPresented: $confirmRecreateVenv, titleVisibility: .visible) {
+                Button("Delete & rebuild", role: .destructive) {
+                    try? FileManager.default.removeItem(at: PathResolver.venvDir)
+                    Task { await runtime.bootstrap() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Deletes the mlx-lm virtual environment and downloads a fresh one (a few minutes). Your models, lessons, and training runs are untouched.")
             }
             Section("Power") {
                 Toggle("Keep my Mac awake during training", isOn: $keepAwake)

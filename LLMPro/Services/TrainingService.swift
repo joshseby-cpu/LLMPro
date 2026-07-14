@@ -519,10 +519,16 @@ final class TrainingService {
             // never be left stranded as `.running` when its process is gone — even
             // if the @Model record can't be re-fetched.
             let alreadyFailed = (JobRegistry.shared.jobs[jobID]?.status == .failed)
+            // A user "Stop early" goes through JobRegistry.stop(), which flips the
+            // LiveJob to .cancelled BEFORE terminating the process — so a SIGTERM
+            // exit that lands here with .cancelled is a deliberate stop, not a
+            // failure. Don't post the scary "killed by signal 15 / out of memory"
+            // message or the failure notification for it.
+            let userCancelled = (JobRegistry.shared.jobs[jobID]?.status == .cancelled)
             let succeeded = (result.code == 0)
             if succeeded {
                 JobRegistry.shared.markCompleted(jobID: jobID)
-            } else if !alreadyFailed {
+            } else if !alreadyFailed && !userCancelled {
                 // Distinguish a signal/crash from a plain nonzero exit in the
                 // message — "killed by signal 9" is far more actionable than
                 // "exit 137" for a post-mortem.
@@ -541,6 +547,8 @@ final class TrainingService {
                 // exit code is just SIGTERM noise — don't clobber it.
                 if succeeded {
                     job.status = .completed
+                } else if userCancelled {
+                    job.status = .cancelled
                 } else if !alreadyFailed {
                     job.status = .failed
                 }
@@ -575,21 +583,14 @@ final class TrainingService {
         }
     }
 
+    /// Resume an orphaned run from its newest checkpoint. Delegates to `start()`
+    /// with `resumeAdapterFile` so the resumed process gets the SAME watcher
+    /// pipeline as a fresh run — log tail, step parsing, NaN/OOM guards, and the
+    /// exit handler that flips status + posts the completion notification. (An
+    /// earlier standalone spawn here had none of those: the resumed job stayed
+    /// `.running` forever after the process exited, with an empty log.)
     func resume(job: TrainingJob, latestAdapterFile: URL, context: ModelContext) async throws {
-        guard PythonRuntime.shared.isReady, let python = PythonRuntime.shared.pythonURL
-        else { throw TrainingError.runtimeNotReady }
-        let process = try await ProcessRunner.spawn(
-            executable: python,
-            arguments: [
-                "-m", "mlx_lm", "lora",
-                "-c", job.configURL.path,
-                "--resume-adapter-file", latestAdapterFile.path
-            ],
-            environment: ["HF_HOME": PathResolver.hfHome.path, "PYTHONUNBUFFERED": "1"]
-        )
-        job.status = .running
-        job.pid = process.pid
-        JobRegistry.shared.attach(job, process: process)
+        try await start(job: job, context: context, resumeAdapterFile: latestAdapterFile)
     }
 
     /// Find the newest LoRA checkpoint to resume from in an adapter directory.

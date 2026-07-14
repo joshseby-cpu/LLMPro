@@ -26,6 +26,11 @@ final class ChatSession {
     /// so clearing or closing the session aborts generation instead of leaking the
     /// child to max-tokens.
     private var generationTask: Task<Void, Never>?
+    /// Bumped on every send() and every stop(), so a superseded/cancelled task's
+    /// tail can detect it's no longer current and skip resetting the shared
+    /// isGenerating / generationTask fields — otherwise a fast Stop→Send lets the
+    /// old task null out the NEW generation, orphaning its subprocess.
+    private var generation = 0
 
     init(model: String, adapterPath: String?, label: String) {
         self.model = model
@@ -40,6 +45,7 @@ final class ChatSession {
 
     /// Abort any in-flight generation (also kills the backing subprocess).
     func stop() {
+        generation &+= 1   // invalidate the in-flight task's tail
         generationTask?.cancel()
         generationTask = nil
         isGenerating = false
@@ -65,6 +71,8 @@ final class ChatSession {
 
     func send(_ prompt: String) {
         guard !isGenerating else { return }
+        generation &+= 1
+        let myGen = generation
         messages.append(ChatMessage(role: .user, text: prompt, isStreaming: false))
         let assistant = ChatMessage(role: .assistant, text: "", isStreaming: true)
         let assistantID = assistant.id
@@ -102,10 +110,18 @@ final class ChatSession {
                 self.error = error.localizedDescription
                 if let i = messages.firstIndex(where: { $0.id == assistantID }) {
                     messages[i].isStreaming = false
+                    // Persist the answer without the model's <think> reasoning, so
+                    // history, exports, and the context fed back to the model stay clean.
+                    messages[i].text = ReasoningStripper.visible(messages[i].text)
                 }
             }
-            self.isGenerating = false
-            self.generationTask = nil
+            // Only reset the shared fields if THIS task is still the current one —
+            // a Stop→Send (or clear→Send) may have started a newer generation whose
+            // handle we must not clobber (that would orphan its subprocess).
+            if self.generation == myGen {
+                self.isGenerating = false
+                self.generationTask = nil
+            }
         }
     }
 

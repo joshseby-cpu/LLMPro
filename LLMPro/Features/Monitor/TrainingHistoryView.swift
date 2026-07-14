@@ -22,7 +22,7 @@ struct TrainingHistoryView: View {
     @State private var reportTarget: TrainingJob?
 
     /// Finished runs the bulk action would remove (anything not currently running).
-    private var finishedJobs: [TrainingJob] { jobs.filter { $0.status != .running } }
+    private var finishedJobs: [TrainingJob] { jobs.filter { !TrainingArtifactDeletion.isLive($0) } }
 
     var body: some View {
         NavigationStack {
@@ -119,15 +119,15 @@ struct TrainingHistoryView: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
-            .help(job.status == .running ? "Can't delete a lesson that's still running" : "Delete this lesson")
-            .disabled(job.status == .running)
+            .help(TrainingArtifactDeletion.isLive(job) ? "Can't delete a lesson that's still running" : "Delete this lesson")
+            .disabled(TrainingArtifactDeletion.isLive(job))
         }
         .padding(.vertical, 2)
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) { deletionTarget = job } label: {
                 Label("Delete", systemImage: "trash")
             }
-            .disabled(job.status == .running)
+            .disabled(TrainingArtifactDeletion.isLive(job))
         }
         .contextMenu {
             Button { reportTarget = job } label: {
@@ -139,7 +139,7 @@ struct TrainingHistoryView: View {
             Button(role: .destructive) { deletionTarget = job } label: {
                 Label("Delete", systemImage: "trash")
             }
-            .disabled(job.status == .running)
+            .disabled(TrainingArtifactDeletion.isLive(job))
         }
     }
 

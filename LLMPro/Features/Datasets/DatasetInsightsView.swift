@@ -7,12 +7,31 @@ import SwiftUI
 struct DatasetInsightsView: View {
     let rows: [ChatRow]
 
-    private var insights: DatasetInsightsService.Insights {
-        DatasetInsightsService.analyze(rows)
-    }
+    // Cached analysis — analyze() is O(total text) (it builds full-text dedup
+    // keys), so computing it in `body` froze the UI on big datasets. Recomputed
+    // off the main actor whenever the rows change.
+    @State private var cached: DatasetInsightsService.Insights?
 
     var body: some View {
-        let ins = insights
+        Group {
+            if let ins = cached {
+                content(ins)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Analyzing…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .task(id: rows) {
+            let snapshot = rows
+            cached = await Task.detached(priority: .userInitiated) {
+                DatasetInsightsService.analyze(snapshot)
+            }.value
+        }
+    }
+
+    private func content(_ ins: DatasetInsightsService.Insights) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 20) {
                 stat("Rows", "\(ins.rowCount)")

@@ -14,6 +14,14 @@ struct CodeView: View {
     @State private var agent = CodingAgentService.shared
     @State private var registry = ModelRegistry.shared
 
+    // The RootView-stashed .openCodeWithModel payload — consumed on mount/change
+    // (the view may not exist when the notification fires; see PendingModelHandoff).
+    @Binding var pendingHandoff: PendingModelHandoff?
+
+    init(pendingHandoff: Binding<PendingModelHandoff?> = .constant(nil)) {
+        self._pendingHandoff = pendingHandoff
+    }
+
     @State private var input = ""
     @State private var showOptions = false
     @State private var showAgents = false
@@ -40,13 +48,14 @@ struct CodeView: View {
             }
             .navigationTitle("Code")
         }
-        .task { await prepare() }
+        .task {
+            await prepare()
+            consumePendingHandoff()
+        }
         .onChange(of: agent.transcript.count) { _, _ in
             explorerRefresh += 1   // re-scan the file tree as agents write files
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openCodeWithModel)) { note in
-            applyHandoff(note.object)
-        }
+        .onChange(of: pendingHandoff) { _, _ in consumePendingHandoff() }
         .sheet(isPresented: $showOptions) { optionsSheet }
         .sheet(isPresented: $showAgents) { AgentsManagerView() }
         .sheet(isPresented: $showSkills) { SkillsManagerView() }
@@ -633,12 +642,13 @@ struct CodeView: View {
 
     /// Pre-fill the model picker from a Progress/Practice hand-off so the model the
     /// user just worked with is the one the team loads. (The Code team runs the base
-    /// model only — any adapter in the hand-off is ignored here.)
-    private func applyHandoff(_ object: Any?) {
-        if let h = object as? ModelHandoff {
-            if registry.localModels.contains(where: { $0.repoID == h.model }) { selectedModel = h.model }
-        } else if let repo = object as? String,
-                  registry.localModels.contains(where: { $0.repoID == repo }) {
+    /// model only — any adapter in the hand-off is ignored here.) Consumes the
+    /// RootView-stashed payload, which survives the first-mount race.
+    private func consumePendingHandoff() {
+        guard let pending = pendingHandoff else { return }
+        pendingHandoff = nil
+        let repo = pending.payload.model
+        if registry.localModels.contains(where: { $0.repoID == repo }) {
             selectedModel = repo
         }
     }

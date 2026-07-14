@@ -37,11 +37,21 @@ struct ModelsBrowserView: View {
     @State private var showGGUFImport = false
     @State private var ggufExportTarget: ModelRegistry.DetectedModel?
     @State private var notesTarget: ModelRegistry.DetectedModel?
+    @State private var cardTarget: ModelRegistry.DetectedModel?
+    @State private var showCompare: Bool = false
     @State private var favorites = FavoritesStore.shared
+    /// Non-nil filters the local list to models carrying this tag (from the
+    /// notes & tags sheet) — the read side that makes tags worth writing.
+    @State private var tagFilter: String? = nil
 
-    /// Local models with pinned favorites floated to the top (stable otherwise).
+    /// Local models with pinned favorites floated to the top (stable otherwise),
+    /// optionally narrowed to a tag.
     private var sortedLocalModels: [ModelRegistry.DetectedModel] {
-        registry.localModels.enumerated().sorted { a, b in
+        var models = registry.localModels
+        if let tagFilter {
+            models = models.filter { ModelMetaStore.shared.meta(for: $0.id).tags.contains(tagFilter) }
+        }
+        return models.enumerated().sorted { a, b in
             let pa = favorites.isModelPinned(a.element.id), pb = favorites.isModelPinned(b.element.id)
             if pa != pb { return pa }
             return a.offset < b.offset
@@ -68,6 +78,12 @@ struct ModelsBrowserView: View {
             }
             .sheet(item: $notesTarget) { target in
                 ModelNotesSheet(modelID: target.id, modelName: target.displayName)
+            }
+            .sheet(item: $cardTarget) { target in
+                ModelCardView(model: target)
+            }
+            .sheet(isPresented: $showCompare) {
+                ModelCompareView(models: registry.localModels)
             }
         }
     }
@@ -159,6 +175,7 @@ struct ModelsBrowserView: View {
                             }
                             Button("Notes & tags…", systemImage: "tag") { notesTarget = local }
                             Divider()
+                            Button("About this model…", systemImage: "info.circle") { cardTarget = local }
                             Button("Show in Finder") {
                                 NSWorkspace.shared.activateFileViewerSelecting([local.directory])
                             }
@@ -308,7 +325,35 @@ struct ModelsBrowserView: View {
     private var localModelsHeader: some View {
         HStack {
             Text("Local models (\(registry.localModels.count))")
+            let tags = ModelMetaStore.shared.allTags()
+            if !tags.isEmpty {
+                Menu {
+                    Button("All models") { tagFilter = nil }
+                    Divider()
+                    ForEach(tags, id: \.self) { tag in
+                        Button(tagFilter == tag ? "✓ \(tag)" : tag) {
+                            tagFilter = (tagFilter == tag) ? nil : tag
+                        }
+                    }
+                } label: {
+                    Label(tagFilter ?? "Tag", systemImage: "tag")
+                        .font(.caption)
+                        .foregroundStyle(tagFilter == nil ? Color.secondary : Color.brand)
+                }
+                .buttonStyle(.borderless)
+                .help("Filter local models by tag")
+            }
             Spacer()
+            if registry.localModels.count >= 2 {
+                Button {
+                    showCompare = true
+                } label: {
+                    Label("Compare…", systemImage: "square.split.2x1")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Compare two models side by side")
+            }
             if !registry.localModels.isEmpty {
                 Text("Total: \(totalLocalDiskString)")
                     .font(.caption)

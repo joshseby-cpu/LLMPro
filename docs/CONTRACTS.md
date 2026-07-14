@@ -341,6 +341,30 @@ input that's wrong.) `FuseService.ggufRoundTripWarning` detects these archs and 
 export UIs hard-block them. Standard archs (llama/qwen2.5/gemma2/mistral/phi3/qwen3-dense)
 convert + run correctly — validated end-to-end: MLX → f16 → Q4_K_M → self-test coherent.
 
+### App-support JSON side-stores (no SwiftData)
+
+User-authored metadata that doesn't belong in the SwiftData schema lives as small
+Codable JSON files directly under `~/Library/Application Support/LLMPro/`. All
+follow one pattern: `@MainActor @Observable final class` singleton, `load()` on
+init, atomic write on every mutation. Adding one does NOT touch
+`LLMProApp.modelContainer`.
+
+| File | Store | Contents |
+|---|---|---|
+| `system_prompt_presets.json` | `SystemPromptPresetStore` | custom chat personas (built-ins are code constants) |
+| `prompt_library.json` | `PromptLibraryStore` | custom reusable prompts for Try it out |
+| `favorites.json` | `FavoritesStore` | pinned model ids + dataset UUIDs |
+| `model_meta.json` | `ModelMetaStore` | per-model notes + tags, keyed by `DetectedModel.id` |
+| `training_presets.json` | `TrainingPresetStore` | saved `TrainingConfig` recipes (per-run model/data/adapter stripped on apply) |
+
+### "Host to the cloud" export (HF safetensors)
+
+`ExportTarget.cloud` in Save & Use: `mlx_lm fuse --dequantize` into
+`exports/<id>/cloud/` (full-precision HF layout — what vLLM/TGI/SGLang serve
+directly) + a generated `README.md` (`ModelCardBuilder.cloudREADME`) with the
+exact serve commands. Arch-agnostic; this is the supported path for hybrid
+architectures (Qwen3.5/3.6) whose MLX→GGUF conversion is blocked.
+
 ### `mlx_lm convert` — quantize HF model to MLX format
 
 Used by [`ConversionService.swift`](../LLMPro/Services/ConversionService.swift).
@@ -1153,7 +1177,8 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 │   ├── model-NNNNN-of-NNNNN.safetensors
 │   └── model.safetensors.index.json
 │
-├── exports/<job-uuid>/             ← output of Save & Use
+├── exports/<job-uuid>/             ← Save & Use output (fused/, <tag>.gguf, cloud/)
+├── exports/<model-displayName>/    ← per-model "Export to GGUF" output (Models tab)
 │   ├── <name>-adapter.zip          (for adapter export)
 │   ├── fused/                      (for fused safetensors)
 │   └── <ollama-tag>.gguf           (for GGUF export)
@@ -1190,7 +1215,7 @@ Defined in [`PathResolver.swift`](../LLMPro/Core/PathResolver.swift). Other code
 │   #  orchestrator.md / planner.md / researcher.md / coder.md / ui.md  the bundle ONLY IF MISSING,
 │   #  so user edits survive launches. Frontmatter + system-prompt body — see §"agent markdown format".
 │
-└── logs/                           ← currently unused — reserved for app-level diagnostic logs
+└── logs/llmpro.log                 ← app diagnostic log (Core/Log.swift; live-tailed in Settings → Logs)
 ```
 
 The coding agent (Code tab) adds exactly **one** directory here: `skills/` (the

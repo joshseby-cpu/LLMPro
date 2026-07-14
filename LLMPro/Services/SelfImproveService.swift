@@ -99,6 +99,11 @@ final class SelfImproveService {
         try? context.save()
         run.writeSidecar()
 
+        // Practice runs are hours-long — hold the keep-awake assertion like Teach
+        // does, and release it on every terminal path (defer covers them all).
+        KeepAwakeService.shared.setPracticeActive(true)
+        defer { KeepAwakeService.shared.setPracticeActive(false) }
+
         let modelArg = resolveModelArg(run.baseModelRepoID)
 
         do {
@@ -136,6 +141,14 @@ final class SelfImproveService {
                     roundNumber: n
                 )
                 lastAdapter = PathResolver.adaptersDir.appendingPathComponent(round.adapterRelativePath, isDirectory: true)
+            }
+
+            // A cancel that landed BETWEEN subprocesses (no child to SIGTERM, so
+            // nothing threw) breaks the loop above — don't fall through to "Done"
+            // and overwrite the user's cancel with .completed + a 🎉 notification.
+            if status.phase == .cancelled {
+                cancelled(run: run, context: context)
+                return
             }
 
             // 4. Done.
@@ -181,6 +194,11 @@ final class SelfImproveService {
         guard let run = Self.fetchRun(id: runID, context: context) else {
             throw LoopError.process("Run vanished mid-loop")
         }
+
+        // A cancel clicked between subprocesses has no child to SIGTERM, so the
+        // phase-sets below would silently overwrite `.cancelled` — bail first
+        // (the throw routes to start()'s cancel-aware catch).
+        if status.phase == .cancelled { throw CancellationError() }
 
         // — 3a. Generate + test ----------------------------------------------------
         status.phase = .generating

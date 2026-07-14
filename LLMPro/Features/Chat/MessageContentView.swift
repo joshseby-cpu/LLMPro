@@ -6,7 +6,10 @@ import SwiftUI
 struct MessageContentView: View {
     let text: String
     var body: some View {
-        let segments = CodeBlockParser.parse(text)
+        // Hide reasoning-model <think> blocks (streaming: true also hides an
+        // in-progress, not-yet-closed think block). Strip BEFORE code-block
+        // parsing so a fenced block inside the reasoning can't confuse the parser.
+        let segments = CodeBlockParser.parse(ReasoningStripper.visible(text, streaming: true))
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
                 switch seg {
