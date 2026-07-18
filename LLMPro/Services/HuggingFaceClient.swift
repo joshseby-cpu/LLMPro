@@ -13,6 +13,40 @@ struct HFModel: Identifiable, Hashable, Sendable, Codable {
     var repoID: String { id }
     var shortName: String { id.split(separator: "/").last.map(String.init) ?? id }
     var isMLXCommunity: Bool { author == "mlx-community" || id.hasPrefix("mlx-community/") }
+
+    private var lowerTags: [String] { (tags ?? []).map { $0.lowercased() } }
+
+    /// A GGUF repo (llama.cpp format). LLMPro runs **MLX** models, so a raw GGUF
+    /// download never appears in Local models — a GGUF language model has to be
+    /// converted via **Import GGUF** (and only Q4_0/Q8_0 LLMs convert; image/video
+    /// GGUFs like FLUX/WAN can't run here at all). Detected from the `gguf` tag,
+    /// the `gguf` library, or "gguf" in the repo id.
+    var isGGUF: Bool {
+        lowerTags.contains("gguf")
+            || (library_name?.lowercased() == "gguf")
+            || id.lowercased().contains("gguf")
+    }
+
+    /// Ships MLX weights → will load directly after download (the format LLMPro runs).
+    var isMLXReady: Bool {
+        lowerTags.contains("mlx") || (library_name?.lowercased() == "mlx") || isMLXCommunity
+    }
+
+    /// A diffusion image/video model (FLUX, WAN, SDXL, …) — NOT a language model, so
+    /// it can't be converted to a runnable LLM. Used to withhold the GGUF
+    /// "download & convert" combo (which only handles LLM architectures).
+    var isImageOrVideo: Bool {
+        let imgTags: Set<String> = ["text-to-image", "text-to-video", "image-to-image",
+                                    "image-to-video", "stable-diffusion", "diffusers"]
+        if lowerTags.contains(where: { imgTags.contains($0) }) { return true }
+        let nl = id.lowercased()
+        return ["flux", "wan2", "sdxl", "stable-diffusion", "illustrious", "hentai-mix"]
+            .contains { nl.contains($0) }
+    }
+
+    /// A GGUF repo we can plausibly turn into a runnable MLX model (a language model,
+    /// not image/video). The actual quant/arch check happens at convert time.
+    var isConvertibleGGUF: Bool { isGGUF && !isImageOrVideo }
 }
 
 struct HFFile: Sendable, Codable, Hashable {
@@ -199,8 +233,24 @@ actor HuggingFaceClient {
         return try await get(HFModelDetail.self, url: url)
     }
 
+    /// Like `detail`, but with `?blobs=true` so each sibling carries its `size`
+    /// (the bare endpoint omits sizes). Needed to pick + size a GGUF quant.
+    func detailWithSizes(repoID: String) async throws -> HFModelDetail {
+        var comps = URLComponents(url: base.appendingPathComponent("/api/models/\(repoID)"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "blobs", value: "true")]
+        guard let url = comps.url else { throw HuggingFaceError.badURL }
+        return try await get(HFModelDetail.self, url: url)
+    }
+
     func resolveTotalSize(repoID: String) async throws -> Int64 {
-        let detail = try await detail(repoID: repoID)
+        // The plain /api/models/{id} response lists siblings WITHOUT sizes; `blobs=true`
+        // is required for each file's `size` (otherwise every size sums to 0).
+        var comps = URLComponents(url: base.appendingPathComponent("/api/models/\(repoID)"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "blobs", value: "true")]
+        guard let url = comps.url else { throw HuggingFaceError.badURL }
+        let detail = try await get(HFModelDetail.self, url: url)
         let files = (detail.siblings ?? []).filter {
             $0.rfilename.hasSuffix(".safetensors") ||
             $0.rfilename.hasSuffix(".bin") ||

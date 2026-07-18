@@ -98,6 +98,16 @@ final class MLXServerService {
         // findFreePort, the spawn, waitForServerUp, the warm-up complete(), the
         // exit-watcher and state machine — is reused unchanged.
         let isDiffusion = isDiffusionModel(repoOrName: model, resolvedPath: resolved)
+
+        // Pre-flight: refuse an oversized model up front instead of letting the OS
+        // OOM-kill the server mid-load (the cryptic exit-9). Diffusion models are
+        // small, so only the mlx_lm path is checked.
+        if !isDiffusion, let fitError = ModelFit.tooLargeError(localModelPath: resolved) {
+            Log.error("Refusing to start server for oversized model \(resolved): \(fitError)", .server)
+            state = .failed(fitError)
+            return
+        }
+
         var args: [String]
         if isDiffusion {
             args = [PathResolver.helpersDir.appendingPathComponent("diffusion_server.py").path,
@@ -240,7 +250,11 @@ final class MLXServerService {
         case .stopped, .failed:
             break
         default:
-            state = .failed("The model server stopped unexpectedly (exit \(code ?? -1)). \(lastLogLines())")
+            if let code, code == 9 || code == 137 {
+                state = .failed(ModelFit.exitMessage(code: code, tool: "The model server"))
+            } else {
+                state = .failed("The model server stopped unexpectedly (exit \(code ?? -1)). \(lastLogLines())")
+            }
         }
     }
 

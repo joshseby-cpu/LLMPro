@@ -57,6 +57,51 @@ final class GGUFImportService {
 
     private var helperURL: URL { PathResolver.helpersDir.appendingPathComponent("gguf_to_mlx.py") }
 
+    /// One-tap **download & convert** from a search result: pick the best
+    /// MLX-convertible quant in `repo`, download just that ONE file (not the whole
+    /// multi-quant repo — e.g. the 8 GB Q8_0 instead of an 82 GB repo), and convert
+    /// it to an MLX model that shows up in Local models. Registers on success.
+    /// Throws with a clear reason if the repo has no convertible quant (only
+    /// k-quants / i-quants) or the architecture isn't supported (e.g. image models).
+    @discardableResult
+    func downloadAndConvert(repo: String) async throws -> URL {
+        let file = try await bestConvertibleFile(repo: repo)
+        let path = try await downloadFromHuggingFace(repo: repo, filename: file)
+        let base = repo.split(separator: "/").last.map(String.init) ?? repo
+        return try await convert(path: path, outputName: sanitized(base))
+    }
+
+    /// The best MLX-loadable GGUF file in a repo + its size, or nil if none. MLX's
+    /// native loader only reads F16/Q4_0/Q4_1/Q8_0. Prefers **Q8_0** (pure, always
+    /// safe), then plain Q4_0, then F16.
+    ///
+    /// Excludes **i-matrix** files (`i1-*`, `imat`): an "i1-Q4_0" is NOT pure Q4_0 —
+    /// i-matrix quants keep some tensors (e.g. the output layer) in a k-quant like
+    /// Q6_K, which the MLX loader can't read. Also excludes the ARM `Q4_0_4_4` variant.
+    func convertibleFile(repo: String) async -> (file: String, size: Int64)? {
+        guard let sibs = try? await HuggingFaceClient.shared.detailWithSizes(repoID: repo).siblings
+        else { return nil }
+        let ggufs = sibs.filter {
+            let l = $0.rfilename.lowercased()
+            return l.hasSuffix(".gguf") && !l.contains("i1-") && !l.contains("imat")
+        }
+        func pick(_ match: (String) -> Bool) -> HFFile? { ggufs.first { match($0.rfilename.lowercased()) } }
+        let chosen = pick { $0.contains("q8_0") }
+            ?? pick { $0.contains("q4_0") && !$0.contains("q4_0_") }
+            ?? pick { $0.contains("f16") }
+        guard let chosen, let size = chosen.size, size > 0 else { return nil }
+        return (chosen.rfilename, size)
+    }
+
+    /// The best convertible file name, or throw (before any download) if none.
+    func bestConvertibleFile(repo: String) async throws -> String {
+        guard let info = await convertibleFile(repo: repo) else {
+            throw ImportError.notConvertible(
+                "This GGUF repo has no pure Q8_0/Q4_0/F16 file — only i-matrix or k-quants (i1-*, Q4_K, IQ…) that the MLX converter can’t read. Look for a static-quant build (often the same repo without the “-i1” suffix) that has a Q8_0.")
+        }
+        return info.file
+    }
+
     /// Download a single .gguf file from a HuggingFace repo via huggingface_hub
     /// (into the HF cache) and return its local path. Used by the "HuggingFace"
     /// source in the import sheet before precheck/convert.

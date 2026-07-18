@@ -186,6 +186,7 @@ it's the doc that explains *why* the app is shaped this way.
         python humaneval_pull.py         (Practice seed: HumanEval/MBPP → seed + eval JSONL)
         python self_improve_round.py     (Practice round: gen K candidates, sandbox-test, write dataset)
         python eval_pass_rate.py         (Practice eval + Test-node "Score it": pass@k with optional adapter)
+        python generate_image.py         (Story illustrations: local text-to-image via mflux/FLUX.1-schnell — NOT mlx_lm; optional on-demand `mflux` add-on; batch JSONL so FLUX loads once/chapter)
 ```
 
 Disk layout under `~/Library/Application Support/LLMPro/`:
@@ -200,6 +201,9 @@ exports/<job-uuid>/     Save & Use output: fused/ safetensors, <tag>.gguf, cloud
 selfimprove/<run-uuid>/ Practice run: seed.jsonl, eval.jsonl, run.json, round_N/dataset/, results.jsonl
 evals/                  Scored Test-node harness (EvalService): <suiteID>/eval.jsonl (built-in suites), custom-<uuid>/eval.jsonl (user suites, on-disk only), <run-uuid>/eval_run.json (per-EvalRun sidecar)
 skills/<skill-id>/      Code-tab Agent Skills (live): one SKILL.md package per folder (use_skill, 3-stage progressive disclosure)
+conversations/<uuid>.json  Chat-tab saved conversations (ConversationStore)
+stories/<uuid>.json     Story-tab projects (StoryStore): premise/settings + chapters (+ per-chapter illustration refs)
+storyimages/<story-uuid>/  Story illustrations: generated PNGs (one folder per story; removed when the story is deleted)
 ```
 
 ---

@@ -13,7 +13,20 @@ struct ModelsBrowserView: View {
     @State private var searching = false
     @State private var searchError: String?
     @State private var results: [HFModel] = []
-    @State private var selected: HFModel?
+    /// Tapping a result opens its details sheet (replaces the old inline panel).
+    @State private var detailTarget: HFModel?
+    /// repoID → total download size in bytes, fetched lazily after a search so each
+    /// result can show "≈ 1.8 GB" and a RAM-fit chip before the user commits.
+    @State private var sizeCache: [String: Int64] = [:]
+
+    // GGUF LLM "download & convert" combo.
+    @State private var ggufImport = GGUFImportService.shared
+    @State private var convertingRepo: String?
+    @State private var convertError: String?
+    /// Per GGUF-LLM repoID: whether it has an MLX-convertible quant (+ that file's
+    /// size), fetched after a search so the card offers "Download & convert" only
+    /// when it'll actually work. Absent = still checking.
+    @State private var ggufConvert: [String: GGUFConvertState] = [:]
 
     @State private var deletionTarget: ModelRegistry.DetectedModel?
     @State private var lastDeletionFreed: Int64 = 0
@@ -60,15 +73,19 @@ struct ModelsBrowserView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 LowDiskWarningBanner()
                 searchBar
                 content
             }
-            .padding(10)
+            .padding(14)
             .navigationTitle("Models")
             .task(id: "init") {
                 await registry.scan()
+            }
+            .sheet(item: $detailTarget) { model in
+                ModelDetailSheet(model: model, sizeBytes: sizeCache[model.repoID],
+                                 onConvert: { startDownloadConvert(model) })
             }
             .sheet(isPresented: $showGGUFImport) {
                 GGUFImportView()
@@ -117,45 +134,103 @@ struct ModelsBrowserView: View {
         )
     }
 
-    @ViewBuilder
     private var content: some View {
         list.frame(maxWidth: .infinity, maxHeight: .infinity)
-        HSplitView {
-            if let selected {
-                ModelDetailView(model: selected)
-            }
+    }
+
+    private func sectionTitle(_ text: String, systemImage: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.headline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Live progress / error for the GGUF download-&-convert combo (nil when idle).
+    private var convertBanner: AnyView? {
+        if convertingRepo != nil {
+            return AnyView(VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label(convertingRepo ?? "", systemImage: "wand.and.stars")
+                        .font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Spacer()
+                    ProgressView().controlSize(.small)
+                }
+                Text(convertPhaseText).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                ProgressView().progressViewStyle(.linear).tint(.brand)
+            })
+        } else if let err = convertError {
+            return AnyView(HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Couldn’t convert").font(.subheadline.weight(.semibold))
+                    Text(err).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("OK") { convertError = nil }.controlSize(.small)
+            })
+        }
+        return nil
+    }
+
+    private var convertPhaseText: String {
+        switch ggufImport.phase {
+        case .idle: "Downloading the Q8_0 quant (~8 GB) — this can take a while…"
+        case .prechecking: "Checking the file…"
+        case .converting(_, let msg): msg
+        case .done: "Done — added to your models."
+        case .failed(let r): r
         }
     }
 
+    // A ScrollView + LazyVStack rather than a `List`: List has a well-known
+    // initial-layout bug where a section of a few dynamically-loaded rows renders
+    // at zero height until the user scrolls (search results kept vanishing). The
+    // LazyVStack lays out its visible rows immediately and gives full styling control.
     @ViewBuilder
     private var list: some View {
-        List(selection: $selected) {
-            if !downloads.active.isEmpty {
-                Section("Downloading") {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                if let banner = convertBanner { banner.cardRow() }
+
+                if !downloads.active.isEmpty {
+                    sectionTitle("Downloading", systemImage: "arrow.down.circle")
                     ForEach(downloads.active) { dl in
-                        DownloadRow(download: dl)
+                        DownloadProgressCard(download: dl).cardRow()
                     }
                 }
-            }
 
-            Section() {
                 if let searchError {
                     Label(searchError, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.red).cardRow()
                 } else if searching {
-                    Text("Searching…")
-                        .foregroundStyle(.secondary)
-                } else {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Searching HuggingFace…").foregroundStyle(.secondary)
+                    }.cardRow()
+                } else if !results.isEmpty {
+                    Text("\(results.count) result\(results.count == 1 ? "" : "s")")
+                        .font(.headline).padding(.top, 4)
                     ForEach(results) { model in
-                        ModelResultRow(model: model).tag(model)
+                        ModelResultCard(
+                            model: model,
+                            sizeBytes: sizeCache[model.repoID],
+                            state: downloadState(for: model),
+                            converting: convertingRepo == model.repoID,
+                            convert: ggufConvert[model.repoID],
+                            onDownload: { startDownload(model) },
+                            onDetails: { detailTarget = model },
+                            onConvert: { startDownloadConvert(model) }
+                        )
+                        .cardRow()
                     }
                 }
-            }
 
-            Section(header: localModelsHeader) {
+                localModelsHeader
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, downloads.active.isEmpty && results.isEmpty ? 2 : 10)
                 if registry.localModels.isEmpty {
-                    Text(registry.isScanning ? "Scanning…" : "No local models yet — download one above.")
-                        .foregroundStyle(.secondary)
+                    Text(registry.isScanning ? "Scanning…" : "No models yet — search above to download one.")
+                        .foregroundStyle(.secondary).padding(.vertical, 8)
                 } else {
                     ForEach(sortedLocalModels) { local in
                         LocalModelRow(
@@ -168,6 +243,7 @@ struct ModelsBrowserView: View {
                             onTrainCodingTapped: { trainForCoding(local) },
                             onExportGGUFTapped: { ggufExportTarget = local }
                         )
+                        .card(padding: 10, cornerRadius: 10)
                         .contextMenu {
                             Button(favorites.isModelPinned(local.id) ? "Unpin" : "Pin to top",
                                    systemImage: favorites.isModelPinned(local.id) ? "star.slash" : "star") {
@@ -198,8 +274,8 @@ struct ModelsBrowserView: View {
                     }
                 }
             }
+            .padding(.bottom, 12)
         }
-        .listStyle(.inset)
         .modifier(DeletionAndSheetsModifier(
             deletionTitle: deletionAlertTitle,
             deletionPresented: deletionAlertBinding,
@@ -450,33 +526,250 @@ struct ModelsBrowserView: View {
             do {
                 let hits = try await HuggingFaceClient.shared.search(query: query, mlxOnly: mlxOnly)
                 self.results = hits
+                fetchSizes(for: hits)
+                fetchGGUFConvert(for: hits)
             } catch {
                 self.searchError = error.localizedDescription
             }
             self.searching = false
         }
     }
-}
 
-private struct ModelResultRow: View {
-    let model: HFModel
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(model.shortName).font(.headline)
-                if model.isMLXCommunity {
-                    Text("MLX").font(.caption2).padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.2), in: Capsule())
+    /// Fetch each result's total download size in the background (bounded
+    /// concurrency) so cards can show "≈ 1.8 GB" + a RAM-fit chip. Best-effort:
+    /// a failed size fetch just leaves that card without a size.
+    private func fetchSizes(for models: [HFModel]) {
+        // Skip GGUF repos — their total is the sum of every quant, which we never show.
+        let missing = models.filter { !$0.isGGUF }.map(\.repoID).filter { sizeCache[$0] == nil }
+        guard !missing.isEmpty else { return }
+        Task {
+            await withTaskGroup(of: (String, Int64?).self) { group in
+                var running = 0
+                var iterator = missing.makeIterator()
+                func addNext() {
+                    guard let repo = iterator.next() else { return }
+                    running += 1
+                    group.addTask {
+                        (repo, try? await HuggingFaceClient.shared.resolveTotalSize(repoID: repo))
+                    }
                 }
-                Spacer()
-                if let d = model.downloads { Text("\(d.formatted(.number.notation(.compactName))) ↓").font(.caption2).foregroundStyle(.secondary) }
-            }
-            Text(model.repoID).font(.caption).foregroundStyle(.secondary)
-            if let tags = model.tags, !tags.isEmpty {
-                Text(tags.prefix(4).joined(separator: " · ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                for _ in 0..<min(6, missing.count) { addNext() }
+                for await (repo, size) in group {
+                    if let size, size > 0 { sizeCache[repo] = size }
+                    running -= 1
+                    addNext()
+                }
             }
         }
+    }
+
+    /// For each GGUF language model, check (bounded concurrency) whether it has an
+    /// MLX-convertible quant so the card can offer the right action.
+    private func fetchGGUFConvert(for models: [HFModel]) {
+        let repos = models.filter { $0.isConvertibleGGUF && ggufConvert[$0.repoID] == nil }.map(\.repoID)
+        guard !repos.isEmpty else { return }
+        for r in repos { ggufConvert[r] = .checking }
+        Task {
+            await withTaskGroup(of: (String, GGUFConvertState).self) { group in
+                var iterator = repos.makeIterator()
+                func addNext() {
+                    guard let repo = iterator.next() else { return }
+                    group.addTask {
+                        if let info = await GGUFImportService.shared.convertibleFile(repo: repo) {
+                            return (repo, .convertible(file: info.file, size: info.size))
+                        }
+                        return (repo, .notConvertible)
+                    }
+                }
+                for _ in 0..<min(4, repos.count) { addNext() }
+                for await (repo, state) in group {
+                    ggufConvert[repo] = state
+                    addNext()
+                }
+            }
+        }
+    }
+
+    private func downloadState(for model: HFModel) -> ModelResultCard.State {
+        if let dl = downloads.active.first(where: { $0.repoID == model.repoID }) {
+            return .downloading(dl.percent)
+        }
+        if registry.localModels.contains(where: { $0.repoID == model.repoID }) {
+            return .installed
+        }
+        return .available
+    }
+
+    private func startDownload(_ model: HFModel) {
+        guard runtime.isReady else { return }
+        Task { await DownloadService.shared.download(repoID: model.repoID) }
+    }
+
+    /// Download the best convertible quant (Q8_0) of a GGUF language model and
+    /// convert it to a usable MLX model — one tap. Progress shows in the banner.
+    private func startDownloadConvert(_ model: HFModel) {
+        guard runtime.isReady, convertingRepo == nil else { return }
+        convertingRepo = model.repoID
+        convertError = nil
+        Task {
+            do {
+                _ = try await ggufImport.downloadAndConvert(repo: model.repoID)
+            } catch {
+                convertError = error.localizedDescription
+            }
+            convertingRepo = nil
+        }
+    }
+}
+
+/// Convertibility of a GGUF language-model repo — does it have a pure Q8_0/Q4_0/F16
+/// the MLX converter can read? Resolved asynchronously after a search.
+enum GGUFConvertState: Equatable {
+    case checking
+    case convertible(file: String, size: Int64)
+    case notConvertible
+}
+
+/// A search result rendered as a scannable card: name + provenance, a metadata
+/// line (size · downloads · updated + a RAM-fit warning), and a stateful action
+/// button on the right (Download / Downloading % / Installed). Tapping the card
+/// body (not the button) opens the details sheet.
+private struct ModelResultCard: View {
+    enum State: Equatable { case available, downloading(Double), installed }
+
+    let model: HFModel
+    let sizeBytes: Int64?
+    let state: State
+    /// True while THIS repo is mid download-&-convert (GGUF LLM combo).
+    var converting: Bool = false
+    /// Convertibility for a GGUF LLM (nil for non-GGUF or not-yet-checked).
+    var convert: GGUFConvertState? = nil
+    let onDownload: () -> Void
+    let onDetails: () -> Void
+    var onConvert: () -> Void = {}
+
+    @Environment(PythonRuntime.self) private var runtime
+
+    private var tooBig: Bool { sizeBytes.map { !ModelFit.fits(weightBytes: $0) } ?? false }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(model.shortName).font(.headline).lineLimit(1)
+                    if model.isMLXCommunity { mlxBadge }
+                }
+                Text(model.repoID).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                metadataRow
+            }
+            Spacer(minLength: 8)
+            actionButton
+        }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onDetails)
+    }
+
+    private var mlxBadge: some View {
+        Text("MLX")
+            .font(.system(size: 9, weight: .bold))
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(Color.brand.opacity(0.18), in: Capsule())
+            .foregroundStyle(Color.brand)
+    }
+
+    @ViewBuilder
+    private var metadataRow: some View {
+        HStack(spacing: 8) {
+            if model.isConvertibleGGUF {
+                switch convert {
+                case .convertible(_, let size)?:
+                    metaChip("Q8_0 → MLX · \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))",
+                             systemImage: "wand.and.stars")
+                case .notConvertible?:
+                    Label("GGUF · no MLX-convertible quant", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundStyle(.orange)
+                default:
+                    HStack(spacing: 3) { ProgressView().controlSize(.mini); Text("checking…") }
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            } else if model.isGGUF {
+                Label("image/video · can’t run here", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2).foregroundStyle(.orange)
+            } else if let sizeBytes {
+                metaChip(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file),
+                         systemImage: "internaldrive")
+            } else {
+                HStack(spacing: 3) { ProgressView().controlSize(.mini); Text("sizing…") }
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            if let d = model.downloads {
+                metaChip(d.formatted(.number.notation(.compactName)), systemImage: "arrow.down.circle")
+            }
+            if !model.isGGUF && tooBig {
+                Label("Too big for your RAM", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func metaChip(_ text: String, systemImage: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption2).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        switch state {
+        case .installed:
+            Label("Installed", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+                .labelStyle(.titleAndIcon)
+        case .downloading(let pct):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("\(Int(pct * 100))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        case .available:
+            if converting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Converting…").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if model.isConvertibleGGUF {
+                // A GGUF language model: offer convert only once we've confirmed it
+                // has an MLX-loadable quant (Q8_0/Q4_0/F16).
+                switch convert {
+                case .convertible?:
+                    Button(action: onConvert) {
+                        Label("Download & convert", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+                    .disabled(!runtime.isReady)
+                    .help("Download the Q8_0 quant and convert it to a usable MLX model")
+                case .notConvertible?:
+                    Button(action: onDetails) { Label("GGUF", systemImage: "info.circle") }
+                        .buttonStyle(.bordered).tint(.orange).controlSize(.small)
+                        .help("No MLX-convertible quant (only k-quants/i-quants). Tap for details.")
+                default:
+                    ProgressView().controlSize(.small)
+                }
+            } else if model.isGGUF {
+                // GGUF image/video (FLUX, WAN, …) — can't be converted to an LLM.
+                Button(action: onDetails) {
+                    Label("GGUF", systemImage: "info.circle")
+                }
+                .buttonStyle(.bordered).tint(.orange).controlSize(.small)
+                .help("GGUF image/video model — LLMPro can't run this. Tap for details.")
+            } else {
+                Button(action: onDownload) {
+                    Label("Download", systemImage: "arrow.down.circle.fill")
+                }
+                .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+                .disabled(!runtime.isReady)
+                .help(runtime.isReady ? "Download \(model.shortName)" : "The Python runtime is still starting…")
+            }
+        }
     }
 }
 
@@ -607,26 +900,57 @@ private struct LocalModelRow: View {
     }
 }
 
-private struct DownloadRow: View {
+/// An in-flight download: name, running "1.2 GB of 5.4 GB" size, a progress bar
+/// (determinate when the total is known, animating when it isn't so it never looks
+/// stuck at 0%), and the current file / any error.
+private struct DownloadProgressCard: View {
     let download: DownloadService.ActiveDownload
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(download.repoID).font(.headline).lineLimit(1)
+                Label(download.repoID, systemImage: "arrow.down.circle")
+                    .font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
-                Text(percentText).font(.caption.monospacedDigit())
+                Text(percentText).font(.caption.monospacedDigit()).foregroundStyle(Color.brand)
             }
-            ProgressView(value: download.percent)
-            if let err = download.error {
-                Text(err).font(.caption).foregroundStyle(.red)
-            } else if !download.fileLabel.isEmpty {
-                Text(download.fileLabel).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            if download.bytesTotal > 0 {
+                ProgressView(value: download.percent).tint(.brand)
+            } else {
+                ProgressView().progressViewStyle(.linear).tint(.brand)
+            }
+            HStack(spacing: 4) {
+                Text(sizeText).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                if let err = download.error {
+                    Text("· \(err)").font(.caption2).foregroundStyle(.red).lineLimit(1)
+                } else if !download.fileLabel.isEmpty {
+                    Text("· \(download.fileLabel)").font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                }
+                Spacer()
             }
         }
     }
+
     private var percentText: String {
-        if download.bytesTotal == 0 { return "—" }
-        return String(format: "%.1f%%", download.percent * 100)
+        download.bytesTotal > 0 ? String(format: "%.0f%%", download.percent * 100) : "downloading…"
+    }
+
+    /// "1.2 GB of 5.4 GB" when the total is known, else the running amount.
+    private var sizeText: String {
+        let dl = ByteCountFormatter.string(fromByteCount: download.bytesDownloaded, countStyle: .file)
+        if download.bytesTotal > 0 {
+            let tot = ByteCountFormatter.string(fromByteCount: download.bytesTotal, countStyle: .file)
+            return "\(dl) of \(tot)"
+        }
+        return download.bytesDownloaded > 0 ? "\(dl) downloaded" : "starting…"
+    }
+}
+
+private extension View {
+    /// Wrap a row's content in the shared elevated card surface, full width.
+    func cardRow() -> some View {
+        self
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card(padding: 12, cornerRadius: 12)
     }
 }
 

@@ -1126,10 +1126,29 @@ StoryEditorPane (@Bindable generator):
   "Write to N" → generator.autoWriteToTarget(): loop appendOneChapter until targetChapters or Stop
   "Plan outline" → generator.planOutline() → project.outline
   chapter menu: Revise… (ReviseSheet → reviseChapter: blank+re-stream, restore original if empty),
-                Edit text… (ChapterEditSheet → replace chapter, clear stale summary), Copy, Delete
+                Edit text… (ChapterEditSheet → replace chapter, clear stale summary), Copy,
+                Illustrate/Redraw (→ generator.illustrateChapter, replace existing images), Delete
   Stop (⌘.) → generator.stop() (bumps `generation`; cancels the Task → InferenceService
               onTermination kills the mlx_lm subprocess)
-  Export → StoryMarkdownExporter (title + premise + chapters → .md)
+  Export → StoryMarkdownExporter (title + premise + chapters + ![](…) image links → .md
+           + a sibling <stem>_images/ folder of the copied PNGs)
+
+settings → Illustrations per chapter (0–4) + Art style:
+  first time count>0 → refreshImageGenInstalled(); if absent show "Install image generator"
+     → ImageGenService.install() → PythonRuntime.installImageGen (uv pip install mflux==0.18.0)
+
+illustration flow (after a chapter's text + summary are saved, or manual Illustrate):
+  generator.generateIllustrations(chapterID, replace):
+     guard count>0 && ImageGenService.installed()   (else silent no-op — writing never blocks)
+     extractScenes: LLM prompt → N one-line visual scenes (parseScenes strips "1." / "-" enumerators)
+     per scene → prompt = "<artStyle>. <scene>"; seed = storyBaseSeed(UUID) + chapterOffset + i
+     ImageGenService.generate([Request]) → ONE generate_image.py run (FLUX loads once):
+        writes batch JSONL {prompt,output,seed} → parses JSON events (start/loading/heartbeat/
+        progress{generating|saved}/done/error); saved paths collected in a lock-guarded box;
+        `progress` (done/total + loadingModel) drives the generation-bar render line
+     attach StoryIllustration{prompt,file} to chapter.illustrations (replace deletes old PNGs first)
+  chapter card → LazyVGrid of IllustrationView (async NSImage load+cache); per-image
+     Save image… / Show in Finder / Remove (removeIllustration deletes the file)
 
 persist(): store.update(generator.project) keyed by generatorProjID
 onDisappear: persist(); generator.stop(); discardIfEmpty
@@ -1138,8 +1157,13 @@ onDisappear: persist(); generator.stop(); discardIfEmpty
 Coherence across 15+ chapters comes from the **rolling summaries** (not full prior
 text) + outline, so each chapter's prompt stays within a sane token budget. Content
 latitude is the chosen local model's (an uncensored model writes without refusals);
-the UI adds no filter. **Files**:
+the UI adds no filter. **Illustrations** are optional (per-chapter count 0–4) and
+consistent because every image shares a frozen `artStyle` prefix + a per-story base
+seed; they render locally via `mflux`/FLUX.1-schnell (an on-demand add-on) and never
+gate the writing. **Files**:
 [`StoryView.swift`](../LLMPro/Features/Story/StoryView.swift),
 [`StoryGenerator.swift`](../LLMPro/Services/StoryGenerator.swift),
 [`StoryStore.swift`](../LLMPro/Services/StoryStore.swift),
+[`ImageGenService.swift`](../LLMPro/Services/ImageGenService.swift),
+[`generate_image.py`](../LLMPro/Resources/helpers/generate_image.py),
 [`InferenceService.swift`](../LLMPro/Services/InferenceService.swift).

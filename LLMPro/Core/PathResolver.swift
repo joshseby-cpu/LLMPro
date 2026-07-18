@@ -78,6 +78,12 @@ enum PathResolver {
     /// Saved Story-mode projects — one `<uuid>.json` per story (`StoryStore`), each
     /// holding the premise/settings + all chapters. Independent of SwiftData.
     static var storiesDir: URL { appSupport.appendingPathComponent("stories", isDirectory: true).ensured() }
+    /// Generated illustrations for a story, one folder per story id (kept out of
+    /// the flat `stories/<uuid>.json` files). Removed when the story is deleted.
+    static func storyImagesDir(for storyID: UUID) -> URL {
+        appSupport.appendingPathComponent("storyimages", isDirectory: true)
+            .appendingPathComponent(storyID.uuidString, isDirectory: true).ensured()
+    }
 
     static func adapterDir(for jobID: UUID) -> URL {
         adaptersDir.appendingPathComponent(jobID.uuidString, isDirectory: true).ensured()

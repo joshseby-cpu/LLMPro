@@ -103,6 +103,7 @@ final class StoryGenerator {
                 self.project.chapters[i] = original
             } else if self.generation == myGen {
                 await self.summarize(chapterID: id)
+                await self.generateIllustrations(chapterID: id, replace: true, myGen: myGen)
             }
             if self.generation == myGen { self.finishRun() }
             self.save()
@@ -192,6 +193,7 @@ final class StoryGenerator {
         statusLine = "Summarizing chapter \(n)…"
         await summarize(chapterID: cid)
         save()
+        await generateIllustrations(chapterID: cid, replace: false, myGen: myGen)
         return true
     }
 
@@ -253,6 +255,186 @@ final class StoryGenerator {
         isGenerating = false
         streamingChapterID = nil
         statusLine = ""
+    }
+
+    // MARK: - Illustrations
+
+    /// Manually (re)generate a chapter's themed illustrations — the Story UI's
+    /// "Illustrate" / "Redraw" button. Replaces any existing images for the chapter.
+    /// No-op if the per-chapter count is 0 or a run is already active.
+    func illustrateChapter(id: UUID) {
+        guard !isGenerating, project.illustrationsPerChapter > 0,
+              project.chapters.contains(where: { $0.id == id }) else { return }
+        generation &+= 1
+        let myGen = generation
+        isGenerating = true
+        error = nil
+        task = Task { [myGen] in
+            // Manual entry point surfaces the missing add-on (the auto-after-chapter
+            // path stays a silent no-op so writing never blocks on it).
+            if await ImageGenService.shared.installed() == false {
+                self.error = "Install the image generator first (Story settings ▸ Illustrations per chapter)."
+            } else {
+                await self.generateIllustrations(chapterID: id, replace: true, myGen: myGen)
+            }
+            if self.generation == myGen { self.finishRun() }
+            self.save()
+        }
+    }
+
+    /// Delete one illustration (and its file) from a chapter.
+    func removeIllustration(chapterID: UUID, illustrationID: UUID) {
+        guard let ci = project.chapters.firstIndex(where: { $0.id == chapterID }),
+              let ii = project.chapters[ci].illustrations.firstIndex(where: { $0.id == illustrationID })
+        else { return }
+        let file = project.chapters[ci].illustrations[ii].file
+        try? FileManager.default.removeItem(
+            at: PathResolver.storyImagesDir(for: project.id).appendingPathComponent(file))
+        project.chapters[ci].illustrations.remove(at: ii)
+        save()
+    }
+
+    /// Extract `count` visual scenes from a finished chapter (via the LLM), render
+    /// them all in one FLUX batch with the story's shared art style, and attach them
+    /// to the chapter. Runs INSIDE an existing task (never bumps `generation` or
+    /// touches `isGenerating`). Silent no-op if the image model isn't installed, so
+    /// story writing never blocks on it.
+    private func generateIllustrations(chapterID: UUID, replace: Bool, myGen: Int) async {
+        let count = project.illustrationsPerChapter
+        guard count > 0, generation == myGen else { return }
+        guard let idx = project.chapters.firstIndex(where: { $0.id == chapterID }) else { return }
+        let chapter = project.chapters[idx]
+        let chapterText = chapter.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !chapterText.isEmpty else { return }
+
+        guard await ImageGenService.shared.installed() else {
+            Log.info("Illustrations requested but the image model isn't installed — skipping", .app)
+            return
+        }
+        guard generation == myGen else { return }
+
+        statusLine = "Imagining scenes for \(chapter.title)…"
+        let scenes = await extractScenes(from: chapterText, count: count, myGen: myGen)
+        guard generation == myGen, !scenes.isEmpty else { return }
+
+        let style = artStyleOrDefault()
+        let dir = PathResolver.storyImagesDir(for: project.id)
+        let baseSeed = storyBaseSeed()
+        // Spread seeds per chapter so different chapters don't reuse the same noise.
+        let chapterOffset = idx * 97
+
+        var requests: [ImageGenService.Request] = []
+        var pending: [(file: String, prompt: String)] = []
+        for (i, scene) in scenes.enumerated() {
+            let prompt = "\(style). \(scene)"
+            let file = "chap-\(chapterID.uuidString)-\(i)-\(UUID().uuidString).png"
+            requests.append(.init(prompt: prompt,
+                                  output: dir.appendingPathComponent(file),
+                                  seed: baseSeed &+ chapterOffset &+ i))
+            pending.append((file, prompt))
+        }
+
+        statusLine = "Illustrating \(chapter.title)… (0/\(requests.count))"
+        let saved = await ImageGenService.shared.generate(requests)
+
+        // Superseded (Stop / switched story) or the chapter's gone: the subprocess may
+        // have written PNGs that will never be recorded — delete them so they don't leak.
+        guard generation == myGen,
+              let ci = project.chapters.firstIndex(where: { $0.id == chapterID }) else {
+            for p in saved { try? FileManager.default.removeItem(at: URL(fileURLWithPath: p)) }
+            return
+        }
+
+        let savedNames = Set(saved.map { URL(fileURLWithPath: $0).lastPathComponent })
+        let newIllos = pending
+            .filter { savedNames.contains($0.file) }
+            .map { StoryIllustration(prompt: $0.prompt, file: $0.file) }
+
+        if replace {
+            // Delete-before-confirm would destroy the user's existing art if the batch
+            // failed (0 saved). Only swap in when the new batch actually produced images.
+            guard !newIllos.isEmpty else {
+                error = "Couldn't redraw the illustrations — kept the existing ones."
+                return
+            }
+            for old in project.chapters[ci].illustrations {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(old.file))
+            }
+            project.chapters[ci].illustrations = newIllos
+        } else {
+            project.chapters[ci].illustrations.append(contentsOf: newIllos)
+        }
+        save()
+    }
+
+    /// Ask the model for `count` one-line visual scene descriptions from a chapter.
+    /// Deliberately excludes style/medium words — the shared art style is prepended
+    /// later so every image in the story matches.
+    private func extractScenes(from text: String, count: Int, myGen: Int) async -> [String] {
+        var params = inferenceParams()
+        params.maxTokens = 120 + count * 60
+        params.temperature = 0.4
+        let clip = text.count <= 6000
+            ? text
+            : String(text.prefix(3500)) + "\n\n[…]\n\n" + String(text.suffix(2000))
+        let plural = count == 1 ? "" : "s"
+        let prompt = """
+        From the chapter below, choose the \(count) most visually striking moment\(plural) to illustrate. \
+        For each, write ONE vivid line describing the scene for an illustrator: the setting, the key characters and their appearance, the action, and the mood. \
+        Do NOT mention art style, medium, camera, or the word "illustration" — describe only what is depicted. \
+        Output exactly \(count) line\(plural), numbered 1 to \(count), and nothing else.
+
+        Chapter:
+        \(clip)
+
+        Scenes:
+        """
+        let sink = LineAccumulator()
+        await streamText(prompt: prompt, params: params, myGen: myGen) { chunk in sink.append(chunk) }
+        guard generation == myGen else { return [] }
+        return Self.parseScenes(ReasoningStripper.visible(sink.text), limit: count)
+    }
+
+    /// Split the model's numbered output into clean scene lines, stripping "1.",
+    /// "1)", "-", "•" enumerators. Prefers the enumerated lines when present so a
+    /// preamble ("Here are the 3 scenes:") isn't taken as scene #1. Falls back to
+    /// every non-empty line, then to the whole blob as one scene.
+    static func parseScenes(_ raw: String, limit: Int) -> [String] {
+        let enumPattern = #"^\s*(\d+[\.\):]|[-•*])\s*"#
+        let lines = raw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let enumerated = lines.filter { $0.range(of: enumPattern, options: .regularExpression) != nil }
+        let source = enumerated.isEmpty ? lines : enumerated
+        var scenes: [String] = []
+        for line in source {
+            let s = line
+                .replacingOccurrences(of: enumPattern, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            if s.count >= 8 { scenes.append(s) }
+            if scenes.count == limit { break }
+        }
+        if scenes.isEmpty {
+            let whole = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !whole.isEmpty { scenes.append(whole) }
+        }
+        return scenes
+    }
+
+    private func artStyleOrDefault() -> String {
+        let s = project.artStyle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty
+            ? "detailed digital illustration, cinematic lighting, rich color, consistent art style"
+            : s
+    }
+
+    /// A stable per-story base seed derived from the project UUID's first 4 bytes —
+    /// deterministic across launches (unlike `hashValue`), so re-illustrating a story
+    /// keeps a related look.
+    private func storyBaseSeed() -> Int {
+        var seed = 0
+        withUnsafeBytes(of: project.id.uuid) { raw in
+            for b in raw.prefix(4) { seed = (seed << 8) | Int(b) }
+        }
+        return seed & 0x7fff_ffff
     }
 
     // MARK: - Prompt building

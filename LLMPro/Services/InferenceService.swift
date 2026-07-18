@@ -63,6 +63,15 @@ actor InferenceService {
                     return
                 }
 
+                // Pre-flight: a model whose weights exceed RAM can't load — mlx-lm
+                // would spend a minute reading shards only for the OS to SIGKILL it
+                // (the cryptic "exited with code 9"). Fail fast with a clear message.
+                if let fitError = ModelFit.tooLargeError(localModelPath: resolvedModel) {
+                    Log.error("Refusing to load oversized model \(resolvedModel): \(fitError)", .model)
+                    continuation.finish(throwing: NSError(domain: "InferenceService", code: 12, userInfo: [NSLocalizedDescriptionKey: fitError]))
+                    return
+                }
+
                 var args: [String] = [
                     "-m", "mlx_lm", "generate",
                     "--model", resolvedModel,
@@ -111,7 +120,7 @@ actor InferenceService {
                     if Task.isCancelled { continuation.finish(); return }
                     let exit = try await proc.exit.value
                     if exit.code != 0 {
-                        continuation.finish(throwing: NSError(domain: "InferenceService", code: Int(exit.code), userInfo: [NSLocalizedDescriptionKey: "mlx_lm.generate exited with code \(exit.code)"]))
+                        continuation.finish(throwing: NSError(domain: "InferenceService", code: Int(exit.code), userInfo: [NSLocalizedDescriptionKey: ModelFit.exitMessage(code: exit.code, tool: "mlx_lm.generate")]))
                     } else {
                         continuation.finish()
                     }

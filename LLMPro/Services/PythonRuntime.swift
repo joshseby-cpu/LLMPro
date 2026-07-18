@@ -401,13 +401,53 @@ final class PythonRuntime {
         }
     }
 
+    /// Returns true if `mflux` (the MLX FLUX text-to-image backend for Story
+    /// illustrations) is importable in the venv. Cheap (~50 ms). Optional add-on,
+    /// so it's intentionally NOT part of verifyMLXLM / the Ready gate — Story only
+    /// needs it when the user turns illustrations on.
+    func imageGenInstalled() async -> Bool {
+        guard let python = pythonURL else { return false }
+        do {
+            try await ProcessRunner.runCapturing(
+                executable: python,
+                arguments: ["-c", "import mflux"]
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Install the image generator on-demand. `mflux==0.18.0` caps `mlx<0.32`, which
+    /// the current venv (mlx 0.31.x) already satisfies, and its other deps (torch,
+    /// transformers, safetensors, sentencepiece) are already present from mlx-lm —
+    /// so this is a small metadata-only install, NOT a multi-GB torch pull. The
+    /// FLUX weights themselves download lazily on first image generation. Pinned so
+    /// a future mflux that bumps its mlx floor can't silently break the venv.
+    func installImageGen(progress: @escaping @MainActor (String) -> Void) async -> Bool {
+        do {
+            let uv = try await resolveUV()
+            await MainActor.run { progress("Installing the image generator (mflux)…") }
+            try await runUV(uv, [
+                "pip", "install",
+                "--python", PathResolver.venvPython.path,
+                "mflux==0.18.0"
+            ])
+            return true
+        } catch {
+            await MainActor.run { progress("Install failed: \(error.localizedDescription)") }
+            return false
+        }
+    }
+
     private func installHelpers() throws {
         let destDir = PathResolver.helpersDir
         for name in ["hf_download", "prepare_coding_dataset", "download_hf_dataset", "strip_vision", "abliterate",
                      "humaneval_pull", "self_improve_round", "eval_pass_rate",
                      "merge_models", "add_expert", "manage_experts",
                      "mem_probe", "model_memory", "profile_experts", "mlx_run",
-                     "inspect_attention", "gguf_to_mlx", "diffusion_generate", "diffusion_server"] {
+                     "inspect_attention", "gguf_to_mlx", "diffusion_generate", "diffusion_server",
+                     "generate_image"] {
             guard let resourceURL = Bundle.main.url(forResource: name, withExtension: "py", subdirectory: "helpers")
                                   ?? Bundle.main.url(forResource: name, withExtension: "py")
             else { continue }

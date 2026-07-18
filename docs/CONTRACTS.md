@@ -1007,6 +1007,79 @@ matter when wrapping a helper:
   SIGTERM is ignored — `Foundation.Process` has no kill API, so it signals the PID
   directly).
 
+### `generate_image.py` — local text-to-image for Story illustrations (non-mlx-lm)
+
+[`generate_image.py`](../LLMPro/Resources/helpers/generate_image.py) renders Story-tab
+illustrations locally with **`mflux`** (MLX FLUX) — **not** mlx-lm. Driven by
+[`ImageGenService`](../LLMPro/Services/ImageGenService.swift).
+
+**Optional on-demand add-on.** `mflux` is **not** part of the bootstrap / Ready gate.
+`PythonRuntime.imageGenInstalled()` (`python -c "import mflux"`) checks it;
+`installImageGen()` runs **`uv pip install mflux==0.18.0`**. The **exact pin matters**:
+0.18.0's deps (`transformers>=5`, `huggingface-hub>=1.1`, `numpy>=2`, `torch>=2.7`,
+`mlx>=0.27,<0.32`) are **already satisfied** by the mlx-lm 0.31.x venv, so the install
+adds only additive packages (matplotlib, opencv-python, pillow, …) and **touches no
+core ML package** — verified via `uv pip install --dry-run` (0 core changes, 27 adds).
+A different mflux version could demand a different core-package range and break mlx-lm;
+**re-run the dry-run before bumping the pin.**
+
+**The default model is an UNGATED mirror (load-bearing — the original is gated).**
+`black-forest-labs/FLUX.1-schnell` is Apache-2.0 but the HF repo is **`gated: auto`** —
+an unauthenticated `snapshot_download` **401s** ("Cannot access gated repo… Please log
+in"), which breaks the app's zero-setup promise. So `ImageGenService.defaultModel` is
+**`dhairyashil/FLUX.1-schnell-mflux-4bit`** — an **ungated** (`gated: false`),
+pre-quantized (4-bit) mflux-native mirror, **~9.6 GB** (smaller than the 24–34 GB
+original), downloaded with **no token required** into `HF_HOME` on first generation.
+`ImageGenService` also passes **`HF_TOKEN`** (from Keychain, via `KeychainHelper`) when
+the user has one — the default mirror doesn't need it, but it lets a token-holder point
+at a gated model and speeds authenticated downloads. If you swap the default mirror,
+verify it is (a) ungated and (b) mflux-loadable (mflux-native pre-quantized layout, or a
+diffusers-layout repo mflux can quantize on load).
+
+**mflux 0.18.0 API (verified against the sdist — earlier versions differ).** The
+package root does **not** re-export these; use full module paths. A pre-quantized mirror
+loads via `from_name(model_name=<repo>, base_model="schnell")` with **`quantize=None`**
+(mflux reads the baked-in quantization; re-quantizing would conflict). The base
+`schnell`/`dev` names still take an explicit `quantize`:
+```python
+from mflux.models.common.config import ModelConfig
+from mflux.models.flux.variants.txt2img.flux import Flux1
+# pre-quantized mirror (the app default): quantize=None
+cfg  = ModelConfig.from_name(model_name="dhairyashil/FLUX.1-schnell-mflux-4bit", base_model="schnell")
+flux = Flux1(model_config=cfg, quantize=None)                        # NO `model_name=` kwarg on Flux1
+# (base name path: Flux1(model_config=ModelConfig.schnell(), quantize=8))
+img  = flux.generate_image(seed=s, prompt=p,
+                           num_inference_steps=4, width=1024, height=768)  # NOT a Config obj
+img.save(path=out, export_json_metadata=True, overwrite=True)        # NOT `export_metadata=`
+```
+
+CLI (either mode). `--model` with a `/` is treated as an HF repo (pre-quantized →
+`quantize=None`); `--base-model` is the architecture hint mflux needs for a mirror:
+```
+# batch (preferred — FLUX loads ONCE per chapter):
+python <helpers>/generate_image.py --prompts-json <file.jsonl> \
+  --model dhairyashil/FLUX.1-schnell-mflux-4bit --base-model schnell \
+  --steps 4 --width 1024 --height 768 --metadata
+#   where each JSONL line is {"prompt": str, "output": <abs.png>, "seed": int}
+# single:
+python <helpers>/generate_image.py --prompt "…" --output out.png --seed 42
+```
+
+JSON events (one object per stdout line, same protocol as every helper):
+```
+{"event":"start","count":N,"model":"schnell"}
+{"event":"loading"}                                   # before the (first-run: downloading) load
+{"event":"heartbeat"}                                 # every ~8s while loading, so the stream looks alive
+{"event":"progress","index":i,"total":N,"stage":"generating"}
+{"event":"progress","index":i,"total":N,"stage":"saved","path":"<abs.png>"}
+{"event":"done","paths":[...]}                         # exit 0 if ≥1 saved, else 1
+{"event":"error","message":"…","index":i}             # per-image failure is isolated; batch continues
+```
+A per-image exception is caught and the batch keeps going; `ImageGenService` collects
+the `saved` paths regardless of exit code (it reads the drained stdout before
+`runCapturing`'s nonzero-exit throw). Story writing **never blocks** on this helper —
+a missing model just means no images.
+
 ---
 
 ## 4. HuggingFace Hub API
@@ -1030,6 +1103,9 @@ GET https://huggingface.co/api/models
 GET https://huggingface.co/api/models/<repoID>
 → HFModelDetail
     {id, siblings: [{rfilename, size}], tags, pipeline_tag, library_name, cardData: {license, language}}
+    ⚠️ siblings have `size` ONLY when you pass `?blobs=true`. The bare endpoint returns
+    {rfilename} with NO size, so any size sum is 0. `resolveTotalSize` MUST request
+    `?blobs=true` (this silently broke the download-size display until 2026-07-18).
 
 GET https://huggingface.co/api/datasets
     ?search=<query>

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// **Story** tab — long-form creative writing with a local model. Write a premise,
 /// pick a model, and generate a story chapter by chapter (with rolling summaries
@@ -202,6 +203,12 @@ private struct StoryEditorPane: View {
     @FocusState private var premiseFocused: Bool
     @FocusState private var styleFocused: Bool
 
+    // Image-generation add-on (mflux). `imageGenInstalled` is nil until checked.
+    @State private var imageGen = ImageGenService.shared
+    @State private var imageGenInstalled: Bool?
+    @State private var installingImageGen = false
+    @State private var installStatus = ""
+
     private var project: StoryProject { generator.project }
 
     /// The live text of the chapter currently streaming — drives follow-scroll.
@@ -351,8 +358,75 @@ private struct StoryEditorPane: View {
                         .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                 }
             }
+            Divider()
+            illustrationSettings
         }
         .card()
+        .task { if project.illustrationsPerChapter > 0 { await refreshImageGenInstalled() } }
+    }
+
+    @ViewBuilder
+    private var illustrationSettings: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Stepper("Illustrations per chapter: \(project.illustrationsPerChapter)",
+                        value: $generator.project.illustrationsPerChapter, in: 0...4)
+                    .onChange(of: generator.project.illustrationsPerChapter) { _, n in
+                        persist()
+                        if n > 0 { Task { await refreshImageGenInstalled() } }
+                    }
+                Spacer()
+                if project.illustrationsPerChapter > 0 { imageGenStatusView }
+            }
+            if project.illustrationsPerChapter > 0 {
+                Text("Art style — kept identical on every illustration so the whole story matches")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("e.g. soft watercolor children's-book illustration, warm palette",
+                          text: $generator.project.artStyle)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(persist)
+                Text("Generated locally with FLUX after each chapter is written. First use downloads the image model (~10 GB, no account needed); each image takes a few seconds.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var imageGenStatusView: some View {
+        switch imageGenInstalled {
+        case .some(true):
+            Label("Image model ready", systemImage: "checkmark.seal.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .some(false):
+            if installingImageGen {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(installStatus.isEmpty ? "Installing…" : installStatus)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            } else {
+                Button { installImageGen() } label: {
+                    Label("Install image generator", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+            }
+        case .none:
+            ProgressView().controlSize(.small)
+        }
+    }
+
+    private func refreshImageGenInstalled() async {
+        imageGenInstalled = await ImageGenService.shared.installed()
+    }
+
+    private func installImageGen() {
+        installingImageGen = true
+        installStatus = ""
+        Task {
+            let ok = await ImageGenService.shared.install { line in installStatus = line }
+            imageGenInstalled = ok ? true : await ImageGenService.shared.installed()
+            installingImageGen = false
+        }
     }
 
     private var premiseCard: some View {
@@ -386,6 +460,13 @@ private struct StoryEditorPane: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(ch.text, forType: .string)
                     }
+                    if project.illustrationsPerChapter > 0 && !ch.text.isEmpty {
+                        Divider()
+                        Button(ch.illustrations.isEmpty ? "Illustrate" : "Redraw illustrations",
+                               systemImage: "photo.on.rectangle") {
+                            persist(); generator.illustrateChapter(id: ch.id)
+                        }
+                    }
                     Divider()
                     Button("Delete…", systemImage: "trash", role: .destructive) {
                         chapterDeletionTarget = ch
@@ -402,13 +483,55 @@ private struct StoryEditorPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
+            if !ch.illustrations.isEmpty { illustrationsGallery(ch) }
         }
         .card()
     }
 
+    @ViewBuilder
+    private func illustrationsGallery(_ ch: StoryChapter) -> some View {
+        let dir = PathResolver.storyImagesDir(for: project.id)
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 10)], spacing: 10) {
+            ForEach(ch.illustrations) { illo in
+                let url = dir.appendingPathComponent(illo.file)
+                IllustrationView(url: url)
+                    .contextMenu {
+                        Button("Save image…", systemImage: "square.and.arrow.down") { saveImage(url) }
+                        Button("Show in Finder", systemImage: "folder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                        Divider()
+                        Button("Remove", systemImage: "trash", role: .destructive) {
+                            generator.removeIllustration(chapterID: ch.id, illustrationID: illo.id)
+                        }
+                    }
+                    .help(illo.prompt)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func saveImage(_ src: URL) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "illustration.png"
+        panel.allowedContentTypes = [.png]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.copyItem(at: src, to: dest)
+    }
+
     private var generationBar: some View {
         VStack(spacing: 8) {
-            if !generator.statusLine.isEmpty {
+            if generator.isGenerating, let p = imageGen.progress {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(p.loadingModel
+                         ? "Loading the image model… (first run downloads ~10 GB — this can take a while)"
+                         : "Rendering illustration \(min(p.done + 1, p.total)) of \(p.total)…")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else if !generator.statusLine.isEmpty {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text(generator.statusLine).font(.caption).foregroundStyle(.secondary)
@@ -481,6 +604,37 @@ private struct ReviseSheet: View {
             }
         }
         .padding(20).frame(minWidth: 460, minHeight: 260)
+    }
+}
+
+// MARK: - Illustration thumbnail
+
+/// Loads a generated illustration off the main thread and caches it in state, so a
+/// chapter card with images doesn't re-decode PNGs on every redraw (e.g. while a
+/// later chapter is streaming). Reloads if the file at `url` changes (Redraw).
+private struct IllustrationView: View {
+    let url: URL
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable().scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+            } else {
+                RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4))
+                    .frame(height: 160)
+                    .overlay(ProgressView().controlSize(.small))
+            }
+        }
+        .task(id: url) { image = await Self.load(url) }
+    }
+
+    private static func load(_ url: URL) async -> NSImage? {
+        await Task.detached(priority: .utility) { NSImage(contentsOf: url) }.value
     }
 }
 

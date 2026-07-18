@@ -731,6 +731,130 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-18 (cont.) — GGUF "Download & convert" combo (one-tap GGUF LLM → usable MLX).**
+  Follow-up to the GGUF-labeling work: a **GGUF language-model** search result now shows a
+  **"Download & convert"** button that, in one tap, downloads only the **Q8_0** quant (~8 GB,
+  not the whole 82 GB repo), converts it to an MLX model, and adds it to Local models —
+  reusing `GGUFImportService`'s existing `downloadFromHuggingFace` (single-file) + `precheck`
+  + `convert` (auto-optimize/rescan). New: `GGUFImportService.downloadAndConvert(repo:)` +
+  `bestConvertibleFile(repo:)` (prefers Q8_0 → Q4_0 → F16; throws if the repo only has
+  k-quants/i-quants). `HFModel.isImageOrVideo`/`isConvertibleGGUF` gate the button — a GGUF
+  **image/video** repo (FLUX/WAN) shows the info button instead (no LLM to convert). Progress
+  shows in a banner atop the Models list (download → convert stage); the card shows
+  "Converting…". **Convertibility pre-check:** `bestConvertibleFile` / `convertibleFile`
+  EXCLUDE **i-matrix** files (`i1-*`) — an "i1-Q4_0" isn't pure Q4_0 (it keeps the output layer
+  in a k-quant like **Q6_K**, which MLX can't read), so picking it by filename downloaded a file
+  that then failed at precheck. Now after a search each GGUF LLM is checked via
+  `HuggingFaceClient.detailWithSizes` (`GGUFConvertState`), and the card shows **"Download &
+  convert" only when a pure Q8_0/Q4_0/F16 exists** (with that file's real size, e.g. "Q8_0 → MLX ·
+  9.83 GB"); an i1/k-quant-only repo shows **"GGUF · no MLX-convertible quant"** + an info button.
+  **Verified live:** (1) TinyLlama-1.1B static GGUF → download `…Q8_0.gguf` → convert → Local
+  models `llama · 8bit · 1.24 GB`; (2) `Dirty-Muse-…-i1-GGUF` correctly shows "no MLX-convertible
+  quant" while the sibling static `…-GGUF` (Q8_0) offers "Download & convert · 9.83 GB". No errors.
+
+- **Session 2026-07-18 (cont.) — "downloaded models don't show up" = GGUF, + List-layout bug + disk cleanup.**
+  A user reported downloads "most of the time don't show up in my models." Root cause:
+  they were downloading **GGUF** repos (and image/video models like WAN/FLUX). `ModelRegistry.scan`
+  only detects **MLX** models (`config.json` + `.safetensors`); a raw GGUF download lands in
+  the HF cache **invisibly**, and downloading a whole multi-hundred-GB GGUF repo can never
+  produce a usable model. Fix: `HFModel.isGGUF`/`isMLXReady` (from the `gguf`/`mlx` tags,
+  library, or repo name); search-result cards show a **"⚠ GGUF · needs conversion"** chip and
+  an amber **"GGUF"** button that opens the details sheet instead of a one-click download; the
+  sheet shows a banner explaining GGUF must be converted via **Import GGUF** (Q4_0/Q8_0 LLMs
+  only; image/video GGUF can't run) + a de-emphasized "Download raw files anyway". The
+  `mlx_lm convert` row is hidden for GGUF (it can't read GGUF).
+  **Also fixed a real `List` bug:** the revamped results section rendered **zero-height** until
+  the user scrolled (SwiftUI `List` doesn't lay out a few dynamically-loaded rows initially).
+  Converted `ModelsBrowserView`'s content from `List` to **`ScrollView` + `LazyVStack`** (all
+  local-model wiring — context menu, alert/sheet modifiers — preserved); results now render
+  immediately. **Disk:** the user's drive was **99% full (144 MiB free)** — 1.41 TB of mostly
+  unusable GGUF/image/video models — which also broke the build (codesign). Freed **131 GB** by
+  deleting 37 interrupted `.incomplete` partials (user-approved). Verified live: GGUF searches
+  render instantly with the chip/button/banner; zero ERROR/FAULT, no crash.
+
+- **Session 2026-07-18 (cont.) — Model-download UX revamp + size-display bug fix.**
+  The Models tab's search/download UI was a flat list with a jarring solid-purple
+  selection block, no model size anywhere, an ISO-timestamp, and a tag-soup detail
+  panel (`region:us`, `base_model:finetune:…`, `license:other`). Rebuilt the download
+  experience in [`ModelsBrowserView.swift`](../LLMPro/Features/Models/ModelsBrowserView.swift):
+  search results are now **cards** (`ModelResultCard`) showing the model's **download
+  size** (async-fetched) + download count + a **RAM-fit warning** when a model is too
+  big, with a **stateful action button** (Download → Downloading % → ✓ Installed);
+  in-flight downloads render as **`DownloadProgressCard`** ("1.2 GB of 5.4 GB" + bar);
+  and the old inline panel became a clean **`ModelDetailSheet`** ([ModelDetailView.swift](../LLMPro/Features/Models/ModelDetailView.swift))
+  — humanized "Updated Sep 2024", a prominent size + fit verdict ("✓ Runs on your Mac
+  (128 GB)"), curated tags (HF bookkeeping like `region:`/`base_model:`/`arxiv:` filtered
+  out), and Download/Teach/Chat CTAs. **Root-cause bug fixed:** `HuggingFaceClient.resolveTotalSize`
+  hit `/api/models/{id}` which returns siblings **without** file sizes → every size summed
+  to 0 (the old detail panel's size line silently never showed either). Now passes
+  **`?blobs=true`**. `ModelFit` gained `fits(weightBytes:)` + `physicalRAM` for the card/sheet
+  fit chips. **Verified live:** searched Qwen2 → cards show 285 MB / 1.74 GB / 8.32 GB etc.;
+  downloaded the 0.5B (card flipped Download → ✓ Installed); details sheet renders clean.
+  Release build clean, installed, zero ERROR/FAULT, no `.ips`.
+
+- **Session 2026-07-18 (cont.) — RAM pre-flight guard (oversized models fail fast, not "code 9").**
+  A user picked **Venus-120b-v1.2** (a 120B frankenmerge, **fp16, 240 GB on disk**) on a
+  **128 GB** Mac; story generation died with the cryptic **`mlx_lm.generate exited with
+  code 9`**. Root cause: the OS OOM-killer (SIGKILL) — a 240 GB model can't fit in 128 GB
+  of unified memory, and it can't be shrunk locally either (the in-app quantizer / `mlx_lm
+  convert` must load the full fp16 model into RAM first → same OOM). New
+  [`Core/ModelFit.swift`](../LLMPro/Core/ModelFit.swift): `tooLargeError` sums a local
+  model's `*.safetensors` bytes vs 85% of `physicalMemory` and returns a plain-language
+  message; `exitMessage` maps a SIGKILL exit (9/137) to "ran out of memory". Wired into
+  `InferenceService.stream` + `MLXServerService.start` (pre-flight before spawn + in the
+  exit handlers). **Verified live in the app:** selecting Venus + "Write opening chapter"
+  now shows *"This model's weights are 240.63 GB — too large for this Mac's 128 GB of
+  memory. Pick a smaller model or a 4-bit version…"* **instantly** (no 30 s load, no crash,
+  one clean ERROR log line). Note for future: there is **no MLX-runnable Venus-120b** —
+  every HF GGUF is a k-quant/i-quant (Q2_K, IQ1–3, Q4_K…) and `gguf_to_mlx.py` (MLX's
+  native loader) only reads Q4_0/Q4_1/Q8_0/F16, so the GGUF→MLX import path is a dead end
+  for it; a fitting model (or a shard-by-shard streaming quantizer, not yet built) is the
+  only way to run a 120B here.
+
+- **Session 2026-07-18 — Story illustrations (local themed AI images per chapter).**
+  Story tab can now insert **local** AI illustrations into chapters. New settings:
+  **Illustrations per chapter (0–4)** + a freeform **Art style** kept identical on
+  every image so a story's illustrations stay visually consistent. After each chapter
+  is written (or via a per-chapter **Illustrate/Redraw** menu action), the LLM extracts
+  N visual scenes, the frozen art-style is prepended, deterministic seeds are assigned
+  (per-story base seed from the UUID + chapter offset + image index), and all N render
+  in **one** `generate_image.py` (mflux / FLUX.1-schnell) batch so the ~12B model loads
+  once per chapter. Images show inline in the chapter card (per-image Save / Show in
+  Finder / Remove); Markdown export copies them into a sibling `<stem>_images/` folder
+  with `![](…)` links. New: `ImageGenService`, `generate_image.py`, `StoryIllustration`
+  + `illustrationsPerChapter`/`artStyle` on `StoryProject` (tolerant decoders),
+  `PathResolver.storyImagesDir`, `PythonRuntime.installImageGen`/`imageGenInstalled`.
+  **mflux is an optional on-demand add-on** (`uv pip install mflux==0.18.0`, gated in
+  Story settings); the pin is safe — a `uv pip install --dry-run` confirmed it adds 27
+  packages and changes **zero** core ML packages (transformers 5.9 / torch 2.12 /
+  hf-hub 1.16 / numpy 2.4 / mlx 0.31 already satisfy its ranges). **Caught during
+  build:** the 0.18.0 API differs from earlier mflux — `Flux1(model_config=…,
+  quantize=)` (NO `model_name=`), `generate_image(seed, prompt, num_inference_steps=,
+  width=, height=)` (NOT a `Config` object), `save(path=, export_json_metadata=,
+  overwrite=)` (NOT `export_metadata=`) — verified against the 0.18.0 sdist and fixed
+  before it shipped. **Adversarial review (24-agent workflow) → 9 confirmed findings
+  fixed:** (HIGH) redraw/revise no longer deletes existing illustrations unless the new
+  batch produced images (was a delete-before-confirm data-loss bug) + surfaces a
+  non-fatal error on failure; (MED) `ImageGenService.generate` is now cancellation-aware
+  — Stop terminates the FLUX subprocess instead of leaking it, and orphaned PNGs from a
+  superseded batch are deleted; (MED) scene parser prefers enumerated lines so a model
+  preamble isn't taken as scene #1; (LOW) manual Illustrate now reports a missing image
+  model; (LOW) the image-progress bar is scoped to the active generator.
+  **GATED-MODEL BLOCKER caught by a live run (only surfaces on a real download):**
+  `black-forest-labs/FLUX.1-schnell` is `gated: auto` → an unauthenticated download
+  **401s**, breaking zero-setup use. Fixed by defaulting to the **ungated** pre-quantized
+  mirror **`dhairyashil/FLUX.1-schnell-mflux-4bit`** (`ImageGenService.defaultModel`,
+  ~9.6 GB, loads with **no token**, `quantize=None` since it's pre-quantized); the helper
+  now treats a `--model` with `/` as an HF repo + takes `--base-model`; `ImageGenService`
+  also passes `HF_TOKEN` (Keychain) when present as a fallback for gated models.
+  **VERIFIED LIVE end-to-end in the running app** (2026-07-18): downloaded Llama-3.2-1B,
+  wrote a story chapter (streams + completes, no errors); the illustration gallery,
+  per-image context menu, and settings/install-gate ("Image model ready") all render;
+  a real **Redraw** downloaded the 9.6 GB mirror (no token) and generated **2 coherent,
+  on-theme watercolor illustrations** that replaced the placeholders and displayed in
+  the chapter card. Debug + Release build clean (Swift 6, zero warnings), installed to
+  /Applications, zero ERROR/FAULT across the whole run, no `.ips`.
+
 - **Session 2026-07-01 (cont.) — hide reasoning `<think>` blocks; Story Mode.**
   **Think-block hiding:** reasoning models (Qwen3/DeepSeek-R1) emit `<think>…</think>`
   before the answer (some templates emit only the closing `</think>`). New
