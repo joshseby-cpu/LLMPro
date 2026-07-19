@@ -186,13 +186,14 @@ it's the doc that explains *why* the app is shaped this way.
         python humaneval_pull.py         (Practice seed: HumanEval/MBPP → seed + eval JSONL)
         python self_improve_round.py     (Practice round: gen K candidates, sandbox-test, write dataset)
         python eval_pass_rate.py         (Practice eval + Test-node "Score it": pass@k with optional adapter)
-        python generate_image.py         (Story illustrations: local text-to-image via mflux/FLUX.1-schnell — NOT mlx_lm; optional on-demand `mflux` add-on; batch JSONL so FLUX loads once/chapter)
+        python generate_image.py         (Story illustrations + Imagine: local text-to-image via mflux/FLUX — NOT mlx_lm; optional on-demand `mflux` add-on; batch JSONL so FLUX loads once/chapter)
+        python sdxl_generate.py          (Imagine: local text-to-image for SDXL / SD 1.5-2.x — NOT mlx_lm, NOT mflux; vendored MLX Stable Diffusion in sdxl_vendor/; loads the user's own diffusers-layout SDXL from its local snapshot dir; same JSON-event protocol; honors CFG + negative)
 ```
 
 Disk layout under `~/Library/Application Support/LLMPro/`:
 ```
 runtime/.venv/          uv-managed Python 3.11 venv with mlx-lm installed
-runtime/helpers/        copy of helper scripts from app bundle (incl. diffusion_vendor/ — the recursively-copied vendored DiffusionGemma decoder)
+runtime/helpers/        copy of helper scripts from app bundle (incl. diffusion_vendor/ — vendored DiffusionGemma decoder — and sdxl_vendor/ — vendored MLX Stable Diffusion for SDXL/SD)
 hf/                     HuggingFace cache (HF_HOME) — models AND datasets
 adapters/<job-uuid>/    one folder per training job: config.yaml + adapters.safetensors + job.json + training.log
 datasets/<ds-uuid>/     train.jsonl + valid.jsonl + test.jsonl (chat schema; OR a preference set {prompt,chosen,rejected[,system]} for DPO)
@@ -301,8 +302,9 @@ LLMPro/
 │   ├── Export/     (Save & Use) ExportWizardView
 │   └── Settings/   SettingsView, FirstRunView
 └── Resources/
-    ├── helpers/    Python helper scripts (download, prepare-dataset, strip-vision, abliterate, diffusion_generate, etc.)
+    ├── helpers/    Python helper scripts (download, prepare-dataset, strip-vision, abliterate, diffusion_generate, generate_image, sdxl_generate, etc.)
     │               + diffusion_vendor/ (VENDORED, not pip: the MIT optiq.vlm DiffusionGemma decoder; see CONTRACTS §3)
+    │               + sdxl_vendor/ (VENDORED, not pip: Apple mlx-examples `stable_diffusion` — the MLX SDXL/SD engine; LLMPro-patched for local-dir load; see CONTRACTS)
     ├── recipes/    YAML training recipe presets (coding fine-tunes for various base models)
     └── Assets.xcassets/  AppIcon
 ```

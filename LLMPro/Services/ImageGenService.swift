@@ -1,17 +1,42 @@
 import Foundation
 import Observation
 
-/// A selectable local text-to-image model (all ungated mflux mirrors, no HF token
-/// needed). `steps` differs by family: FLUX **schnell** is timestep-distilled (4
-/// steps); FLUX **dev** needs ~20 for its quality. `baseModel` is the architecture
-/// hint mflux needs for a mirror repo.
+/// Which local image engine a model runs on. FLUX runs via **mflux**
+/// (`generate_image.py`); SDXL and SD 1.5/2.x run via the vendored MLX Stable
+/// Diffusion engine (`sdxl_generate.py`). The two take different args (FLUX is
+/// guidance-distilled → no CFG/negative; SDXL uses both), so `ImageGenService.generate`
+/// routes on this.
+enum ImageModelFamily: String, Sendable, Hashable {
+    case flux, sdxl, sd
+
+    var engineHelper: String { self == .flux ? "generate_image.py" : "sdxl_generate.py" }
+    var usesCFG: Bool { self != .flux }         // FLUX is guidance-distilled (CFG≈1)
+}
+
+/// A selectable local text-to-image model. FLUX presets are ungated mflux mirrors
+/// (no HF token). SDXL/SD entries are the user's own downloaded diffusers models,
+/// discovered in the HF cache. `baseModel` is a family-specific hint: for FLUX the
+/// mflux architecture ("schnell"/"dev"); for SDXL the detected **variant** tag
+/// ("sdxl"/"illustrious"/"pony"/"turbo"/… — drives step/CFG defaults). `cfg` and
+/// `negative` are only used by SDXL/SD (FLUX ignores them).
 struct ImageModel: Identifiable, Hashable, Sendable {
     let repo: String
     let name: String
-    let baseModel: String          // "schnell" | "dev"
+    let family: ImageModelFamily
+    let baseModel: String          // FLUX: "schnell"|"dev"; SDXL: variant tag
     let steps: Int
+    let cfg: Double
+    let negative: String
     let note: String
     var id: String { repo }
+
+    // Convenience initializer for the FLUX presets (family/cfg/negative fixed).
+    init(repo: String, name: String, baseModel: String, steps: Int, note: String,
+         family: ImageModelFamily = .flux, cfg: Double = 1.0, negative: String = "") {
+        self.repo = repo; self.name = name; self.family = family
+        self.baseModel = baseModel; self.steps = steps; self.cfg = cfg
+        self.negative = negative; self.note = note
+    }
 
     static let presets: [ImageModel] = [
         .init(repo: "dhairyashil/FLUX.1-schnell-mflux-4bit", name: "FLUX.1 schnell — fast",
@@ -26,6 +51,74 @@ struct ImageModel: Identifiable, Hashable, Sendable {
 
     static var `default`: ImageModel { presets[0] }
     static func preset(repo: String) -> ImageModel { presets.first { $0.repo == repo } ?? .default }
+
+    /// Build an `ImageModel` for a downloaded SD/SDXL diffusers model, choosing
+    /// step/CFG/negative defaults from the checkpoint's variant (detected by name).
+    /// See `SDXLVariant` for the lookup table (grounded in community-recommended
+    /// settings — Illustrious/Pony/Turbo/Lightning all differ).
+    static func sdxl(repo: String, family: ImageModelFamily) -> ImageModel {
+        let short = repo.split(separator: "/").last.map(String.init) ?? repo
+        let v = SDXLVariant.detect(repo)
+        return .init(repo: repo, name: short, baseModel: v.tag, steps: v.steps,
+                     note: v.note, family: family, cfg: v.cfg, negative: v.negative)
+    }
+}
+
+/// SDXL checkpoint variants have very different optimal settings. Detected by
+/// case-insensitive name substring (distillation flags win, then anime families,
+/// then base). Values grounded in community/official guidance; distilled variants
+/// (Turbo/Lightning/Hyper) use few steps + CFG≈0 and no negative prompt.
+enum SDXLVariant {
+    case base, illustrious, noobai, pony, turbo, lightning, hyper
+
+    static func detect(_ repo: String) -> SDXLVariant {
+        let n = repo.lowercased()
+        if n.contains("turbo") { return .turbo }
+        if n.contains("lightning") { return .lightning }
+        if n.contains("hyper") { return .hyper }
+        if n.contains("pony") { return .pony }
+        if n.contains("noob") { return .noobai }
+        if n.contains("illustri") || n.contains("wai") { return .illustrious }
+        return .base
+    }
+
+    var tag: String {
+        switch self {
+        case .base: "sdxl"; case .illustrious: "illustrious"; case .noobai: "noobai"
+        case .pony: "pony"; case .turbo: "turbo"; case .lightning: "lightning"; case .hyper: "hyper"
+        }
+    }
+    var steps: Int {
+        switch self {
+        case .base: 28; case .illustrious: 26; case .noobai: 30; case .pony: 25
+        case .turbo: 4; case .lightning: 6; case .hyper: 6
+        }
+    }
+    var cfg: Double {
+        switch self {
+        case .base: 6.0; case .illustrious: 5.0; case .noobai: 4.5; case .pony: 7.0
+        case .turbo: 0.0; case .lightning: 0.0; case .hyper: 1.0
+        }
+    }
+    /// A light default negative for the CFG-using variants; empty for distilled
+    /// (CFG≈0 makes the negative encoder a no-op, so sending one is pointless).
+    var negative: String {
+        switch self {
+        case .turbo, .lightning, .hyper: ""
+        default: "lowres, bad anatomy, bad hands, worst quality, low quality, jpeg artifacts, watermark, signature"
+        }
+    }
+    var note: String {
+        switch self {
+        case .base: "SDXL · your download"
+        case .illustrious: "SDXL (Illustrious) · anime · your download"
+        case .noobai: "SDXL (NoobAI) · anime · your download"
+        case .pony: "SDXL (Pony) · needs score tags · your download"
+        case .turbo: "SDXL Turbo · fast (4 steps) · your download"
+        case .lightning: "SDXL Lightning · fast · your download"
+        case .hyper: "Hyper-SDXL · fast · your download"
+        }
+    }
 }
 
 /// Local text-to-image for Story illustrations. Runs `generate_image.py` (mflux /
@@ -84,18 +177,16 @@ final class ImageGenService {
         return false
     }
 
-    /// FLUX image models found in the HF cache that AREN'T one of the built-in presets
-    /// — so a user's own downloaded FLUX model is still selectable. Restricted to
-    /// **FLUX** specifically because the engine (mflux) only runs FLUX: it detects a
-    /// diffusers layout (`model_index.json` / a `transformer/` folder) AND confirms the
-    /// family is FLUX (repo name or the pipeline class in `model_index.json` mentions
-    /// "flux"). This deliberately skips chat LLMs (no diffusers layout) *and* non-FLUX
-    /// image models like SDXL/SD (`StableDiffusionXLPipeline`) that mflux can't load —
-    /// offering one would only fail at generation time. `baseModel`/`steps` are inferred
-    /// from the repo name (dev vs schnell).
+    /// Image models (FLUX, SDXL, or SD 1.5/2.x) found in the HF cache that AREN'T a
+    /// built-in preset — so a user's own downloaded image model is selectable and
+    /// routed to the right engine. Detects a **diffusers layout** (`unet/` or
+    /// `transformer/`, classified via `model_index.json` + folder markers), so chat
+    /// LLMs (none of those) never appear. Video models (WAN/SVD/LTX) and single-file
+    /// checkpoints (no diffusers dir) are skipped — no engine for them yet.
     nonisolated func downloadedNonPresetImageModels() -> [ImageModel] {
         let presetRepos = Set(ImageModel.presets.map(\.repo))
         let fm = FileManager.default
+        var seen = Set<String>()
         var out: [ImageModel] = []
         for base in [PathResolver.hfHome, PathResolver.hfHome.appendingPathComponent("hub")] {
             guard let dirs = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) else { continue }
@@ -103,29 +194,63 @@ final class ImageGenService {
                 let repo = d.lastPathComponent
                     .replacingOccurrences(of: "models--", with: "")
                     .replacingOccurrences(of: "--", with: "/")
-                if presetRepos.contains(repo) { continue }
-                guard let snap = (try? fm.contentsOfDirectory(
-                    at: d.appendingPathComponent("snapshots"), includingPropertiesForKeys: nil))?.first else { continue }
-                let isDiffusers = fm.fileExists(atPath: snap.appendingPathComponent("model_index.json").path)
-                    || fm.fileExists(atPath: snap.appendingPathComponent("transformer").path)
-                guard isDiffusers else { continue }
-                // Confirm it's FLUX — the only family mflux can run. Repo name is the
-                // fast path; otherwise peek at the pipeline class in model_index.json.
-                var isFlux = repo.lowercased().contains("flux")
-                if !isFlux,
-                   let data = try? Data(contentsOf: snap.appendingPathComponent("model_index.json")),
-                   let s = String(data: data, encoding: .utf8) {
-                    isFlux = s.lowercased().contains("flux")
+                if presetRepos.contains(repo) || seen.contains(repo) { continue }
+                guard let snap = Self.snapshot(in: d),
+                      let family = Self.classifyDiffusers(atSnapshot: snap, repo: repo) else { continue }
+                seen.insert(repo)
+                switch family {
+                case .flux:
+                    let nl = repo.lowercased()
+                    let dev = nl.contains("dev") || nl.contains("kontext") || nl.contains("krea")
+                    let short = repo.split(separator: "/").last.map(String.init) ?? repo
+                    out.append(.init(repo: repo, name: short, baseModel: dev ? "dev" : "schnell",
+                                     steps: dev ? 20 : 4, note: "FLUX · your download"))
+                case .sdxl, .sd:
+                    out.append(.sdxl(repo: repo, family: family))
                 }
-                guard isFlux else { continue }
-                let nl = repo.lowercased()
-                let dev = nl.contains("dev") || nl.contains("kontext") || nl.contains("krea")
-                let short = repo.split(separator: "/").last.map(String.init) ?? repo
-                out.append(.init(repo: repo, name: short, baseModel: dev ? "dev" : "schnell",
-                                 steps: dev ? 20 : 4, note: "Your download"))
             }
         }
         return out
+    }
+
+    /// The (first) snapshot directory inside a cached `models--…` dir, or nil.
+    nonisolated static func snapshot(in modelDir: URL) -> URL? {
+        (try? FileManager.default.contentsOfDirectory(
+            at: modelDir.appendingPathComponent("snapshots"), includingPropertiesForKeys: nil))?
+            .first { $0.hasDirectoryPath }
+    }
+
+    /// Classify a cached model by image-engine family (FLUX / SDXL / SD), or nil if
+    /// it's not a runnable image model (a chat LLM, a video model, an SD3/other
+    /// transformer we can't run, or a single-file checkpoint). Reads the
+    /// `model_index.json` pipeline class first, then falls back to folder markers
+    /// (`unet/` + `text_encoder_2/` = SDXL; `unet/` alone = SD; `transformer/` = FLUX).
+    nonisolated static func classifyDiffusers(atSnapshot snap: URL, repo: String) -> ImageModelFamily? {
+        let fm = FileManager.default
+        let hasTransformer = fm.fileExists(atPath: snap.appendingPathComponent("transformer").path)
+        let hasUNet = fm.fileExists(atPath: snap.appendingPathComponent("unet").path)
+        let hasTE2 = fm.fileExists(atPath: snap.appendingPathComponent("text_encoder_2").path)
+        guard hasTransformer || hasUNet else { return nil }   // not a diffusers image model
+        let cls = (try? String(contentsOf: snap.appendingPathComponent("model_index.json"),
+                               encoding: .utf8))?.lowercased() ?? ""
+        let nl = repo.lowercased()
+        // Video diffusers models exist but we can't run them.
+        if ["wan", "svd", "stable-video", "ltx", "cogvideo", "hunyuanvideo", "mochi"]
+            .contains(where: { nl.contains($0) }) { return nil }
+        if cls.contains("fluxpipeline") || (hasTransformer && nl.contains("flux")) { return .flux }
+        if cls.contains("stablediffusionxlpipeline") || (hasUNet && hasTE2) { return .sdxl }
+        if cls.contains("stablediffusionpipeline") || (hasUNet && !hasTE2) { return .sd }
+        return nil   // e.g. SD3 (transformer, non-FLUX) — no engine yet
+    }
+
+    /// Resolve the local diffusers snapshot directory for a downloaded repo — the
+    /// SDXL/SD engine loads from a path, not a repo id. nil if not on disk.
+    nonisolated func snapshotDir(for repo: String) -> URL? {
+        let safe = "models--" + repo.replacingOccurrences(of: "/", with: "--")
+        for base in [PathResolver.hfHome, PathResolver.hfHome.appendingPathComponent("hub")] {
+            if let snap = Self.snapshot(in: base.appendingPathComponent(safe)) { return snap }
+        }
+        return nil
     }
 
     // MARK: - Install gate
@@ -140,18 +265,27 @@ final class ImageGenService {
     // MARK: - Generate
 
     /// Render a batch, returning the absolute paths actually written (a failed image
-    /// is skipped, not fatal — the rest of the chapter still gets illustrated). Steps
-    /// stay at 4 (FLUX.1-schnell is timestep-distilled). Serialized: a second call
-    /// while one is running returns `[]` rather than loading a second FLUX in parallel.
+    /// is skipped, not fatal — the rest of the chapter still gets illustrated).
+    /// Serialized: a second call while one is running returns `[]` rather than loading
+    /// a second model in parallel.
+    ///
+    /// Routes on `family`: **FLUX** → `generate_image.py` (mflux, guidance-distilled,
+    /// so CFG/negative are ignored); **SDXL/SD** → `sdxl_generate.py` (vendored MLX
+    /// Stable Diffusion, which loads the model's LOCAL diffusers dir and honors CFG +
+    /// negative). For SDXL/SD, `model` is a repo id we resolve to its cache snapshot
+    /// dir — unlike FLUX there's no lazy auto-download, so if it isn't on disk this
+    /// fails cleanly (the user downloads it from the Models tab first).
     ///
     /// **Cancellation-aware:** if the awaiting Task is cancelled (Story `stop()`,
-    /// switching stories, deinit), the FLUX subprocess is terminated instead of
-    /// running to completion in the background. Returns whatever was saved before the
-    /// cancel; the caller discards/cleans those on the supersede path.
+    /// switching stories, deinit), the subprocess is terminated instead of running to
+    /// completion in the background. Returns whatever was saved before the cancel.
     func generate(_ requests: [Request],
+                  family: ImageModelFamily = .flux,
                   model: String = ImageGenService.defaultModel,
                   baseModel: String = ImageGenService.defaultBaseModel,
                   steps: Int = 4,
+                  cfg: Double = 1.0,
+                  negative: String = "",
                   width: Int = 1024, height: Int = 768) async -> [String] {
         guard !requests.isEmpty else { return [] }
         guard progress == nil else {
@@ -159,9 +293,21 @@ final class ImageGenService {
             return []
         }
         guard let python = PythonRuntime.shared.pythonURL else { return [] }
-        let helper = PathResolver.helpersDir.appendingPathComponent("generate_image.py")
+        let helper = PathResolver.helpersDir.appendingPathComponent(family.engineHelper)
         guard FileManager.default.fileExists(atPath: helper.path) else {
-            Log.error("generate_image.py missing — runtime not fully bootstrapped", .app)
+            Log.error("\(family.engineHelper) missing — runtime not fully bootstrapped", .app)
+            return []
+        }
+
+        // FLUX loads from a repo id (mflux fetches it lazily); SDXL/SD load from a
+        // local diffusers dir that must already be on disk.
+        let modelArg: String
+        if family == .flux {
+            modelArg = model
+        } else if let dir = snapshotDir(for: model) {
+            modelArg = dir.path
+        } else {
+            Log.error("SDXL/SD model not downloaded — can't resolve local dir for \(model)", .app)
             return []
         }
 
@@ -184,10 +330,15 @@ final class ImageGenService {
         progress = Progress(done: 0, total: requests.count, loadingModel: true)
         defer { progress = nil }
 
-        let args = [helper.path, "--prompts-json", listURL.path,
-                    "--model", model, "--base-model", baseModel,
+        var args = [helper.path, "--prompts-json", listURL.path,
+                    "--model", modelArg,
                     "--steps", String(steps), "--width", String(width),
                     "--height", String(height), "--metadata"]
+        if family == .flux {
+            args += ["--base-model", baseModel]
+        } else {
+            args += ["--cfg", String(cfg), "--negative", negative]
+        }
 
         // HF_HOME shares the model cache with the rest of the app. Pass the user's
         // HF token when they have one (mirrors DownloadService) — the default mirror

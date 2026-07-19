@@ -37,7 +37,12 @@ struct ImagineView: View {
     private var selectedModel: ImageModel {
         allModels.first { $0.repo == modelRepo } ?? ImageModel.default
     }
-    private var dims: (w: Int, h: Int) { Self.dims(aspect, resolution) }
+    /// FLUX honors the free long-edge resolution; SDXL/SD are trained at ~1 MP, so
+    /// we snap them to the standard SDXL aspect bucket (off-bucket sizes cause
+    /// duplication/artifacts) and the resolution picker is a no-op for them.
+    private var dims: (w: Int, h: Int) {
+        selectedModel.family == .flux ? Self.dims(aspect, resolution) : Self.sdxlBucket(aspect)
+    }
 
     enum Aspect: String, CaseIterable, Identifiable {
         case square, landscape, portrait, wide, tall
@@ -77,6 +82,18 @@ struct ImagineView: View {
         return rw >= rh
             ? (Int(long), round16(long * Double(rh) / Double(rw)))
             : (round16(long * Double(rw) / Double(rh)), Int(long))
+    }
+
+    /// The standard SDXL ~1 MP bucket for an aspect. SDXL is trained on these sizes;
+    /// generating off-bucket (or below 1 MP) causes duplication/warping artifacts.
+    static func sdxlBucket(_ a: Aspect) -> (w: Int, h: Int) {
+        switch a {
+        case .square:    (1024, 1024)
+        case .landscape: (1152, 896)
+        case .portrait:  (896, 1152)
+        case .wide:      (1344, 768)
+        case .tall:      (768, 1344)
+        }
     }
 
     var body: some View {
@@ -263,8 +280,8 @@ struct ImagineView: View {
         }
         task = Task {
             let saved = await ImageGenService.shared.generate(
-                requests, model: model.repo, baseModel: model.baseModel,
-                steps: model.steps, width: w, height: h)
+                requests, family: model.family, model: model.repo, baseModel: model.baseModel,
+                steps: model.steps, cfg: model.cfg, negative: model.negative, width: w, height: h)
             if Task.isCancelled {
                 for p in saved { try? FileManager.default.removeItem(at: URL(fileURLWithPath: p)) }
             } else {

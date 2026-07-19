@@ -731,6 +731,37 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-19 (cont.) — SDXL / Stable Diffusion support (second image engine) + image-gen capability in Models tab.**
+  Added a **second local image engine** so the user's downloaded **SDXL** (and SD 1.5/2.x)
+  models generate in Imagine, alongside FLUX (mflux). Engine = a **vendored copy of Apple's
+  mlx-examples `stable_diffusion`** package at `Resources/helpers/sdxl_vendor/` (MIT), driven by a
+  new `sdxl_generate.py` helper (same JSON-event protocol as `generate_image.py`). Two local
+  patches (search `LLMPro:` in the vendor): `model_io.py` loads weights from a **local diffusers
+  dir** (not just a hardcoded HF repo) with a filename-variant fallback + `is_sdxl()` auto-detect;
+  `__init__.py` derives SDXL `add_time_ids` from the real latent size (upstream hardcodes 512 →
+  bad 1024² framing). The vendored VAE already runs fp32 (sidesteps the SDXL fp16→black-image bug).
+  **No new pip deps** — mlx/numpy/Pillow/regex/huggingface_hub are already in the venv;
+  `installImageGen` now also lists pillow+regex and is described as "FLUX + Stable Diffusion".
+  **Swift routing:** `ImageModelFamily` (flux/sdxl/sd) → `ImageGenService.generate(family:…)`
+  routes FLUX→`generate_image.py`, SDXL/SD→`sdxl_generate.py` (with `--cfg`/`--negative`, and the
+  model resolved to its local snapshot dir via `snapshotDir(for:)`). `SDXLVariant` picks
+  step/CFG/negative defaults by name (base 28/6, Illustrious 26/5, Pony 25/7, Turbo/Lightning/Hyper
+  4-6/≈0/no-neg). `downloadedNonPresetImageModels()` now classifies family via
+  `classifyDiffusers()` (model_index `_class_name` + `unet/`+`text_encoder_2/` markers) and includes
+  SDXL/SD, so the Imagine picker's "On your Mac" lists them. Imagine snaps SDXL to ~1 MP buckets
+  (`sdxlBucket`). **Models tab (pre-download):** `HFModel.imageKind` (flux/sdxl/sd/imageOther/video)
+  + `canGenerateImages` drive a capability **badge** on search cards ("SDXL image · Imagine") and a
+  **banner** in the detail sheet ("download → use in Imagine" / "video · can't run"); the
+  convert-to-LLM row is hidden for image models. **VALIDATED:** `sdxl_generate.py` ran standalone
+  on the user's real `John6666/fabled-illusion-…-sdxl` (diffusers SDXL, 6.5 GB) → coherent, on-prompt
+  1024² image (not black). Single-file SDXL (`WAI-…-SDXL` .safetensors) is **not yet supported**
+  (needs a diffusers conversion step) — the scan skips it (no diffusers dir). **Live-verified in the
+  app:** the fabled-illusion SDXL appears in the Imagine picker's "On your Mac" and generated a
+  coherent Japanese-garden image at the 1344×768 SDXL bucket (family-aware sizing); Models-tab
+  search shows "SDXL image · Imagine" on every Juggernaut-XL diffusers result and "image/video ·
+  can't run here" on the GGUF one; the detail sheet shows the "SDXL image model — generate in
+  Imagine" banner and (new) hides Teach/Chat for image models. Zero ERROR/FAULT, no crash.
+
 - **Session 2026-07-19 (cont.) — Imagine: picker shows your downloaded image models.**
   Reworked the Imagine model menu into two sections — **"On your Mac"** (image models
   already in the HF cache) and **"Download & use"** (presets not yet fetched) — so the picker

@@ -40,13 +40,15 @@ struct ModelDetailSheet: View {
                     Text(model.repoID).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     metaRow
                     if model.isGGUF { ggufBanner }
+                    else if model.imageKind != .none { imageBanner }
                     sizeCard
                     if loading { ProgressView("Loading details…").frame(maxWidth: .infinity) }
                     if let error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
                     if let detail { tagsSection(detail) }
                     // `mlx_lm convert` reads HF safetensors, not GGUF — the GGUF
                     // banner already points to Import GGUF, so hide this for GGUF.
-                    if !model.isMLXCommunity && !model.isGGUF { convertRow }
+                    // Image models aren't LLMs either, so hide the convert-to-LLM row.
+                    if !model.isMLXCommunity && !model.isGGUF && model.imageKind == .none { convertRow }
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -90,6 +92,51 @@ struct ModelDetailSheet: View {
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder((convertible ? Color.brand : Color.orange).opacity(0.35)))
+    }
+
+    /// Capability banner for a non-GGUF image model: says whether LLMPro can run it
+    /// and where (the Imagine tab). Answers "does this model do image generation?"
+    /// *before* the user downloads it, and heads off the "why isn't my image model
+    /// under chat models?" confusion (image models make pictures, not text).
+    @ViewBuilder
+    private var imageBanner: some View {
+        let (title, body, icon): (String, String, String) = {
+            switch model.imageKind {
+            case .flux:
+                ("FLUX image model — generate in the Imagine tab",
+                 "Download it, then pick it in **Imagine** (it can also draw Story illustrations). Runs locally on the FLUX engine. It won’t appear under chat models — it makes **images, not text**.",
+                 "photo.artframe")
+            case .sdxl:
+                ("SDXL image model — generate in the Imagine tab",
+                 "Download it, then pick it in **Imagine** under “On your Mac”. Runs on LLMPro’s local Stable Diffusion engine. It won’t appear under chat models — it makes **images, not text**.",
+                 "photo.artframe")
+            case .sd:
+                ("Stable Diffusion image model — generate in Imagine",
+                 "Download it, then pick it in **Imagine**. Runs on LLMPro’s local Stable Diffusion engine (images, not text).",
+                 "photo.artframe")
+            case .imageOther:
+                ("Image model — may work in Imagine",
+                 "This is a text-to-image model whose family LLMPro doesn’t specifically recognize. If it’s a **diffusers**-layout SDXL / SD / FLUX model it’ll show up in Imagine after download; otherwise it may not run.",
+                 "photo")
+            case .video:
+                ("Video model — can’t run in LLMPro",
+                 "LLMPro generates **images** (FLUX / Stable Diffusion), not video. There’s no way to run this here.",
+                 "exclamationmark.triangle.fill")
+            case .none:
+                ("", "", "")
+            }
+        }()
+        let color: Color = model.imageKind == .video ? .orange
+            : (model.canGenerateImages ? Color.brand : .gray)
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: icon).font(.subheadline.weight(.semibold)).foregroundStyle(color)
+            Text(.init(body)).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(color.opacity(0.35)))
     }
 
     private var metaRow: some View {
@@ -218,6 +265,31 @@ struct ModelDetailSheet: View {
             .buttonStyle(.bordered)
             .disabled(!runtime.isReady)
             .help("Downloads the GGUF files to LLMPro's cache. They won't appear in your models.")
+        } else if model.imageKind != .none {
+            // An image model isn't an LLM — no Teach/Chat. Runnable families (FLUX/
+            // SDXL/SD) get a normal download (then picked in Imagine); a video or
+            // unrecognized model gets a muted "download anyway".
+            if model.canGenerateImages {
+                Button {
+                    Task { await DownloadService.shared.download(repoID: model.repoID) }
+                    dismiss()
+                } label: {
+                    Label("Download — then use in Imagine", systemImage: "arrow.down.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent).tint(.brand)
+                .keyboardShortcut("d", modifiers: [.command])
+                .disabled(!runtime.isReady)
+            } else {
+                Button {
+                    Task { await DownloadService.shared.download(repoID: model.repoID) }
+                    dismiss()
+                } label: {
+                    Label("Download raw files anyway", systemImage: "arrow.down.circle").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered).disabled(!runtime.isReady)
+                .help("LLMPro can't run this kind of model here.")
+            }
         } else {
             HStack(spacing: 10) {
                 Button {

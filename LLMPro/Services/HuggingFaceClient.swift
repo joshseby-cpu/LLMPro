@@ -47,6 +47,40 @@ struct HFModel: Identifiable, Hashable, Sendable, Codable {
     /// A GGUF repo we can plausibly turn into a runnable MLX model (a language model,
     /// not image/video). The actual quant/arch check happens at convert time.
     var isConvertibleGGUF: Bool { isGGUF && !isImageOrVideo }
+
+    /// Fine-grained image-model classification, so the Models tab can tell the user —
+    /// *before downloading* — whether a model does image generation and whether LLMPro
+    /// can actually run it. Based on `pipeline_tag`, `tags`, and repo-name substrings.
+    /// `flux` runs via mflux; `sdxl`/`sd` run via the vendored MLX Stable Diffusion
+    /// engine; `video` can't run here; `imageOther` is a text-to-image model of an
+    /// unrecognized family (may or may not run). See `ImageModelFamily` for the
+    /// on-disk equivalent used once a model is downloaded.
+    enum ImageKind: String, Sendable { case flux, sdxl, sd, imageOther, video, none }
+
+    var imageKind: ImageKind {
+        let nameTags = (id + " " + (tags?.joined(separator: " ") ?? "")).lowercased()
+        let pt = pipeline_tag?.lowercased() ?? ""
+        if pt.contains("video")
+            || ["wan2", "wan-", "-wan", "svd", "stable-video", "ltx", "cogvideo", "hunyuanvideo", "mochi"]
+                .contains(where: { nameTags.contains($0) }) { return .video }
+        let isImage = pt == "text-to-image" || pt == "image-to-image"
+            || lowerTags.contains("text-to-image") || lowerTags.contains("stable-diffusion")
+            || (library_name?.lowercased() == "diffusers")
+        if nameTags.contains("flux") { return .flux }
+        if ["sdxl", "stable-diffusion-xl", "illustri", "pony", "noob", "animagine", "juggernaut", "dreamshaper"]
+            .contains(where: { nameTags.contains($0) }) { return .sdxl }
+        if isImage && nameTags.contains("stable-diffusion") { return .sd }
+        if isImage { return .imageOther }
+        return .none
+    }
+
+    /// True if this is an image-generation model of a family LLMPro can run *after
+    /// download* — FLUX (mflux) or SDXL/SD (MLX Stable Diffusion). A GGUF image model
+    /// can't run (our engines need safetensors/diffusers), and video can't run.
+    var canGenerateImages: Bool {
+        guard !isGGUF else { return false }
+        switch imageKind { case .flux, .sdxl, .sd: return true; default: return false }
+    }
 }
 
 struct HFFile: Sendable, Codable, Hashable {

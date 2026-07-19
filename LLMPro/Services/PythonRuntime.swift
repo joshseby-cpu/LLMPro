@@ -418,20 +418,23 @@ final class PythonRuntime {
         }
     }
 
-    /// Install the image generator on-demand. `mflux==0.18.0` caps `mlx<0.32`, which
-    /// the current venv (mlx 0.31.x) already satisfies, and its other deps (torch,
-    /// transformers, safetensors, sentencepiece) are already present from mlx-lm —
-    /// so this is a small metadata-only install, NOT a multi-GB torch pull. The
-    /// FLUX weights themselves download lazily on first image generation. Pinned so
-    /// a future mflux that bumps its mlx floor can't silently break the venv.
+    /// Install the image generator on-demand. This enables BOTH local image engines:
+    /// **FLUX** via `mflux==0.18.0` (caps `mlx<0.32`, which the current venv already
+    /// satisfies; its other deps — torch, transformers, safetensors, sentencepiece —
+    /// are already present from mlx-lm, so this is a small metadata-only install, NOT
+    /// a multi-GB torch pull), and **SDXL / SD** via the vendored `sdxl_vendor`
+    /// package (copied by installHelpers), which only needs `mlx`, `numpy`,
+    /// `huggingface_hub` (all base) plus `Pillow` + `regex`. `mflux` pulls Pillow; we
+    /// also list Pillow/regex explicitly so the SDXL engine works even if a future
+    /// mflux drops them. Weights for either engine download lazily on first use.
     func installImageGen(progress: @escaping @MainActor (String) -> Void) async -> Bool {
         do {
             let uv = try await resolveUV()
-            await MainActor.run { progress("Installing the image generator (mflux)…") }
+            await MainActor.run { progress("Installing the image generator (FLUX + Stable Diffusion)…") }
             try await runUV(uv, [
                 "pip", "install",
                 "--python", PathResolver.venvPython.path,
-                "mflux==0.18.0"
+                "mflux==0.18.0", "pillow", "regex"
             ])
             return true
         } catch {
@@ -447,7 +450,7 @@ final class PythonRuntime {
                      "merge_models", "add_expert", "manage_experts",
                      "mem_probe", "model_memory", "profile_experts", "mlx_run",
                      "inspect_attention", "gguf_to_mlx", "diffusion_generate", "diffusion_server",
-                     "generate_image"] {
+                     "generate_image", "sdxl_generate"] {
             guard let resourceURL = Bundle.main.url(forResource: name, withExtension: "py", subdirectory: "helpers")
                                   ?? Bundle.main.url(forResource: name, withExtension: "py")
             else { continue }
@@ -456,6 +459,20 @@ final class PythonRuntime {
             try FileManager.default.copyItem(at: resourceURL, to: dest)
         }
         try installDiffusionVendor(into: destDir)
+        try installSDXLVendor(into: destDir)
+    }
+
+    /// Copy the vendored MLX Stable Diffusion package out of the app bundle into
+    /// `runtime/helpers/sdxl_vendor/`, preserving its directory structure.
+    /// `sdxl_generate.py` puts `sdxl_vendor/` on `sys.path` and imports the
+    /// `stable_diffusion` package from it, so the subtree must sit next to the
+    /// helper with its package layout intact. Same refresh-on-relaunch behaviour as
+    /// `installDiffusionVendor` — blow away any stale copy first.
+    private func installSDXLVendor(into destDir: URL) throws {
+        guard let src = Bundle.main.url(forResource: "sdxl_vendor", withExtension: nil) else { return }
+        let dest = destDir.appendingPathComponent("sdxl_vendor", isDirectory: true)
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.copyItem(at: src, to: dest)
     }
 
     /// Copy the vendored DiffusionGemma inference subtree out of the app bundle

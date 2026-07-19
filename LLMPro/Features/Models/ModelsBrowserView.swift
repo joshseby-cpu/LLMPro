@@ -706,11 +706,35 @@ private struct ModelResultCard: View {
             if let d = model.downloads {
                 metaChip(d.formatted(.number.notation(.compactName)), systemImage: "arrow.down.circle")
             }
+            if !model.isGGUF { imageChip }
             if !model.isGGUF && tooBig {
                 Label("Too big for your RAM", systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2).foregroundStyle(.orange)
             }
         }
+    }
+
+    /// Tells the user, before downloading, whether this is an image-generation model
+    /// and whether LLMPro can run it: FLUX/SDXL/SD → "use in Imagine" (brand); a video
+    /// or unrecognized image model → a muted "can't run" / "image model" note.
+    @ViewBuilder
+    private var imageChip: some View {
+        switch model.imageKind {
+        case .flux: imageBadge("FLUX image · Imagine", color: .brand)
+        case .sdxl: imageBadge("SDXL image · Imagine", color: .brand)
+        case .sd:   imageBadge("SD image · Imagine", color: .brand)
+        case .imageOther:
+            Label("image model", systemImage: "photo").font(.caption2).foregroundStyle(.secondary)
+        case .video:
+            Label("video · can’t run here", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2).foregroundStyle(.orange)
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private func imageBadge(_ text: String, color: Color) -> some View {
+        Label(text, systemImage: "photo.artframe").font(.caption2.weight(.medium)).foregroundStyle(color)
     }
 
     private func metaChip(_ text: String, systemImage: String) -> some View {

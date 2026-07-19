@@ -1080,6 +1080,58 @@ the `saved` paths regardless of exit code (it reads the drained stdout before
 `runCapturing`'s nonzero-exit throw). Story writing **never blocks** on this helper —
 a missing model just means no images.
 
+### `sdxl_generate.py` — local text-to-image for **SDXL / SD 1.5–2.x** (the second image engine)
+
+[`sdxl_generate.py`](../LLMPro/Resources/helpers/sdxl_generate.py) is the SDXL/SD
+counterpart to `generate_image.py` — same JSON-event protocol, but it drives a
+**vendored copy of Apple's mlx-examples `stable_diffusion` package** (MLX-native, NOT
+mlx-lm, NOT mflux — mflux only does FLUX). `ImageGenService.generate(family:…)` routes
+here whenever `family` is `.sdxl` or `.sd`.
+
+**Vendored engine: `sdxl_vendor/` (copied, NOT pip-installed).**
+[`LLMPro/Resources/helpers/sdxl_vendor/stable_diffusion/`](../LLMPro/Resources/helpers/sdxl_vendor/)
+is the `stable_diffusion` package from
+[`ml-explore/mlx-examples`](https://github.com/ml-explore/mlx-examples) (MIT, commit
+796f5b5, 2026-04-06). Bundled as a `type: folder` reference in `project.yml` and copied
+out to `runtime/helpers/sdxl_vendor/` by `PythonRuntime.installSDXLVendor` (mirrors
+`diffusion_vendor`). `sdxl_generate.py` puts that dir on `sys.path` and does
+`from stable_diffusion import StableDiffusionXL, StableDiffusion`. **No extra pip deps** —
+it needs only `mlx`, `numpy`, `Pillow`, `regex`, `huggingface_hub`, all present after the
+`installImageGen` add-on. **Two local patches** (grep `LLMPro:` in the vendor):
+- `model_io.py` — `_file_map`/`_resolve`/`is_sdxl` let the loader read weights from a
+  **local diffusers directory** (not just a hardcoded HF repo id), with an fp16/fp32
+  filename-variant fallback. SDXL is auto-detected by a `text_encoder_2/` folder.
+- `stable_diffusion/__init__.py` — SDXL `generate_latents` derives the `add_time_ids`
+  micro-conditioning from the real `latent_size` (upstream hardcodes 512 → wrong 1024²
+  framing). The VAE already runs **fp32** upstream, which sidesteps the SDXL
+  fp16-VAE → solid-black-image bug.
+
+CLI. `--model` is a **local diffusers dir** (the HF-cache snapshot dir, resolved by
+`ImageGenService.snapshotDir(for:)`) — there is no lazy auto-download like FLUX:
+```
+python <helpers>/sdxl_generate.py --prompts-json <file.jsonl> \
+  --model /…/hf/models--owner--repo/snapshots/<rev>/ \
+  --steps 28 --cfg 6.0 --negative "lowres, bad anatomy, …" --width 1024 --height 1024 --metadata
+#   JSONL lines identical to generate_image.py: {"prompt","output","seed"}
+```
+Step/CFG/negative come from Swift (`SDXLVariant`, by checkpoint name): base 28/6.0,
+Illustrious 26/5.0, NoobAI 30/4.5, Pony 25/7.0 (needs `score_9…` prompt + CLIP-skip-2),
+Turbo 4/0.0, Lightning 6/0.0, Hyper 6/1.0; distilled variants send **no** negative
+(CFG≈0 makes it a no-op). SDXL sizes are snapped to ~1 MP buckets (`ImagineView.sdxlBucket`).
+
+JSON events add a per-step `stage:"generating"` with `step`/`steps` (a slow 20–60 s
+SDXL denoise stays visibly alive without flipping the UI back to "loading"); otherwise
+identical to `generate_image.py` (`start`/`loading`/`heartbeat`/`progress`(saved)/`done`/`error`).
+
+**Detection (`ImageGenService.classifyDiffusers` / `HFModel.imageKind`).** A downloaded
+model is an image model iff it has a diffusers layout (`unet/` or `transformer/`).
+Family: `model_index.json` `_class_name` (`StableDiffusionXLPipeline`→sdxl,
+`StableDiffusionPipeline`→sd, `FluxPipeline`→flux) with folder-marker fallback
+(`unet/`+`text_encoder_2/`→sdxl; `unet/` alone→sd; `transformer/`+"flux"→flux). Video
+models (WAN/SVD/LTX) and single-file `.safetensors` checkpoints are **not** runnable
+(the latter would need a diffusers conversion — not yet built). Pre-download, `HFModel`
+classifies from `pipeline_tag`/`tags`/name substrings into `flux|sdxl|sd|imageOther|video`.
+
 ---
 
 ## 4. HuggingFace Hub API

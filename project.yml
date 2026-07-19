@@ -29,6 +29,7 @@ targets:
         excludes:
           - "Resources/uv-aarch64-apple-darwin"
           - "Resources/helpers/diffusion_vendor"
+          - "Resources/helpers/sdxl_vendor"
       - path: LLMPro/Resources/uv-aarch64-apple-darwin
         type: file
         optional: true
@@ -38,6 +39,11 @@ targets:
       # out, and diffusion_generate.py imports optiq.vlm.diffusion_gemma from a
       # sibling diffusion_vendor/ — a flattened group would break those imports).
       - path: LLMPro/Resources/helpers/diffusion_vendor
+        type: folder
+      # Same pattern for the vendored MLX Stable Diffusion (SD/SDXL) engine:
+      # sdxl_generate.py imports `stable_diffusion` from a sibling sdxl_vendor/,
+      # so its package directory structure must be preserved in the bundle.
+      - path: LLMPro/Resources/helpers/sdxl_vendor
         type: folder
     info:
       path: LLMPro/Info.plist
