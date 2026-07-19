@@ -731,6 +731,20 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-19 (cont.) — README refresh (text) for the creative surfaces.**
+  Updated `README.md` to reflect what the app has grown into: broadened the intro (local-AI studio,
+  not just fine-tuning), rewrote the **Models** blurb (capability lines + a separate Image-models
+  section + rename/pin/delete + pre-download image-capability), expanded the "More sections" note to
+  cover **Imagine** (FLUX + SDXL/SD, diffusers + single-file), **Story** (illustrated writing),
+  **Chat**, and the DPO "teach by preference" loop, added those to **Features at a glance**, and fixed
+  the stale **project layout** (added Story/Code/Imagine/Inspect folders + the new helpers/vendored
+  engines). **Screenshots not refreshed** — this environment can't capture them (the shell has no
+  Screen Recording permission and the native ⌘⇧4 shortcut is blocked by the automation allowlist);
+  `docs/screenshots/models.png` in particular is now older than its caption. Note: the Imagine gallery
+  was emptied during this session's testing (test images removed externally; the store then pruned the
+  missing entries) — **not** a bug in the shipped code (`ImageGenService` never touches `imagesDir`;
+  `ImagineStore.clearAll()` has no callers).
+
 - **Session 2026-07-19 (cont.) — Manage image models like LLMs (size · pin · rename · Finder · delete).**
   The "Image models" rows in the Models tab now have the same management affordances as the LLM rows
   (minus the LLM-only Teach/Chat/convert/export): **disk size** in the row + a section **Total**, a

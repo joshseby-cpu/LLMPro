@@ -1,13 +1,18 @@
 # LLMPro
 
-A native macOS app for fine-tuning local LLMs on Apple Silicon. The Mac equivalent
-of [Unsloth Studio](https://github.com/unslothai/unsloth), built on Apple's
-[MLX framework](https://github.com/ml-explore/mlx).
+A native macOS app for running local AI on Apple Silicon — fine-tune LLMs, chat
+with them, write with them, code with them, and generate images, all fully offline.
+Built on Apple's [MLX framework](https://github.com/ml-explore/mlx); the fine-tuning
+side is the Mac equivalent of [Unsloth Studio](https://github.com/unslothai/unsloth).
 
-**Goal**: take a general-purpose LLM (Llama 3.2, Qwen 2.5 Instruct, Mistral, Gemma)
-and teach it to code via LoRA fine-tuning, then run it locally via Ollama or LM
-Studio. Most popular open models are general assistants out of the box — LLMPro
-specializes them into coding assistants you actually use.
+**Core loop**: take a general-purpose LLM (Llama 3.2, Qwen, Mistral, Gemma) and teach
+it to code via LoRA fine-tuning, then run it locally via Ollama or LM Studio. Most
+popular open models are general assistants out of the box — LLMPro specializes them
+into coding assistants you actually use.
+
+Around that loop it's grown into a full local-AI studio: a dedicated **Chat**, an
+illustrated **Story** writer, an agentic **Code** IDE, and an **Imagine** text-to-image
+tab (FLUX **and** Stable Diffusion / SDXL) — none of which touch the cloud.
 
 ---
 
@@ -33,8 +38,12 @@ free memory, and recent training runs.
 ![Home](docs/screenshots/home.png)
 
 ### Models
-Search HuggingFace (or filter to `mlx-community`) and manage the models already on
-your Mac, with per-model disk usage.
+Search HuggingFace (or filter to `mlx-community`) and manage everything already on
+your Mac in one place. Each model shows **what it supports** — LLMs list Chat ·
+Fine-tune · Code · Story · Practice; a separate **Image models** section lists your
+downloaded FLUX/SDXL/SD models. Every model can be **renamed**, pinned, shown in
+Finder, and deleted (with a free-space readout). Before you download, cards tell you
+the size, whether it fits your RAM, and — for image models — whether LLMPro can run it.
 
 ![Models](docs/screenshots/models.png)
 
@@ -75,9 +84,14 @@ shows up as a brand-new model in your Models tab; the originals stay untouched.
 
 ![Fusion](docs/screenshots/fuse.png)
 
-> More sections — **Lessons** (dataset catalog + editor), **Try it out** (base-vs-
-> fine-tune arena), **Memory**, and **Save & Use** (export to Ollama / LM Studio) —
-> are covered in [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
+> **More sections** (not pictured): **Imagine** — local text-to-image with FLUX *or*
+> Stable Diffusion / SDXL, using your own downloaded checkpoints (diffusers **or**
+> single-file `.safetensors`), with a model picker, aspect/size controls, and a gallery;
+> **Story** — long-form creative writing with optional per-chapter AI illustrations;
+> **Chat** — a dedicated chat with saved conversations; **Lessons** (dataset catalog +
+> editor), **Try it out** (base-vs-fine-tune arena + 👍 preference collection that feeds
+> a DPO "teach by preference" loop), **Memory**, and **Save & Use** (export to Ollama /
+> LM Studio). All are traced through the code in [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 
 ---
 
@@ -157,8 +171,20 @@ For details: [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 - **Crash recovery**: orphaned jobs detected on launch via `job.json` sidecars.
 - **Model modify** (local-only): strip vision from VLMs, abliterate (uncensor)
   via refusal-direction projection.
-- **Local-model management**: delete with confirmation, total-disk display,
-  guard against deleting a model that's in active training.
+- **Model management**: rename (a safe display alias — files/IDs stay put), pin
+  favorites, delete with confirmation + free-space readout, total-disk display,
+  guard against deleting a model that's in active training. Image models get the
+  same treatment in their own section.
+- **Imagine (local text-to-image)**: generate images fully offline via two engines —
+  **FLUX** (mflux) and **Stable Diffusion / SDXL** (a vendored MLX Stable Diffusion).
+  Runs your own downloaded checkpoints, whether **diffusers-layout** or **single-file
+  `.safetensors`** (auto-converted on first use), with variant-aware defaults
+  (Illustrious / Pony / Turbo / Lightning), SDXL aspect buckets, and a persistent gallery.
+- **Story**: long-form creative writing that stays coherent across chapters (rolling
+  summaries), with optional **per-chapter AI illustrations** in a consistent art style.
+- **Chat**: a dedicated single-model chat with saved conversation history.
+- **Teach by preference (DPO)**: 👍 the better answer in *Try it out* to collect
+  preference pairs; enough of them unlock a DPO fine-tune — a second way to teach.
 - **Save & Use**: adapter zip / fused safetensors / GGUF with one-click Ollama
   install and built-in Modelfile templates for Qwen / DeepSeek / Llama 3 / Phi /
   Mistral.
@@ -192,16 +218,22 @@ For the full annotated layout see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 │   ├── Services/                      ← Business logic — heart of the app
 │   ├── Features/                      ← One folder per sidebar tab
 │   │   ├── Dashboard/   (Home)
-│   │   ├── Models/
+│   │   ├── Models/      (models + image-model management)
 │   │   ├── Datasets/    (Lessons)
 │   │   ├── Training/    (Teach)
 │   │   ├── Monitor/     (Progress)
-│   │   ├── Chat/        (Try it out)
+│   │   ├── Chat/        (Chat + Try it out arena)
+│   │   ├── Story/       (illustrated creative writing)
+│   │   ├── Code/        (agentic coding IDE)
+│   │   ├── Imagine/     (local text-to-image: FLUX + SDXL/SD)
 │   │   ├── SelfImprove/ (Practice — recursive self-improvement loop)
+│   │   ├── Inspect/     (weights / attention / chain-of-thought)
 │   │   ├── Export/      (Save & Use)
 │   │   └── Settings/
 │   └── Resources/
-│       ├── helpers/                   ← Python helper scripts (JSON-event protocol)
+│       ├── helpers/                   ← Python helper scripts (JSON-event protocol),
+│       │                                incl. generate_image.py (FLUX) + sdxl_generate.py
+│       │                                + vendored diffusion_vendor/ and sdxl_vendor/
 │       ├── recipes/                   ← Coding fine-tune recipe presets
 │       └── Assets.xcassets/AppIcon.appiconset/
 └── Tests/LLMProTests/              ← empty for now — see STATE.md
