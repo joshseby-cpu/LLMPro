@@ -1,6 +1,33 @@
 import Foundation
 import Observation
 
+/// A selectable local text-to-image model (all ungated mflux mirrors, no HF token
+/// needed). `steps` differs by family: FLUX **schnell** is timestep-distilled (4
+/// steps); FLUX **dev** needs ~20 for its quality. `baseModel` is the architecture
+/// hint mflux needs for a mirror repo.
+struct ImageModel: Identifiable, Hashable, Sendable {
+    let repo: String
+    let name: String
+    let baseModel: String          // "schnell" | "dev"
+    let steps: Int
+    let note: String
+    var id: String { repo }
+
+    static let presets: [ImageModel] = [
+        .init(repo: "dhairyashil/FLUX.1-schnell-mflux-4bit", name: "FLUX.1 schnell — fast",
+              baseModel: "schnell", steps: 4, note: "Fastest · 4-bit · ~10 GB"),
+        .init(repo: "dhairyashil/FLUX.1-schnell-mflux-8bit", name: "FLUX.1 schnell — sharper",
+              baseModel: "schnell", steps: 4, note: "Sharper · 8-bit · ~18 GB"),
+        .init(repo: "dhairyashil/FLUX.1-dev-mflux-4bit", name: "FLUX.1 dev — higher quality",
+              baseModel: "dev", steps: 20, note: "Higher quality, slower (~20 steps) · 4-bit · ~10 GB"),
+        .init(repo: "dhairyashil/FLUX.1-dev-mflux-8bit", name: "FLUX.1 dev — best",
+              baseModel: "dev", steps: 20, note: "Best quality, slowest · 8-bit · ~18 GB"),
+    ]
+
+    static var `default`: ImageModel { presets[0] }
+    static func preset(repo: String) -> ImageModel { presets.first { $0.repo == repo } ?? .default }
+}
+
 /// Local text-to-image for Story illustrations. Runs `generate_image.py` (mflux /
 /// MLX FLUX) as a subprocess and parses its JSON-event stdout. A whole chapter's
 /// illustrations go through one `generate(_:)` call — the ~12B FLUX model loads
@@ -42,6 +69,65 @@ final class ImageGenService {
 
     var isBusy: Bool { progress != nil }
 
+    /// Whether a model repo's weights are already in the HF cache (so the picker can
+    /// show "Ready" vs a download-size hint). Presence-based — a partial/interrupted
+    /// download reads as present, which is fine: the next generate resumes it.
+    nonisolated func isModelDownloaded(_ repo: String) -> Bool {
+        let safe = "models--" + repo.replacingOccurrences(of: "/", with: "--")
+        let fm = FileManager.default
+        for base in [PathResolver.hfHome, PathResolver.hfHome.appendingPathComponent("hub")] {
+            let snaps = base.appendingPathComponent(safe).appendingPathComponent("snapshots")
+            if let entries = try? fm.contentsOfDirectory(atPath: snaps.path), !entries.isEmpty {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// FLUX image models found in the HF cache that AREN'T one of the built-in presets
+    /// — so a user's own downloaded FLUX model is still selectable. Restricted to
+    /// **FLUX** specifically because the engine (mflux) only runs FLUX: it detects a
+    /// diffusers layout (`model_index.json` / a `transformer/` folder) AND confirms the
+    /// family is FLUX (repo name or the pipeline class in `model_index.json` mentions
+    /// "flux"). This deliberately skips chat LLMs (no diffusers layout) *and* non-FLUX
+    /// image models like SDXL/SD (`StableDiffusionXLPipeline`) that mflux can't load —
+    /// offering one would only fail at generation time. `baseModel`/`steps` are inferred
+    /// from the repo name (dev vs schnell).
+    nonisolated func downloadedNonPresetImageModels() -> [ImageModel] {
+        let presetRepos = Set(ImageModel.presets.map(\.repo))
+        let fm = FileManager.default
+        var out: [ImageModel] = []
+        for base in [PathResolver.hfHome, PathResolver.hfHome.appendingPathComponent("hub")] {
+            guard let dirs = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) else { continue }
+            for d in dirs where d.lastPathComponent.hasPrefix("models--") {
+                let repo = d.lastPathComponent
+                    .replacingOccurrences(of: "models--", with: "")
+                    .replacingOccurrences(of: "--", with: "/")
+                if presetRepos.contains(repo) { continue }
+                guard let snap = (try? fm.contentsOfDirectory(
+                    at: d.appendingPathComponent("snapshots"), includingPropertiesForKeys: nil))?.first else { continue }
+                let isDiffusers = fm.fileExists(atPath: snap.appendingPathComponent("model_index.json").path)
+                    || fm.fileExists(atPath: snap.appendingPathComponent("transformer").path)
+                guard isDiffusers else { continue }
+                // Confirm it's FLUX — the only family mflux can run. Repo name is the
+                // fast path; otherwise peek at the pipeline class in model_index.json.
+                var isFlux = repo.lowercased().contains("flux")
+                if !isFlux,
+                   let data = try? Data(contentsOf: snap.appendingPathComponent("model_index.json")),
+                   let s = String(data: data, encoding: .utf8) {
+                    isFlux = s.lowercased().contains("flux")
+                }
+                guard isFlux else { continue }
+                let nl = repo.lowercased()
+                let dev = nl.contains("dev") || nl.contains("kontext") || nl.contains("krea")
+                let short = repo.split(separator: "/").last.map(String.init) ?? repo
+                out.append(.init(repo: repo, name: short, baseModel: dev ? "dev" : "schnell",
+                                 steps: dev ? 20 : 4, note: "Your download"))
+            }
+        }
+        return out
+    }
+
     // MARK: - Install gate
 
     func installed() async -> Bool { await PythonRuntime.shared.imageGenInstalled() }
@@ -63,6 +149,8 @@ final class ImageGenService {
     /// running to completion in the background. Returns whatever was saved before the
     /// cancel; the caller discards/cleans those on the supersede path.
     func generate(_ requests: [Request],
+                  model: String = ImageGenService.defaultModel,
+                  baseModel: String = ImageGenService.defaultBaseModel,
                   steps: Int = 4,
                   width: Int = 1024, height: Int = 768) async -> [String] {
         guard !requests.isEmpty else { return [] }
@@ -97,7 +185,7 @@ final class ImageGenService {
         defer { progress = nil }
 
         let args = [helper.path, "--prompts-json", listURL.path,
-                    "--model", Self.defaultModel, "--base-model", Self.defaultBaseModel,
+                    "--model", model, "--base-model", baseModel,
                     "--steps", String(steps), "--width", String(width),
                     "--height", String(height), "--metadata"]
 

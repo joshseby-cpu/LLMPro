@@ -731,6 +731,33 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-19 (cont.) — Imagine: picker shows your downloaded image models.**
+  Reworked the Imagine model menu into two sections — **"On your Mac"** (image models
+  already in the HF cache) and **"Download & use"** (presets not yet fetched) — so the picker
+  reflects what's actually downloaded and picks a local model over re-fetching. Added
+  `ImageGenService.downloadedNonPresetImageModels()`, which scans the HF cache for a diffusers
+  layout (`model_index.json` / a `transformer/` folder) **and** confirms the family is FLUX
+  (repo name or the pipeline class in `model_index.json` mentions "flux"), so a user's *own*
+  downloaded FLUX model is selectable too. It deliberately skips both chat LLMs (no diffusers
+  layout) **and** non-FLUX image models like SDXL/SD — mflux only runs FLUX, so offering an SDXL
+  model would just fail at generate time (verified live: the scan first surfaced a downloaded
+  `…-sdxl` model, which the FLUX filter now correctly hides). Context: the user's 6 "Local
+  models" are all **language** models (gemma2/qwen3_moe/mistral/stablelm/llama) and **cannot**
+  generate images — image gen requires a diffusion model, which is why the Imagine picker is a
+  separate, image-only list. `modelButton` renders each row with a checkmark on the current pick
+  + the size/quality note.
+
+- **Session 2026-07-19 (cont.) — Imagine: model picker + richer sizes.**
+  Added an **image-model picker** (`ImageModel.presets`: FLUX.1 schnell 4-bit/8-bit + FLUX.1
+  dev 4-bit/8-bit — all ungated mflux mirrors, no token) with a per-model "downloaded?" hint
+  (`ImageGenService.isModelDownloaded`); `generate` gained `model:`/`baseModel:` params (dev
+  uses ~20 steps vs schnell's 4). And **flexible sizes** — an aspect (Square/Landscape/Portrait/
+  Wide/Tall) × resolution (Small 768 / Standard 1024 / Large 1280) picker, computed to a
+  multiple of 16 (the long edge = resolution). Model + aspect + resolution persist via
+  `@AppStorage`. **Verified live:** the model submenu shows all 4 with ✓/⤓ indicators and
+  persists the choice; Wide (16:9) generated a **1024×576** panorama (confirmed in gallery.json),
+  no errors.
+
 - **Session 2026-07-19 — Imagine tab (free-form local text-to-image).**
   New `.imagine` sidebar tab (between Code and Practice) so the app now has Chat / Story /
   Code / **Imagine** creative surfaces. Prompt → pick size (Square/Portrait/Landscape) +

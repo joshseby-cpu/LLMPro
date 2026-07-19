@@ -11,7 +11,9 @@ struct ImagineView: View {
     @State private var imageGen = ImageGenService.shared
 
     @State private var prompt = ""
-    @State private var size: ImageSize = .square
+    @AppStorage("imagineModelRepo") private var modelRepo = ImageModel.default.repo
+    @AppStorage("imagineAspect") private var aspect: Aspect = .square
+    @AppStorage("imagineResolution") private var resolution: Resolution = .standard
     @State private var count = 1
     @State private var isGenerating = false
     @State private var task: Task<Void, Never>?
@@ -25,21 +27,56 @@ struct ImagineView: View {
     @State private var preview: GeneratedImage?
     @FocusState private var promptFocused: Bool
 
-    enum ImageSize: String, CaseIterable, Identifiable {
-        case square = "Square", portrait = "Portrait", landscape = "Landscape"
+    /// The image models offered in the picker: the built-in FLUX presets plus any
+    /// image (diffusion) model already sitting in the HF cache. Chat LLMs never
+    /// appear here — image generation needs a diffusion model, which is a different
+    /// kind of model from the ones in the Models tab.
+    private var allModels: [ImageModel] {
+        ImageModel.presets + imageGen.downloadedNonPresetImageModels()
+    }
+    private var selectedModel: ImageModel {
+        allModels.first { $0.repo == modelRepo } ?? ImageModel.default
+    }
+    private var dims: (w: Int, h: Int) { Self.dims(aspect, resolution) }
+
+    enum Aspect: String, CaseIterable, Identifiable {
+        case square, landscape, portrait, wide, tall
         var id: String { rawValue }
-        var dims: (w: Int, h: Int) {
+        var label: String {
             switch self {
-            case .square:    (1024, 1024)
-            case .portrait:  (768, 1024)
-            case .landscape: (1024, 768)
+            case .square:    "Square (1:1)"
+            case .landscape: "Landscape (4:3)"
+            case .portrait:  "Portrait (3:4)"
+            case .wide:      "Wide (16:9)"
+            case .tall:      "Tall (9:16)"
             }
         }
-        var icon: String {
+        var ratio: (w: Int, h: Int) {
             switch self {
-            case .square: "square"; case .portrait: "rectangle.portrait"; case .landscape: "rectangle"
+            case .square: (1, 1); case .landscape: (4, 3); case .portrait: (3, 4)
+            case .wide: (16, 9); case .tall: (9, 16)
             }
         }
+    }
+
+    enum Resolution: String, CaseIterable, Identifiable {
+        case small, standard, large
+        var id: String { rawValue }
+        var label: String {
+            switch self { case .small: "Small (fast)"; case .standard: "Standard"; case .large: "Large (slow)" }
+        }
+        var longEdge: Int { switch self { case .small: 768; case .standard: 1024; case .large: 1280 } }
+    }
+
+    /// Dimensions for an aspect + resolution, rounded to a multiple of 16 (what FLUX
+    /// wants). The chosen resolution is the LONG edge.
+    static func dims(_ a: Aspect, _ r: Resolution) -> (w: Int, h: Int) {
+        let long = Double(r.longEdge)
+        let (rw, rh) = a.ratio
+        func round16(_ x: Double) -> Int { max(384, Int((x / 16).rounded()) * 16) }
+        return rw >= rh
+            ? (Int(long), round16(long * Double(rh) / Double(rw)))
+            : (round16(long * Double(rw) / Double(rh)), Int(long))
     }
 
     var body: some View {
@@ -82,7 +119,7 @@ struct ImagineView: View {
                                     prompt = img.prompt; promptFocused = true
                                 }
                                 Button("Make another like this", systemImage: "wand.and.stars") {
-                                    prompt = img.prompt; size = matchSize(img); generate()
+                                    prompt = img.prompt; aspect = aspectFor(img); generate()
                                 }
                                 Divider()
                                 Button("Delete", systemImage: "trash", role: .destructive) { store.delete(img.id) }
@@ -126,14 +163,32 @@ struct ImagineView: View {
                     .onSubmit(generate)
 
                 Menu {
-                    Picker("Size", selection: $size) {
-                        ForEach(ImageSize.allCases) { Label($0.rawValue, systemImage: $0.icon).tag($0) }
+                    let onDisk = allModels.filter { imageGen.isModelDownloaded($0.repo) }
+                    let toGet  = allModels.filter { !imageGen.isModelDownloaded($0.repo) }
+                    if !onDisk.isEmpty {
+                        Section("On your Mac") { ForEach(onDisk) { modelButton($0) } }
+                    }
+                    if !toGet.isEmpty {
+                        Section("Download & use") { ForEach(toGet) { modelButton($0) } }
+                    }
+                } label: {
+                    Label(selectedModel.name, systemImage: "cube.box").lineLimit(1)
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help(selectedModel.note + (imageGen.isModelDownloaded(selectedModel.repo) ? " · ready" : " · downloads on first use"))
+
+                Menu {
+                    Picker("Aspect", selection: $aspect) {
+                        ForEach(Aspect.allCases) { Text($0.label).tag($0) }
+                    }
+                    Picker("Resolution", selection: $resolution) {
+                        ForEach(Resolution.allCases) { Text($0.label).tag($0) }
                     }
                     Picker("How many", selection: $count) {
                         ForEach(1...4, id: \.self) { Text("\($0) image\($0 == 1 ? "" : "s")").tag($0) }
                     }
                 } label: {
-                    Label("\(size.rawValue) · \(count)×", systemImage: "slider.horizontal.3")
+                    Label("\(dims.w)×\(dims.h) · \(count)×", systemImage: "slider.horizontal.3")
                 }
                 .menuStyle(.borderlessButton).fixedSize()
 
@@ -174,6 +229,19 @@ struct ImagineView: View {
         .background(Color.brand.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    /// One row in the model menu. A checkmark marks the current pick; the note
+    /// (size / quality hint) is the secondary line.
+    @ViewBuilder
+    private func modelButton(_ m: ImageModel) -> some View {
+        Button { modelRepo = m.repo } label: {
+            if m.repo == modelRepo {
+                Label("\(m.name) — \(m.note)", systemImage: "checkmark")
+            } else {
+                Text("\(m.name) — \(m.note)")
+            }
+        }
+    }
+
     // MARK: - Actions
 
     private func generate() {
@@ -181,7 +249,8 @@ struct ImagineView: View {
         guard !text.isEmpty, !isGenerating, installed != false else { return }
         error = nil
         isGenerating = true
-        let (w, h) = size.dims
+        let (w, h) = dims
+        let model = selectedModel
         var requests: [ImageGenService.Request] = []
         var pending: [(file: String, seed: Int)] = []
         for _ in 0..<count {
@@ -193,7 +262,9 @@ struct ImagineView: View {
             pending.append((file, seed))
         }
         task = Task {
-            let saved = await ImageGenService.shared.generate(requests, steps: 4, width: w, height: h)
+            let saved = await ImageGenService.shared.generate(
+                requests, model: model.repo, baseModel: model.baseModel,
+                steps: model.steps, width: w, height: h)
             if Task.isCancelled {
                 for p in saved { try? FileManager.default.removeItem(at: URL(fileURLWithPath: p)) }
             } else {
@@ -214,9 +285,8 @@ struct ImagineView: View {
         isGenerating = false
     }
 
-    private func matchSize(_ img: GeneratedImage) -> ImageSize {
-        if img.width == img.height { return .square }
-        return img.width > img.height ? .landscape : .portrait
+    private func aspectFor(_ img: GeneratedImage) -> Aspect {
+        img.width == img.height ? .square : (img.width > img.height ? .landscape : .portrait)
     }
 
     private func save(_ img: GeneratedImage) {
