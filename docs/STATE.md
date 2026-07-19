@@ -731,6 +731,20 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-19 — Imagine tab (free-form local text-to-image).**
+  New `.imagine` sidebar tab (between Code and Practice) so the app now has Chat / Story /
+  Code / **Imagine** creative surfaces. Prompt → pick size (Square/Portrait/Landscape) +
+  count (1–4) → Generate, using the **same FLUX engine** (`ImageGenService`) that draws Story
+  illustrations — a dedicated image model, independent of the chat LLM. Results persist in a
+  gallery ([`ImagineStore`](../LLMPro/Services/ImagineStore.swift) → `imagegen/gallery.json` +
+  `imagegen/<uuid>.png`); tap for a full-size preview (dims + seed + Save/Copy/Delete), context
+  menu for "Use this prompt" / "Make another like this". Cancellation-aware; an install gate
+  offers the one-time `mflux` install when absent. New: `Features/Imagine/ImagineView.swift`,
+  `Services/ImagineStore.swift`, `PathResolver.imagesDir`, RootView `.imagine` case.
+  **Verified live:** generated "a red panda astronaut floating in space…" (1024², seed shown) →
+  rendered a coherent on-prompt image, appeared in the gallery, preview sheet works, persisted;
+  no errors, no crash.
+
 - **Session 2026-07-18 (cont.) — GGUF "Download & convert" combo (one-tap GGUF LLM → usable MLX).**
   Follow-up to the GGUF-labeling work: a **GGUF language-model** search result now shows a
   **"Download & convert"** button that, in one tap, downloads only the **Q8_0** quant (~8 GB,

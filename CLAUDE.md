@@ -154,7 +154,7 @@ it's the doc that explains *why* the app is shaped this way.
 ┌──────────────── SwiftUI app (macOS 14+, Apple Silicon) ─────────────────┐
 │                                                                          │
 │  Sidebar:   Home · Models · Lessons · Teach · Progress · Chat ·          │
-│             Story · Try it out · Code · Practice · Fusion · Memory · Inspect ·    │
+│             Story · Try it out · Code · Imagine · Practice · Fusion · Memory · Inspect ·    │
 │             Save & Use · Settings                                         │
 │                                                                          │
 │  @Observable view models  ←→  SwiftData (@Model)                        │
@@ -203,6 +203,7 @@ evals/                  Scored Test-node harness (EvalService): <suiteID>/eval.j
 skills/<skill-id>/      Code-tab Agent Skills (live): one SKILL.md package per folder (use_skill, 3-stage progressive disclosure)
 conversations/<uuid>.json  Chat-tab saved conversations (ConversationStore)
 stories/<uuid>.json     Story-tab projects (StoryStore): premise/settings + chapters (+ per-chapter illustration refs)
+imagegen/               Imagine-tab gallery: <uuid>.png generated images + gallery.json (ImagineStore metadata)
 storyimages/<story-uuid>/  Story illustrations: generated PNGs (one folder per story; removed when the story is deleted)
 ```
 

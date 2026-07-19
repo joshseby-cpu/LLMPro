@@ -85,6 +85,10 @@ enum PathResolver {
             .appendingPathComponent(storyID.uuidString, isDirectory: true).ensured()
     }
 
+    /// Free-form generated images for the Imagine tab: `imagegen/<uuid>.png` +
+    /// `imagegen/gallery.json` (the `ImagineStore` metadata). Independent of Story.
+    static var imagesDir: URL { appSupport.appendingPathComponent("imagegen", isDirectory: true).ensured() }
+
     static func adapterDir(for jobID: UUID) -> URL {
         adaptersDir.appendingPathComponent(jobID.uuidString, isDirectory: true).ensured()
     }

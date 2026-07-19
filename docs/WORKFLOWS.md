@@ -1167,3 +1167,28 @@ gate the writing. **Files**:
 [`ImageGenService.swift`](../LLMPro/Services/ImageGenService.swift),
 [`generate_image.py`](../LLMPro/Resources/helpers/generate_image.py),
 [`InferenceService.swift`](../LLMPro/Services/InferenceService.swift).
+
+## 20. Generate an image (the Imagine tab)
+
+```
+Sidebar → "Imagine" (.imagine) → ImagineView
+  ImagineStore.shared loads imagegen/gallery.json (most-recent first)
+  .task: installed = await ImageGenService.installed()  (if false → install gate)
+
+type a prompt + pick Size (Square/Portrait/Landscape) + count (1–4) → "Generate":
+  generate(): for each of `count`, build ImageGenService.Request{prompt, output=imagegen/<uuid>.png,
+     seed=random}; then await ImageGenService.generate(requests, steps:4, width, height)
+     → ONE generate_image.py run (FLUX loads once, renders each); progress banner shows
+       "Loading the image model…" / "Rendering image i of N…" (imageGen.progress)
+     → on success, ImageStore.add(GeneratedImage{prompt,file,seed,w,h}) per saved path
+     → on Stop (task.cancel()): ImageGenService terminates FLUX; partial PNGs deleted
+  gallery: LazyVGrid of GalleryThumb (async NSImage); tap → ImagePreviewSheet
+     (full-size + dims/seed + Save image… / Copy prompt / Delete); context menu adds
+     "Use this prompt" / "Make another like this" (same prompt, new seed)
+```
+
+Same FLUX engine as Story illustrations — a **dedicated image model** (`mflux`/FLUX.1-schnell),
+NOT the chat LLM, so it works regardless of which language model is downloaded. **Files**:
+[`ImagineView.swift`](../LLMPro/Features/Imagine/ImagineView.swift),
+[`ImagineStore.swift`](../LLMPro/Services/ImagineStore.swift),
+[`ImageGenService.swift`](../LLMPro/Services/ImageGenService.swift).

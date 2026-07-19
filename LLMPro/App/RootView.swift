@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
-    case dashboard, models, datasets, training, monitor, chatDirect, story, chat, code, selfImprove, fusion, memory, inspect, export, settings
+    case dashboard, models, datasets, training, monitor, chatDirect, story, chat, code, imagine, selfImprove, fusion, memory, inspect, export, settings
 
     var id: String { rawValue }
     var title: String {
@@ -16,6 +16,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .story:       "Story"
         case .chat:        "Try it out"
         case .code:        "Code"
+        case .imagine:     "Imagine"
         case .selfImprove: "Practice"
         case .fusion:      "Fusion"
         case .memory:      "Memory"
@@ -35,6 +36,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .story:       "book.closed"
         case .chat:        "bubble.left.and.bubble.right"
         case .code:        "chevron.left.forwardslash.chevron.right"
+        case .imagine:     "photo.artframe"
         case .selfImprove: "arrow.triangle.2.circlepath"
         case .fusion:      "arrow.triangle.merge"
         case .memory:      "memorychip"
@@ -116,6 +118,7 @@ struct RootView: View {
         case .story:       StoryView()
         case .chat:        ArenaView(pendingHandoff: $pendingChatHandoff)
         case .code:        CodeView(pendingHandoff: $pendingCodeHandoff)
+        case .imagine:     ImagineView()
         case .selfImprove: SelfImproveView()
         case .fusion:      FusionView()
         case .memory:      MemoryView()
