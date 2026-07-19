@@ -375,14 +375,35 @@ def load_tokenizer(
 ):
     _check_key(key, "load_tokenizer")
 
-    vocab_file = _resolve(key, _file_map(key)[vocab_key])
-    with open(vocab_file, encoding="utf-8") as f:
-        vocab = json.load(f)
-
+    # LLMPro: two on-disk tokenizer formats exist. Native diffusers repos ship the
+    # legacy split files (tokenizer/vocab.json + tokenizer/merges.txt). But diffusers
+    # `save_pretrained` (used when we convert a single-file .safetensors checkpoint)
+    # writes the combined fast-tokenizer `tokenizer/tokenizer.json` instead. Prefer the
+    # legacy files; fall back to extracting vocab + merges from tokenizer.json.
+    vocab_rel = _file_map(key)[vocab_key]
+    vocab_file = _resolve(key, vocab_rel)
     merges_file = _resolve(key, _file_map(key)[merges_key])
-    with open(merges_file, encoding="utf-8") as f:
-        bpe_merges = f.read().strip().split("\n")[1 : 49152 - 256 - 2 + 1]
-    bpe_merges = [tuple(m.split()) for m in bpe_merges]
-    bpe_ranks = dict(map(reversed, enumerate(bpe_merges)))
 
+    if os.path.exists(vocab_file) and os.path.exists(merges_file):
+        with open(vocab_file, encoding="utf-8") as f:
+            vocab = json.load(f)
+        with open(merges_file, encoding="utf-8") as f:
+            bpe_merges = f.read().strip().split("\n")[1 : 49152 - 256 - 2 + 1]
+        bpe_merges = [tuple(m.split()) for m in bpe_merges]
+    else:
+        # tokenizer.json lives in the same subfolder as vocab.json would (e.g.
+        # "tokenizer/" or "tokenizer_2/"). Its model.vocab / model.merges carry the
+        # same BPE data as the split files.
+        subdir = os.path.dirname(vocab_rel)
+        tok_json = _resolve(key, os.path.join(subdir, "tokenizer.json"))
+        with open(tok_json, encoding="utf-8") as f:
+            tok = json.load(f)
+        model = tok["model"]
+        vocab = model["vocab"]
+        merges = model["merges"]
+        # merges entries are "a b" strings (classic) or ["a","b"] pairs (newer format).
+        bpe_merges = [tuple(m.split()) if isinstance(m, str) else tuple(m)
+                      for m in merges[: 49152 - 256 - 2]]
+
+    bpe_ranks = dict(map(reversed, enumerate(bpe_merges)))
     return Tokenizer(bpe_ranks, vocab)

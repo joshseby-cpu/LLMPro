@@ -53,6 +53,10 @@ struct ModelsBrowserView: View {
     @State private var cardTarget: ModelRegistry.DetectedModel?
     @State private var showCompare: Bool = false
     @State private var favorites = FavoritesStore.shared
+    /// Downloaded image models (FLUX/SDXL/SD) surfaced so the user sees every model they
+    /// have + what it supports. These aren't LLMs (no config.json), so they're absent
+    /// from `registry.localModels`; scanned separately (off-thread — it reads headers).
+    @State private var imageModels: [ImageModel] = []
     /// Non-nil filters the local list to models carrying this tag (from the
     /// notes & tags sheet) — the read side that makes tags worth writing.
     @State private var tagFilter: String? = nil
@@ -82,6 +86,9 @@ struct ModelsBrowserView: View {
             .navigationTitle("Models")
             .task(id: "init") {
                 await registry.scan()
+                imageModels = await Task.detached(priority: .utility) {
+                    ImageGenService.downloadedImageModels()
+                }.value
             }
             .sheet(item: $detailTarget) { model in
                 ModelDetailSheet(model: model, sizeBytes: sizeCache[model.repoID],
@@ -273,6 +280,8 @@ struct ModelsBrowserView: View {
                         }
                     }
                 }
+
+                imageModelsSection
             }
             .padding(.bottom, 12)
         }
@@ -441,6 +450,34 @@ struct ModelsBrowserView: View {
     private var totalLocalDiskString: String {
         let total = registry.localModels.reduce(Int64(0)) { $0 + $1.sizeBytes }
         return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+    }
+
+    /// Downloaded image models — a separate section because they're not LLMs (they make
+    /// pictures, not text) and so never appear in "Local models" above. This is where a
+    /// user sees which of their models do image generation.
+    @ViewBuilder
+    private var imageModelsSection: some View {
+        if !imageModels.isEmpty {
+            HStack {
+                Text("Image models (\(imageModels.count))")
+                Spacer()
+                Label("Generate in Imagine", systemImage: "photo.artframe")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 12)
+            ForEach(imageModels) { m in
+                ImageModelRow(model: m)
+                    .card(padding: 10, cornerRadius: 10)
+                    .contextMenu {
+                        Button("Show in Finder") {
+                            if let dir = ImageGenService.shared.snapshotDir(for: m.repo) {
+                                NSWorkspace.shared.activateFileViewerSelecting([dir])
+                            }
+                        }
+                    }
+            }
+        }
     }
 
     private var deletionAlertTitle: String {
@@ -797,6 +834,40 @@ private struct ModelResultCard: View {
     }
 }
 
+/// A downloaded image model in the Models tab. Compact: what it is + what it supports
+/// (image generation, in the Imagine tab). Not an LLM, so no Teach/Chat/convert actions.
+private struct ImageModelRow: View {
+    let model: ImageModel
+
+    private var familyLabel: String {
+        switch model.family {
+        case .flux: "FLUX"
+        case .sdxl: "SDXL" + (model.checkpointFile != nil ? " · single-file" : "")
+        case .sd:   "Stable Diffusion"
+        }
+    }
+    private var badgeText: String {
+        switch model.family { case .flux: "FLUX"; case .sdxl: "SDXL"; case .sd: "SD" }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "photo.artframe").font(.title3).foregroundStyle(Color.brand).frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.name).font(.headline).lineLimit(1)
+                Text("\(familyLabel) · image generation").font(.caption).foregroundStyle(.secondary)
+                Label("Imagine · Story illustrations", systemImage: "sparkles")
+                    .font(.caption2).foregroundStyle(.tertiary).labelStyle(.titleAndIcon)
+            }
+            Spacer()
+            Text(badgeText).font(.system(size: 9, weight: .bold))
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(Color.brand.opacity(0.18), in: Capsule())
+                .foregroundStyle(Color.brand)
+        }
+    }
+}
+
 private struct LocalModelRow: View {
     let model: ModelRegistry.DetectedModel
     let isInUse: Bool
@@ -824,6 +895,15 @@ private struct LocalModelRow: View {
                 Text(model.displayName).font(.headline)
                 Text("\(model.architecture) · \(model.quantization) · \(model.humanSize)")
                     .font(.caption).foregroundStyle(.secondary)
+                // What the user can actually do with this model. A regular MLX LLM does
+                // the full text loop; a DiffusionGemma guest chats + codes but can't be
+                // fine-tuned. (Image models aren't LLMs — they live in the Image models
+                // section below and generate in Imagine, not here.)
+                Label(model.isDiffusion
+                      ? "Chat · Code — not fine-tunable"
+                      : "Chat · Fine-tune · Try it out · Code · Story · Practice",
+                      systemImage: "sparkles")
+                    .font(.caption2).foregroundStyle(.tertiary).labelStyle(.titleAndIcon)
                 let tags = meta.meta(for: model.id).tags
                 if !tags.isEmpty {
                     HStack(spacing: 4) {

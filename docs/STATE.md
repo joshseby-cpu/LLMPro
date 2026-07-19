@@ -731,6 +731,35 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-19 (cont.) — Single-file SDXL/SD support + "what my installed models support" overview.**
+  **Single-file checkpoints** (A1111/LDM `.safetensors`, e.g. the user's `WAI-NSFW-illustrious-SDXL`
+  with v9/v12/v14) now work in Imagine. `sdxl_generate.py` gained `--convert-cache`: a single-file
+  `--model` is converted **once** to a diffusers dir via `diffusers.StableDiffusionXLPipeline`/
+  `StableDiffusionPipeline.from_single_file(...).save_pretrained(...)` (cached under
+  `imagegen/converted/<repo#file>/`), then loaded by the existing MLX engine. Needed a vendor patch:
+  `model_io.load_tokenizer` now falls back to the combined `tokenizer.json` (diffusers `save_pretrained`
+  writes that, not the split `vocab.json`+`merges.txt` the fabled-illusion model happened to ship).
+  Added `diffusers`+`omegaconf` to `installImageGen` (torch/transformers already present). Swift:
+  `ImageModel.checkpointFile` (id = `repo#file`) makes each checkpoint independently selectable;
+  `downloadedNonPresetImageModels()` now also detects single-file SDXL/SD by reading the safetensors
+  **header** (`model.diffusion_model.` ⇒ diffusion; `conditioner.embedders.1` ⇒ SDXL vs SD), skipping
+  any repo with a `config.json` (LLMs). The scan reads headers so it's cached in `@State` (scanned
+  off-thread on appear) instead of per-render; `downloadedNonPresetImageModels()`/`isRepoCached` are
+  now `nonisolated static`. `generate(checkpointFile:)` passes the `.safetensors` + `--convert-cache`.
+  **Capability overview (Models tab):** each LLM row now shows a "Chat · Fine-tune · Try it out · Code ·
+  Story · Practice" line (DiffusionGemma: "Chat · Code — not fine-tunable"); a new **"Image models (N)"**
+  section (`ImageModelRow`, fed by `ImageGenService.downloadedImageModels()`) lists downloaded FLUX/SDXL/SD
+  models with "Imagine · Story illustrations" — so every installed model is visible with what it supports,
+  and image models no longer silently "disappear" from the Models tab. Also fixed: `classifyDiffusers`
+  now requires actual weights (`dirHasWeights`), so the **config-only** `stabilityai/stable-diffusion-xl-base-1.0`
+  copy that `from_single_file` fetches into the cache is no longer offered as a broken model.
+  **Live-verified in the app:** all three WAI single-file checkpoints (v9/v12/v14) show as "SDXL
+  (Illustrious) · anime · single-file" in the Imagine picker AND the Models-tab "Image models" section;
+  selecting v14 converted it (once, → `imagegen/converted/…#…v14.safetensors`, 6.5 GB) and generated a
+  coherent 1344×768 kimono/cherry-blossom anime image; Local models show the capability line; config-only
+  sdxl-base is filtered out. mlx-lm/mflux/diffusers all import after the safetensors 0.7→0.8 bump. Zero
+  ERROR/FAULT, no crash.
+
 - **Session 2026-07-19 (cont.) — SDXL / Stable Diffusion support (second image engine) + image-gen capability in Models tab.**
   Added a **second local image engine** so the user's downloaded **SDXL** (and SD 1.5/2.x)
   models generate in Imagine, alongside FLUX (mflux). Engine = a **vendored copy of Apple's

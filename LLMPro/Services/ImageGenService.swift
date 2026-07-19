@@ -28,14 +28,20 @@ struct ImageModel: Identifiable, Hashable, Sendable {
     let cfg: Double
     let negative: String
     let note: String
-    var id: String { repo }
+    /// For a **single-file** SDXL/SD checkpoint: the `.safetensors` filename within
+    /// the repo (a repo may hold several, e.g. WAI ships v9/v12/v14). nil for a
+    /// diffusers-layout model or a FLUX preset. Makes each checkpoint independently
+    /// selectable and gives the conversion cache a stable key.
+    let checkpointFile: String?
+    var id: String { checkpointFile.map { "\(repo)#\($0)" } ?? repo }
 
     // Convenience initializer for the FLUX presets (family/cfg/negative fixed).
     init(repo: String, name: String, baseModel: String, steps: Int, note: String,
-         family: ImageModelFamily = .flux, cfg: Double = 1.0, negative: String = "") {
+         family: ImageModelFamily = .flux, cfg: Double = 1.0, negative: String = "",
+         checkpointFile: String? = nil) {
         self.repo = repo; self.name = name; self.family = family
         self.baseModel = baseModel; self.steps = steps; self.cfg = cfg
-        self.negative = negative; self.note = note
+        self.negative = negative; self.note = note; self.checkpointFile = checkpointFile
     }
 
     static let presets: [ImageModel] = [
@@ -52,15 +58,21 @@ struct ImageModel: Identifiable, Hashable, Sendable {
     static var `default`: ImageModel { presets[0] }
     static func preset(repo: String) -> ImageModel { presets.first { $0.repo == repo } ?? .default }
 
-    /// Build an `ImageModel` for a downloaded SD/SDXL diffusers model, choosing
-    /// step/CFG/negative defaults from the checkpoint's variant (detected by name).
-    /// See `SDXLVariant` for the lookup table (grounded in community-recommended
-    /// settings — Illustrious/Pony/Turbo/Lightning all differ).
-    static func sdxl(repo: String, family: ImageModelFamily) -> ImageModel {
-        let short = repo.split(separator: "/").last.map(String.init) ?? repo
-        let v = SDXLVariant.detect(repo)
+    /// Build an `ImageModel` for a downloaded SD/SDXL model, choosing step/CFG/negative
+    /// defaults from the checkpoint's variant (detected by name). See `SDXLVariant` for
+    /// the lookup table. Pass `checkpointFile` for a single-file `.safetensors`
+    /// checkpoint (converted to diffusers on first use); omit it for a diffusers dir.
+    static func sdxl(repo: String, family: ImageModelFamily, checkpointFile: String? = nil) -> ImageModel {
+        // Variant detection sees the checkpoint filename too (e.g. "…Lightning_4S").
+        let v = SDXLVariant.detect(checkpointFile.map { "\(repo)/\($0)" } ?? repo)
+        let short: String = {
+            if let f = checkpointFile { return (f as NSString).deletingPathExtension }
+            return repo.split(separator: "/").last.map(String.init) ?? repo
+        }()
+        let note = checkpointFile != nil ? v.note.replacingOccurrences(of: "your download", with: "single-file") : v.note
         return .init(repo: repo, name: short, baseModel: v.tag, steps: v.steps,
-                     note: v.note, family: family, cfg: v.cfg, negative: v.negative)
+                     note: note, family: family, cfg: v.cfg, negative: v.negative,
+                     checkpointFile: checkpointFile)
     }
 }
 
@@ -165,7 +177,7 @@ final class ImageGenService {
     /// Whether a model repo's weights are already in the HF cache (so the picker can
     /// show "Ready" vs a download-size hint). Presence-based — a partial/interrupted
     /// download reads as present, which is fine: the next generate resumes it.
-    nonisolated func isModelDownloaded(_ repo: String) -> Bool {
+    nonisolated static func isRepoCached(_ repo: String) -> Bool {
         let safe = "models--" + repo.replacingOccurrences(of: "/", with: "--")
         let fm = FileManager.default
         for base in [PathResolver.hfHome, PathResolver.hfHome.appendingPathComponent("hub")] {
@@ -176,14 +188,28 @@ final class ImageGenService {
         }
         return false
     }
+    nonisolated func isModelDownloaded(_ repo: String) -> Bool { Self.isRepoCached(repo) }
+
+    /// Every image model the user has on disk: downloaded FLUX presets plus their own
+    /// FLUX/SDXL/SD downloads (diffusers + single-file). For the Models tab's "what do
+    /// my installed models support" view. `static` so it can run off the main thread.
+    nonisolated static func downloadedImageModels() -> [ImageModel] {
+        ImageModel.presets.filter { isRepoCached($0.repo) } + downloadedNonPresetImageModels()
+    }
 
     /// Image models (FLUX, SDXL, or SD 1.5/2.x) found in the HF cache that AREN'T a
     /// built-in preset — so a user's own downloaded image model is selectable and
-    /// routed to the right engine. Detects a **diffusers layout** (`unet/` or
-    /// `transformer/`, classified via `model_index.json` + folder markers), so chat
-    /// LLMs (none of those) never appear. Video models (WAN/SVD/LTX) and single-file
-    /// checkpoints (no diffusers dir) are skipped — no engine for them yet.
-    nonisolated func downloadedNonPresetImageModels() -> [ImageModel] {
+    /// routed to the right engine. Detects both a **diffusers layout** (`unet/` or
+    /// `transformer/`, classified via `model_index.json` + folder markers) and
+    /// **single-file** `.safetensors` SDXL/SD checkpoints (each an entry, converted to
+    /// diffusers on first use). Chat LLMs (config.json, no diffusion markers) and video
+    /// models (WAN/SVD/LTX) never appear.
+    ///
+    /// Reads safetensors headers for single-file candidates, so it's not free — callers
+    /// should cache the result (the Imagine view scans once on appear, off the main
+    /// thread) rather than calling it per render. `static` so it can run in a detached
+    /// task without touching the `@MainActor` singleton.
+    nonisolated static func downloadedNonPresetImageModels() -> [ImageModel] {
         let presetRepos = Set(ImageModel.presets.map(\.repo))
         let fm = FileManager.default
         var seen = Set<String>()
@@ -195,22 +221,59 @@ final class ImageGenService {
                     .replacingOccurrences(of: "models--", with: "")
                     .replacingOccurrences(of: "--", with: "/")
                 if presetRepos.contains(repo) || seen.contains(repo) { continue }
-                guard let snap = Self.snapshot(in: d),
-                      let family = Self.classifyDiffusers(atSnapshot: snap, repo: repo) else { continue }
-                seen.insert(repo)
-                switch family {
-                case .flux:
-                    let nl = repo.lowercased()
-                    let dev = nl.contains("dev") || nl.contains("kontext") || nl.contains("krea")
-                    let short = repo.split(separator: "/").last.map(String.init) ?? repo
-                    out.append(.init(repo: repo, name: short, baseModel: dev ? "dev" : "schnell",
-                                     steps: dev ? 20 : 4, note: "FLUX · your download"))
-                case .sdxl, .sd:
-                    out.append(.sdxl(repo: repo, family: family))
+                guard let snap = Self.snapshot(in: d) else { continue }
+                if let family = Self.classifyDiffusers(atSnapshot: snap, repo: repo) {
+                    seen.insert(repo)
+                    switch family {
+                    case .flux:
+                        let nl = repo.lowercased()
+                        let dev = nl.contains("dev") || nl.contains("kontext") || nl.contains("krea")
+                        let short = repo.split(separator: "/").last.map(String.init) ?? repo
+                        out.append(.init(repo: repo, name: short, baseModel: dev ? "dev" : "schnell",
+                                         steps: dev ? 20 : 4, note: "FLUX · your download"))
+                    case .sdxl, .sd:
+                        out.append(.sdxl(repo: repo, family: family))
+                    }
+                } else {
+                    // No diffusers layout — look for single-file SDXL/SD checkpoints.
+                    let sfs = Self.singleFileCheckpoints(atSnapshot: snap)
+                    if !sfs.isEmpty { seen.insert(repo) }
+                    for sf in sfs {
+                        out.append(.sdxl(repo: repo, family: sf.family, checkpointFile: sf.file))
+                    }
                 }
             }
         }
         return out
+    }
+
+    /// Single-file `.safetensors` SDXL/SD checkpoints in a snapshot root (each a
+    /// selectable model). Skips repos that carry a `config.json` (those are LLMs) and
+    /// inspects each `.safetensors` header for the diffusion signatures — SDXL has a
+    /// second text encoder (`conditioner.embedders.1`), SD has `model.diffusion_model`
+    /// without it; an LLM has neither (`model.layers`/`embed_tokens` instead).
+    nonisolated static func singleFileCheckpoints(atSnapshot snap: URL) -> [(file: String, family: ImageModelFamily)] {
+        let fm = FileManager.default
+        // config.json in the root ⇒ an LLM / non-single-file model; skip entirely.
+        if fm.fileExists(atPath: snap.appendingPathComponent("config.json").path) { return [] }
+        guard let entries = try? fm.contentsOfDirectory(at: snap, includingPropertiesForKeys: nil) else { return [] }
+        var out: [(file: String, family: ImageModelFamily)] = []
+        for url in entries where url.pathExtension == "safetensors" {
+            guard let keys = try? SafetensorsHeader.parse(shard: url).entries else { continue }
+            let hasUNet = keys.contains { $0.name.hasPrefix("model.diffusion_model.") }
+            guard hasUNet else { continue }  // not a diffusion checkpoint (e.g. an LLM)
+            let hasBigG = keys.contains { $0.name.hasPrefix("conditioner.embedders.1") }
+            out.append((url.lastPathComponent, hasBigG ? .sdxl : .sd))
+        }
+        return out.sorted { $0.file < $1.file }
+    }
+
+    /// Whether a diffusers component folder (unet/, transformer/) actually holds
+    /// weights — a `.safetensors` file or a sharded `.safetensors.index.json`. A
+    /// config-only folder (just `config.json`) returns false.
+    nonisolated static func dirHasWeights(_ dir: URL) -> Bool {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return false }
+        return entries.contains { $0.hasSuffix(".safetensors") || $0.hasSuffix(".safetensors.index.json") }
     }
 
     /// The (first) snapshot directory inside a cached `models--…` dir, or nil.
@@ -227,10 +290,14 @@ final class ImageGenService {
     /// (`unet/` + `text_encoder_2/` = SDXL; `unet/` alone = SD; `transformer/` = FLUX).
     nonisolated static func classifyDiffusers(atSnapshot snap: URL, repo: String) -> ImageModelFamily? {
         let fm = FileManager.default
-        let hasTransformer = fm.fileExists(atPath: snap.appendingPathComponent("transformer").path)
-        let hasUNet = fm.fileExists(atPath: snap.appendingPathComponent("unet").path)
+        // Require actual WEIGHTS in the folder, not just its config.json — a
+        // `from_single_file` conversion fetches config-only copies of the SDXL base
+        // pipeline into the cache, which would otherwise read as a selectable-but-broken
+        // model (no unet weights to generate with).
+        let hasTransformer = Self.dirHasWeights(snap.appendingPathComponent("transformer"))
+        let hasUNet = Self.dirHasWeights(snap.appendingPathComponent("unet"))
         let hasTE2 = fm.fileExists(atPath: snap.appendingPathComponent("text_encoder_2").path)
-        guard hasTransformer || hasUNet else { return nil }   // not a diffusers image model
+        guard hasTransformer || hasUNet else { return nil }   // not a runnable diffusers model
         let cls = (try? String(contentsOf: snap.appendingPathComponent("model_index.json"),
                                encoding: .utf8))?.lowercased() ?? ""
         let nl = repo.lowercased()
@@ -271,10 +338,11 @@ final class ImageGenService {
     ///
     /// Routes on `family`: **FLUX** → `generate_image.py` (mflux, guidance-distilled,
     /// so CFG/negative are ignored); **SDXL/SD** → `sdxl_generate.py` (vendored MLX
-    /// Stable Diffusion, which loads the model's LOCAL diffusers dir and honors CFG +
-    /// negative). For SDXL/SD, `model` is a repo id we resolve to its cache snapshot
-    /// dir — unlike FLUX there's no lazy auto-download, so if it isn't on disk this
-    /// fails cleanly (the user downloads it from the Models tab first).
+    /// Stable Diffusion, which honors CFG + negative). For SDXL/SD, `model` is a repo id
+    /// we resolve to its cache snapshot dir — unlike FLUX there's no lazy auto-download,
+    /// so if it isn't on disk this fails cleanly. If `checkpointFile` is set the model is
+    /// a **single-file** `.safetensors`: we pass that file + a `--convert-cache` dir, and
+    /// the helper converts it to diffusers once (cached) before loading.
     ///
     /// **Cancellation-aware:** if the awaiting Task is cancelled (Story `stop()`,
     /// switching stories, deinit), the subprocess is terminated instead of running to
@@ -286,6 +354,7 @@ final class ImageGenService {
                   steps: Int = 4,
                   cfg: Double = 1.0,
                   negative: String = "",
+                  checkpointFile: String? = nil,
                   width: Int = 1024, height: Int = 768) async -> [String] {
         guard !requests.isEmpty else { return [] }
         guard progress == nil else {
@@ -300,12 +369,21 @@ final class ImageGenService {
         }
 
         // FLUX loads from a repo id (mflux fetches it lazily); SDXL/SD load from a
-        // local diffusers dir that must already be on disk.
+        // local diffusers dir (or a single-file .safetensors) that must be on disk.
         let modelArg: String
+        var convertCache: String? = nil
         if family == .flux {
             modelArg = model
         } else if let dir = snapshotDir(for: model) {
-            modelArg = dir.path
+            if let ckpt = checkpointFile {
+                // Single-file: pass the .safetensors path + a per-checkpoint cache dir
+                // for its one-time diffusers conversion.
+                modelArg = dir.appendingPathComponent(ckpt).path
+                let key = "\(model)#\(ckpt)".replacingOccurrences(of: "/", with: "_")
+                convertCache = PathResolver.sdxlConvertedDir.appendingPathComponent(key, isDirectory: true).path
+            } else {
+                modelArg = dir.path
+            }
         } else {
             Log.error("SDXL/SD model not downloaded — can't resolve local dir for \(model)", .app)
             return []
@@ -338,6 +416,7 @@ final class ImageGenService {
             args += ["--base-model", baseModel]
         } else {
             args += ["--cfg", String(cfg), "--negative", negative]
+            if let convertCache { args += ["--convert-cache", convertCache] }
         }
 
         // HF_HOME shares the model cache with the rest of the app. Pass the user's

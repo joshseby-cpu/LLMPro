@@ -27,15 +27,17 @@ struct ImagineView: View {
     @State private var preview: GeneratedImage?
     @FocusState private var promptFocused: Bool
 
-    /// The image models offered in the picker: the built-in FLUX presets plus any
-    /// image (diffusion) model already sitting in the HF cache. Chat LLMs never
-    /// appear here — image generation needs a diffusion model, which is a different
-    /// kind of model from the ones in the Models tab.
-    private var allModels: [ImageModel] {
-        ImageModel.presets + imageGen.downloadedNonPresetImageModels()
-    }
+    /// Downloaded FLUX/SDXL/SD models found in the HF cache, scanned once on appear
+    /// (off the main thread — the scan reads safetensors headers to spot single-file
+    /// checkpoints) and cached here rather than recomputed per render.
+    @State private var scannedModels: [ImageModel] = []
+
+    /// The image models offered in the picker: the built-in FLUX presets plus the
+    /// user's own downloaded image models. Chat LLMs never appear — image generation
+    /// needs a diffusion model, a different kind from the ones in the Models tab.
+    private var allModels: [ImageModel] { ImageModel.presets + scannedModels }
     private var selectedModel: ImageModel {
-        allModels.first { $0.repo == modelRepo } ?? ImageModel.default
+        allModels.first { $0.id == modelRepo } ?? ImageModel.default
     }
     /// FLUX honors the free long-edge resolution; SDXL/SD are trained at ~1 MP, so
     /// we snap them to the standard SDXL aspect bucket (off-bucket sizes cause
@@ -105,7 +107,10 @@ struct ImagineView: View {
             }
             .navigationTitle("Imagine")
         }
-        .task { if installed == nil { installed = await imageGen.installed() } }
+        .task {
+            await refreshModels()
+            if installed == nil { installed = await imageGen.installed() }
+        }
         .sheet(item: $preview) { img in ImagePreviewSheet(image: img, store: store) }
     }
 
@@ -160,7 +165,7 @@ struct ImagineView: View {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text(p.loadingModel
-                         ? "Loading the image model… (first run downloads ~10 GB)"
+                         ? "Loading the image model… (first use downloads or prepares it — up to a few minutes)"
                          : "Rendering image \(min(p.done + 1, p.total)) of \(p.total)…")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
@@ -250,13 +255,21 @@ struct ImagineView: View {
     /// (size / quality hint) is the secondary line.
     @ViewBuilder
     private func modelButton(_ m: ImageModel) -> some View {
-        Button { modelRepo = m.repo } label: {
-            if m.repo == modelRepo {
+        Button { modelRepo = m.id } label: {
+            if m.id == modelRepo {
                 Label("\(m.name) — \(m.note)", systemImage: "checkmark")
             } else {
                 Text("\(m.name) — \(m.note)")
             }
         }
+    }
+
+    /// Scan the HF cache for downloaded image models off the main thread (the scan
+    /// reads safetensors headers), then publish to `scannedModels`.
+    private func refreshModels() async {
+        scannedModels = await Task.detached(priority: .utility) {
+            ImageGenService.downloadedNonPresetImageModels()
+        }.value
     }
 
     // MARK: - Actions
@@ -281,7 +294,8 @@ struct ImagineView: View {
         task = Task {
             let saved = await ImageGenService.shared.generate(
                 requests, family: model.family, model: model.repo, baseModel: model.baseModel,
-                steps: model.steps, cfg: model.cfg, negative: model.negative, width: w, height: h)
+                steps: model.steps, cfg: model.cfg, negative: model.negative,
+                checkpointFile: model.checkpointFile, width: w, height: h)
             if Task.isCancelled {
                 for p in saved { try? FileManager.default.removeItem(at: URL(fileURLWithPath: p)) }
             } else {

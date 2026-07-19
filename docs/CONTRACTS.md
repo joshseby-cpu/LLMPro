@@ -1107,13 +1107,26 @@ it needs only `mlx`, `numpy`, `Pillow`, `regex`, `huggingface_hub`, all present 
   fp16-VAE → solid-black-image bug.
 
 CLI. `--model` is a **local diffusers dir** (the HF-cache snapshot dir, resolved by
-`ImageGenService.snapshotDir(for:)`) — there is no lazy auto-download like FLUX:
+`ImageGenService.snapshotDir(for:)`) OR a **single-file `.safetensors`** checkpoint —
+there is no lazy auto-download like FLUX:
 ```
 python <helpers>/sdxl_generate.py --prompts-json <file.jsonl> \
   --model /…/hf/models--owner--repo/snapshots/<rev>/ \
   --steps 28 --cfg 6.0 --negative "lowres, bad anatomy, …" --width 1024 --height 1024 --metadata
 #   JSONL lines identical to generate_image.py: {"prompt","output","seed"}
 ```
+
+**Single-file checkpoints** (A1111/LDM `.safetensors` — `model.diffusion_model.` /
+`conditioner.embedders.{0,1}` / `first_stage_model.` tensors, no diffusers folders). Pass
+the `.safetensors` as `--model` plus `--convert-cache <dir>`: the helper converts it **once**
+to a diffusers dir at `<dir>` (via `diffusers.StableDiffusionXLPipeline` /
+`StableDiffusionPipeline.from_single_file(...).save_pretrained(...)` — SDXL vs SD chosen by
+the `conditioner.embedders.1` key in the header) and loads that; later runs reuse the cache.
+Swift caches under `PathResolver.sdxlConvertedDir` = `imagegen/converted/<repo#file>/`, and
+`installImageGen` adds `diffusers`+`omegaconf` for this path (torch/transformers already present).
+NOTE: the conversion writes the tokenizer as the combined `tokenizer/tokenizer.json`, so the
+vendored `load_tokenizer` was patched to fall back to it (native diffusers repos ship the split
+`vocab.json`+`merges.txt`; converted ones don't).
 Step/CFG/negative come from Swift (`SDXLVariant`, by checkpoint name): base 28/6.0,
 Illustrious 26/5.0, NoobAI 30/4.5, Pony 25/7.0 (needs `score_9…` prompt + CLIP-skip-2),
 Turbo 4/0.0, Lightning 6/0.0, Hyper 6/1.0; distilled variants send **no** negative

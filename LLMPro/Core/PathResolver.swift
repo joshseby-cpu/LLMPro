@@ -43,6 +43,10 @@ enum PathResolver {
     static var logsDir: URL       { appSupport.appendingPathComponent("logs", isDirectory: true).ensured() }
     static var exportsDir: URL    { appSupport.appendingPathComponent("exports", isDirectory: true).ensured() }
     static var helpersDir: URL    { runtimeDir.appendingPathComponent("helpers", isDirectory: true).ensured() }
+    /// Cached diffusers conversions of single-file `.safetensors` SDXL/SD checkpoints
+    /// (one subdir per checkpoint), so the one-time `from_single_file` conversion is
+    /// reused across generations. Populated by `sdxl_generate.py --convert-cache`.
+    static var sdxlConvertedDir: URL { appSupport.appendingPathComponent("imagegen/converted", isDirectory: true).ensured() }
     static var llamaCppDir: URL   { runtimeDir.appendingPathComponent("llama.cpp", isDirectory: true) }
     static var ollamaDefault: URL { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".ollama/models") }
     /// LM Studio reads models from this directory by default, laid out as

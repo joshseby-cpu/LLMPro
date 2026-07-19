@@ -76,15 +76,51 @@ def _align8(v: int) -> int:
     return max(512, (int(v) // 8) * 8)
 
 
+def _ckpt_is_sdxl(ckpt: str) -> bool:
+    """Read the safetensors header (no full load) and check for SDXL's second text
+    encoder — distinguishes an SDXL single-file checkpoint from an SD 1.5/2.x one."""
+    import struct
+    try:
+        with open(ckpt, "rb") as f:
+            n = struct.unpack("<Q", f.read(8))[0]
+            keys = json.loads(f.read(n)).keys()
+        return any(k.startswith("conditioner.embedders.1") for k in keys)
+    except Exception:  # noqa: BLE001
+        return True  # default to SDXL — the common case for single-file image models
+
+
+def _ensure_converted(ckpt: str, target: str) -> str:
+    """Convert a single-file .safetensors checkpoint (A1111/LDM layout) to a diffusers
+    directory at `target`, once. diffusers `from_single_file` remaps the LDM keys and
+    infers the config; the resulting dir is loaded by the MLX engine like any diffusers
+    model. Returns `target`. Idempotent — skips if already converted."""
+    if os.path.isdir(target) and os.path.exists(os.path.join(target, "model_index.json")):
+        return target
+    import torch
+    from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline
+    Pipe = StableDiffusionXLPipeline if _ckpt_is_sdxl(ckpt) else StableDiffusionPipeline
+    os.makedirs(os.path.dirname(target.rstrip("/")), exist_ok=True)
+    pipe = Pipe.from_single_file(ckpt, torch_dtype=torch.float16)
+    pipe.save_pretrained(target)
+    del pipe
+    import gc
+    gc.collect()
+    return target
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompts-json")
     ap.add_argument("--prompt")
     ap.add_argument("--output")
     ap.add_argument("--seed", type=int, default=0)
-    # A LOCAL diffusers directory (preferred) or an HF repo id the vendored loader
-    # knows (stabilityai/sdxl-turbo, stabilityai/stable-diffusion-2-1-base).
+    # A LOCAL diffusers directory (preferred), a single-file `.safetensors` checkpoint
+    # (A1111/LDM format — converted to diffusers on first use, see --convert-cache), or
+    # an HF repo id the vendored loader knows (stabilityai/sdxl-turbo, sd-2-1-base).
     ap.add_argument("--model", required=True)
+    # Where to cache the diffusers conversion of a single-file checkpoint (a dir). The
+    # conversion runs once; later generations load the cached dir directly.
+    ap.add_argument("--convert-cache", dest="convert_cache", default="")
     ap.add_argument("--steps", type=int, default=28)
     ap.add_argument("--cfg", type=float, default=6.0)
     ap.add_argument("--negative", default="")
@@ -120,9 +156,17 @@ def main() -> int:
         from stable_diffusion import StableDiffusion, StableDiffusionXL
         from stable_diffusion.model_io import is_sdxl
 
-        sdxl = is_sdxl(args.model)
+        # Single-file .safetensors checkpoint → convert to a cached diffusers dir first
+        # (heartbeats keep the stream alive through the ~15-30 s torch conversion).
+        model_path = args.model
+        if os.path.isfile(model_path) and model_path.endswith(".safetensors"):
+            if not args.convert_cache:
+                raise RuntimeError("single-file checkpoint needs --convert-cache")
+            model_path = _ensure_converted(model_path, args.convert_cache)
+
+        sdxl = is_sdxl(model_path)
         # fp16 for unet + text encoders (memory); the VAE stays fp32 internally.
-        sd = (StableDiffusionXL if sdxl else StableDiffusion)(args.model, float16=True)
+        sd = (StableDiffusionXL if sdxl else StableDiffusion)(model_path, float16=True)
         sd.ensure_models_are_loaded()
     except Exception as e:  # noqa: BLE001
         stop_beat.set()

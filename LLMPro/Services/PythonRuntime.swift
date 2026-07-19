@@ -424,9 +424,12 @@ final class PythonRuntime {
     /// are already present from mlx-lm, so this is a small metadata-only install, NOT
     /// a multi-GB torch pull), and **SDXL / SD** via the vendored `sdxl_vendor`
     /// package (copied by installHelpers), which only needs `mlx`, `numpy`,
-    /// `huggingface_hub` (all base) plus `Pillow` + `regex`. `mflux` pulls Pillow; we
-    /// also list Pillow/regex explicitly so the SDXL engine works even if a future
-    /// mflux drops them. Weights for either engine download lazily on first use.
+    /// `huggingface_hub` (all base) plus `Pillow` + `regex`. `diffusers` + `omegaconf`
+    /// are added so a **single-file** `.safetensors` SDXL/SD checkpoint can be
+    /// converted (once) to a diffusers dir the MLX engine loads (`diffusers` is
+    /// pure-Python; torch is already present). `mflux` pulls Pillow; we also list
+    /// Pillow/regex explicitly so the SDXL engine works even if a future mflux drops
+    /// them. Weights for either engine download lazily on first use.
     func installImageGen(progress: @escaping @MainActor (String) -> Void) async -> Bool {
         do {
             let uv = try await resolveUV()
@@ -434,7 +437,7 @@ final class PythonRuntime {
             try await runUV(uv, [
                 "pip", "install",
                 "--python", PathResolver.venvPython.path,
-                "mflux==0.18.0", "pillow", "regex"
+                "mflux==0.18.0", "pillow", "regex", "diffusers", "omegaconf"
             ])
             return true
         } catch {
