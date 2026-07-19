@@ -29,6 +29,7 @@ struct ModelsBrowserView: View {
     @State private var ggufConvert: [String: GGUFConvertState] = [:]
 
     @State private var deletionTarget: ModelRegistry.DetectedModel?
+    @State private var imageDeletionTarget: ImageModel?
     @State private var lastDeletionFreed: Int64 = 0
     @State private var showDeletionResult: Bool = false
     @State private var modifyTarget: ModelRegistry.DetectedModel?
@@ -306,6 +307,15 @@ struct ModelsBrowserView: View {
             addExpertTarget: $addExpertTarget,
             manageExpertsTarget: $manageExpertsTarget
         ))
+        .alert("Delete this image model?", isPresented: imageDeletionBinding, presenting: imageDeletionTarget) { m in
+            Button("Delete", role: .destructive) { confirmDeleteImage(m) }
+            Button("Cancel", role: .cancel) { }
+        } message: { m in
+            let size = ByteCountFormatter.string(fromByteCount: m.sizeBytes, countStyle: .file)
+            Text(m.checkpointFile != nil
+                 ? "Removes just this checkpoint (\(size)) — other checkpoints in the same download are kept. This can’t be undone."
+                 : "Removes “\(ModelMetaStore.shared.displayName(for: m.id, default: m.name))” (\(size)) from disk. This can’t be undone.")
+        }
         .modifier(DuplicateAlertsModifier(
             title: duplicateAlertTitle,
             presented: duplicateAlertBinding,
@@ -470,25 +480,59 @@ struct ModelsBrowserView: View {
             HStack {
                 Text("Image models (\(imageModels.count))")
                 Spacer()
-                Label("Generate in Imagine", systemImage: "photo.artframe")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Total: \(totalImageDiskString)").font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 12)
-            ForEach(imageModels) { m in
-                ImageModelRow(model: m)
-                    .card(padding: 10, cornerRadius: 10)
-                    .contextMenu {
-                        Button("Rename…", systemImage: "pencil") {
-                            renameTarget = RenameTarget(id: m.id, defaultName: m.name)
-                        }
-                        Button("Show in Finder") {
-                            if let dir = ImageGenService.shared.snapshotDir(for: m.repo) {
-                                NSWorkspace.shared.activateFileViewerSelecting([dir])
-                            }
-                        }
+            ForEach(sortedImageModels) { m in
+                ImageModelRow(
+                    model: m,
+                    onRename: { renameTarget = RenameTarget(id: m.id, defaultName: m.name) },
+                    onShowInFinder: { showImageInFinder(m) },
+                    onDelete: { imageDeletionTarget = m }
+                )
+                .card(padding: 10, cornerRadius: 10)
+                .contextMenu {
+                    Button("Rename…", systemImage: "pencil") {
+                        renameTarget = RenameTarget(id: m.id, defaultName: m.name)
                     }
+                    Button(favorites.isModelPinned(m.id) ? "Unpin" : "Pin to top",
+                           systemImage: favorites.isModelPinned(m.id) ? "star.slash" : "star") {
+                        favorites.toggleModel(m.id)
+                    }
+                    Button("Show in Finder", systemImage: "folder") { showImageInFinder(m) }
+                    Divider()
+                    Button("Delete from disk…", systemImage: "trash", role: .destructive) {
+                        imageDeletionTarget = m
+                    }
+                }
             }
+        }
+    }
+
+    /// Pinned image models float to the top (relative order preserved within each group).
+    private var sortedImageModels: [ImageModel] {
+        imageModels.filter { favorites.isModelPinned($0.id) }
+            + imageModels.filter { !favorites.isModelPinned($0.id) }
+    }
+    private var totalImageDiskString: String {
+        ByteCountFormatter.string(fromByteCount: imageModels.reduce(0) { $0 + $1.sizeBytes }, countStyle: .file)
+    }
+    private func showImageInFinder(_ m: ImageModel) {
+        if let dir = ImageGenService.shared.snapshotDir(for: m.repo) {
+            NSWorkspace.shared.activateFileViewerSelecting([dir])
+        }
+    }
+    private var imageDeletionBinding: Binding<Bool> {
+        Binding(get: { imageDeletionTarget != nil },
+                set: { if !$0 { imageDeletionTarget = nil } })
+    }
+    private func confirmDeleteImage(_ m: ImageModel) {
+        Task {
+            let freed = await Task.detached(priority: .utility) { ImageGenService.deleteImageModel(m) }.value
+            imageModels = await Task.detached(priority: .utility) { ImageGenService.downloadedImageModels() }.value
+            lastDeletionFreed = freed
+            showDeletionResult = true
         }
     }
 
@@ -853,11 +897,17 @@ struct RenameTarget: Identifiable {
     let defaultName: String
 }
 
-/// A downloaded image model in the Models tab. Compact: what it is + what it supports
-/// (image generation, in the Imagine tab). Not an LLM, so no Teach/Chat/convert actions.
+/// A downloaded image model in the Models tab — managed like an LLM row (pin, rename,
+/// show in Finder, delete + size), minus the LLM-only actions (Teach/Chat/convert/
+/// export don't apply to image models; they generate in Imagine).
 private struct ImageModelRow: View {
     let model: ImageModel
+    var onRename: () -> Void = {}
+    var onShowInFinder: () -> Void = {}
+    var onDelete: () -> Void = {}
+
     @State private var meta = ModelMetaStore.shared
+    @State private var favorites = FavoritesStore.shared
 
     private var familyLabel: String {
         switch model.family {
@@ -869,13 +919,23 @@ private struct ImageModelRow: View {
     private var badgeText: String {
         switch model.family { case .flux: "FLUX"; case .sdxl: "SDXL"; case .sd: "SD" }
     }
+    private var sizeText: String {
+        model.sizeBytes > 0 ? " · " + ByteCountFormatter.string(fromByteCount: model.sizeBytes, countStyle: .file) : ""
+    }
 
     var body: some View {
         HStack(spacing: 10) {
+            Button { favorites.toggleModel(model.id) } label: {
+                Image(systemName: favorites.isModelPinned(model.id) ? "star.fill" : "star")
+                    .foregroundStyle(favorites.isModelPinned(model.id) ? Color.yellow : Color.secondary.opacity(0.5))
+            }
+            .buttonStyle(.borderless)
+            .help(favorites.isModelPinned(model.id) ? "Unpin" : "Pin to top")
+
             Image(systemName: "photo.artframe").font(.title3).foregroundStyle(Color.brand).frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(meta.displayName(for: model.id, default: model.name)).font(.headline).lineLimit(1)
-                Text("\(familyLabel) · image generation").font(.caption).foregroundStyle(.secondary)
+                Text("\(familyLabel) · image generation\(sizeText)").font(.caption).foregroundStyle(.secondary)
                 Label("Imagine · Story illustrations", systemImage: "sparkles")
                     .font(.caption2).foregroundStyle(.tertiary).labelStyle(.titleAndIcon)
             }
@@ -884,6 +944,12 @@ private struct ImageModelRow: View {
                 .padding(.horizontal, 5).padding(.vertical, 2)
                 .background(Color.brand.opacity(0.18), in: Capsule())
                 .foregroundStyle(Color.brand)
+            Button { onRename() } label: { Image(systemName: "pencil") }
+                .buttonStyle(.borderless).foregroundStyle(Color.brand).help("Rename")
+            Button { onShowInFinder() } label: { Image(systemName: "folder") }
+                .buttonStyle(.borderless).foregroundStyle(.secondary).help("Show in Finder")
+            Button { onDelete() } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless).foregroundStyle(.red).help("Delete from disk")
         }
     }
 }

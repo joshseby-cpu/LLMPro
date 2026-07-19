@@ -33,6 +33,9 @@ struct ImageModel: Identifiable, Hashable, Sendable {
     /// diffusers-layout model or a FLUX preset. Makes each checkpoint independently
     /// selectable and gives the conversion cache a stable key.
     let checkpointFile: String?
+    /// On-disk size in bytes (0 = unknown / not computed). Set by the cache scan for
+    /// downloaded models so the Models tab can show + total it like it does for LLMs.
+    var sizeBytes: Int64 = 0
     var id: String { checkpointFile.map { "\(repo)#\($0)" } ?? repo }
 
     // Convenience initializer for the FLUX presets (family/cfg/negative fixed).
@@ -194,7 +197,12 @@ final class ImageGenService {
     /// FLUX/SDXL/SD downloads (diffusers + single-file). For the Models tab's "what do
     /// my installed models support" view. `static` so it can run off the main thread.
     nonisolated static func downloadedImageModels() -> [ImageModel] {
-        ImageModel.presets.filter { isRepoCached($0.repo) } + downloadedNonPresetImageModels()
+        let presets = ImageModel.presets.filter { isRepoCached($0.repo) }.map { p -> ImageModel in
+            var m = p
+            if let snap = cachedSnapshot(for: p.repo) { m.sizeBytes = diffusersSize(snapshot: snap) }
+            return m
+        }
+        return presets + downloadedNonPresetImageModels()
     }
 
     /// Image models (FLUX, SDXL, or SD 1.5/2.x) found in the HF cache that AREN'T a
@@ -224,22 +232,29 @@ final class ImageGenService {
                 guard let snap = Self.snapshot(in: d) else { continue }
                 if let family = Self.classifyDiffusers(atSnapshot: snap, repo: repo) {
                     seen.insert(repo)
+                    let size = Self.diffusersSize(snapshot: snap)
                     switch family {
                     case .flux:
                         let nl = repo.lowercased()
                         let dev = nl.contains("dev") || nl.contains("kontext") || nl.contains("krea")
                         let short = repo.split(separator: "/").last.map(String.init) ?? repo
-                        out.append(.init(repo: repo, name: short, baseModel: dev ? "dev" : "schnell",
-                                         steps: dev ? 20 : 4, note: "FLUX · your download"))
+                        var m = ImageModel(repo: repo, name: short, baseModel: dev ? "dev" : "schnell",
+                                           steps: dev ? 20 : 4, note: "FLUX · your download")
+                        m.sizeBytes = size
+                        out.append(m)
                     case .sdxl, .sd:
-                        out.append(.sdxl(repo: repo, family: family))
+                        var m = ImageModel.sdxl(repo: repo, family: family)
+                        m.sizeBytes = size
+                        out.append(m)
                     }
                 } else {
                     // No diffusers layout — look for single-file SDXL/SD checkpoints.
                     let sfs = Self.singleFileCheckpoints(atSnapshot: snap)
                     if !sfs.isEmpty { seen.insert(repo) }
                     for sf in sfs {
-                        out.append(.sdxl(repo: repo, family: sf.family, checkpointFile: sf.file))
+                        var m = ImageModel.sdxl(repo: repo, family: sf.family, checkpointFile: sf.file)
+                        m.sizeBytes = Self.fileSize(snap.appendingPathComponent(sf.file))
+                        out.append(m)
                     }
                 }
             }
@@ -312,12 +327,85 @@ final class ImageGenService {
 
     /// Resolve the local diffusers snapshot directory for a downloaded repo — the
     /// SDXL/SD engine loads from a path, not a repo id. nil if not on disk.
-    nonisolated func snapshotDir(for repo: String) -> URL? {
+    nonisolated func snapshotDir(for repo: String) -> URL? { Self.cachedSnapshot(for: repo) }
+
+    nonisolated static func cachedSnapshot(for repo: String) -> URL? {
         let safe = "models--" + repo.replacingOccurrences(of: "/", with: "--")
         for base in [PathResolver.hfHome, PathResolver.hfHome.appendingPathComponent("hub")] {
-            if let snap = Self.snapshot(in: base.appendingPathComponent(safe)) { return snap }
+            if let snap = snapshot(in: base.appendingPathComponent(safe)) { return snap }
         }
         return nil
+    }
+
+    // MARK: - Disk size + delete (Models-tab management)
+
+    /// Weights size of a diffusers model = its `blobs/` dir (the snapshot holds only
+    /// symlinks into blobs/).
+    nonisolated static func diffusersSize(snapshot snap: URL) -> Int64 {
+        let blobs = snap.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("blobs", isDirectory: true)
+        return directorySize(blobs)
+    }
+
+    /// Regular-file size at a path, resolving symlinks (HF snapshot files are symlinks).
+    nonisolated static func fileSize(_ url: URL) -> Int64 {
+        let resolved = url.resolvingSymlinksInPath()
+        let attrs = try? FileManager.default.attributesOfItem(atPath: resolved.path)
+        return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    /// Total size of regular files under a directory.
+    nonisolated static func directorySize(_ dir: URL) -> Int64 {
+        guard let en = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let u as URL in en {
+            if let v = try? u.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+               v.isRegularFile == true { total += Int64(v.fileSize ?? 0) }
+        }
+        return total
+    }
+
+    /// Delete a downloaded image model from disk, returning bytes freed. For a
+    /// diffusers / FLUX model this removes the whole HF-cache repo dir. For a
+    /// **single-file** checkpoint it removes just that `.safetensors` (and the blob it
+    /// points to) plus its converted-diffusers cache, and only removes the whole repo
+    /// dir when it was the last checkpoint (a repo may hold v9/v12/v14). Destructive —
+    /// callers confirm first.
+    nonisolated static func deleteImageModel(_ model: ImageModel) -> Int64 {
+        let fm = FileManager.default
+        var freed: Int64 = 0
+        let safe = "models--" + model.repo.replacingOccurrences(of: "/", with: "--")
+
+        // Converted-diffusers cache (single-file only).
+        if model.checkpointFile != nil {
+            let key = model.id.replacingOccurrences(of: "/", with: "_")
+            let conv = PathResolver.sdxlConvertedDir.appendingPathComponent(key, isDirectory: true)
+            if fm.fileExists(atPath: conv.path) { freed += directorySize(conv); try? fm.removeItem(at: conv) }
+        }
+
+        for base in [PathResolver.hfHome, PathResolver.hfHome.appendingPathComponent("hub")] {
+            let repoDir = base.appendingPathComponent(safe, isDirectory: true)
+            guard fm.fileExists(atPath: repoDir.path) else { continue }
+            if let ckpt = model.checkpointFile, let snap = snapshot(in: repoDir) {
+                let link = snap.appendingPathComponent(ckpt)
+                freed += fileSize(link)                       // measure the blob before removing
+                try? fm.removeItem(at: link.resolvingSymlinksInPath())  // the blob
+                try? fm.removeItem(at: link)                  // the snapshot symlink
+                let remaining = ((try? fm.contentsOfDirectory(atPath: snap.path)) ?? [])
+                    .filter { $0.hasSuffix(".safetensors") }
+                if remaining.isEmpty { try? fm.removeItem(at: repoDir) }  // last one → drop the repo
+            } else {
+                if let snap = snapshot(in: repoDir) { freed += diffusersSize(snapshot: snap) }
+                try? fm.removeItem(at: repoDir)
+            }
+        }
+        // Stray lock dirs (tiny; best-effort).
+        for lock in [PathResolver.hfHome.appendingPathComponent(".locks/\(safe)", isDirectory: true),
+                     PathResolver.hfHome.appendingPathComponent("hub/.locks/\(safe)", isDirectory: true)] {
+            try? fm.removeItem(at: lock)
+        }
+        return freed
     }
 
     // MARK: - Install gate

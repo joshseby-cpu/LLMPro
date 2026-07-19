@@ -731,6 +731,19 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-19 (cont.) — Manage image models like LLMs (size · pin · rename · Finder · delete).**
+  The "Image models" rows in the Models tab now have the same management affordances as the LLM rows
+  (minus the LLM-only Teach/Chat/convert/export): **disk size** in the row + a section **Total**, a
+  **pin/favorite** star (`FavoritesStore`, pinned float to top), inline **Rename / Show in Finder /
+  Delete** buttons, and a matching context menu. **Delete** (`ImageGenService.deleteImageModel`, off-thread,
+  with a confirmation alert + the shared "Freed X" result) frees the HF-cache repo dir for a diffusers/FLUX
+  model; for a **single-file** checkpoint it removes just that `.safetensors` (+ the blob it points to) and
+  its converted-diffusers cache, dropping the whole repo only when it was the last checkpoint (WAI holds
+  v9/v12/v14). `ImageModel` gained `sizeBytes` (set by the scan: `diffusersSize` = the `blobs/` dir for a
+  diffusers model, `fileSize` = the checkpoint blob for single-file); `downloadedImageModels()` also fills
+  preset sizes. New static helpers on `ImageGenService`: `cachedSnapshot`, `diffusersSize`, `fileSize`,
+  `directorySize`, `deleteImageModel`.
+
 - **Session 2026-07-19 (cont.) — Rename downloaded models.**
   Any downloaded model (LLM **or** image) can be given a friendlier **display name** via a new
   "Rename…" context-menu action (both the Local-models and Image-models rows) → `RenameModelSheet`.
