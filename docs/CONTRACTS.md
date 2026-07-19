@@ -354,7 +354,7 @@ init, atomic write on every mutation. Adding one does NOT touch
 | `system_prompt_presets.json` | `SystemPromptPresetStore` | custom chat personas (built-ins are code constants) |
 | `prompt_library.json` | `PromptLibraryStore` | custom reusable prompts for Try it out |
 | `favorites.json` | `FavoritesStore` | pinned model ids + dataset UUIDs |
-| `model_meta.json` | `ModelMetaStore` | per-model notes + tags, keyed by `DetectedModel.id` |
+| `model_meta.json` | `ModelMetaStore` | per-model **notes + tags + `displayName` (rename alias)**, keyed by model id (`DetectedModel.id` for LLMs, `ImageModel.id` = `repo#file` for image models). The alias is display-only — the on-disk folder / repoID is never renamed. |
 | `training_presets.json` | `TrainingPresetStore` | saved `TrainingConfig` recipes (per-run model/data/adapter stripped on apply) |
 
 ### "Host to the cloud" export (HF safetensors)

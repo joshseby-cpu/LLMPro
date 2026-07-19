@@ -4,6 +4,10 @@ import Observation
 struct ModelMeta: Codable, Hashable {
     var notes: String = ""
     var tags: [String] = []
+    /// A user-chosen display name that overrides the auto-derived one. Empty = use the
+    /// default. This is an alias only — the model's on-disk folder / repoID is never
+    /// touched, so loading, training configs, and the HF cache layout keep working.
+    var displayName: String = ""
 }
 
 /// User notes + tags for local models, stored as a side JSON keyed by model id
@@ -23,12 +27,28 @@ final class ModelMetaStore {
     func meta(for id: String) -> ModelMeta { byID[id] ?? ModelMeta() }
 
     func set(_ meta: ModelMeta, for id: String) {
-        if meta.notes.isEmpty && meta.tags.isEmpty {
+        if meta.notes.isEmpty && meta.tags.isEmpty && meta.displayName.isEmpty {
             byID.removeValue(forKey: id)
         } else {
             byID[id] = meta
         }
         save()
+    }
+
+    /// The effective display name for a model id: the user's alias if set, else the
+    /// caller's default (the auto-derived name).
+    func displayName(for id: String, default fallback: String) -> String {
+        let alias = meta(for: id).displayName
+        return alias.isEmpty ? fallback : alias
+    }
+
+    /// Set (or, when `name` is empty or equals the default, clear) the display-name
+    /// alias for a model id, preserving its notes + tags.
+    func rename(_ name: String, for id: String, default fallback: String) {
+        var m = meta(for: id)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        m.displayName = (trimmed.isEmpty || trimmed == fallback) ? "" : trimmed
+        set(m, for: id)
     }
 
     /// Every tag in use, sorted — for a filter menu.

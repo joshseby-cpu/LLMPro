@@ -731,6 +731,17 @@ for the full reasoning. Quick reference:
 Most-recently-resolved items at top. Maintain this section when you complete
 work that another agent might be looking for context on.
 
+- **Session 2026-07-19 (cont.) — Rename downloaded models.**
+  Any downloaded model (LLM **or** image) can be given a friendlier **display name** via a new
+  "Rename…" context-menu action (both the Local-models and Image-models rows) → `RenameModelSheet`.
+  It's an **alias only**: `ModelMeta.displayName` in `ModelMetaStore` (keyed by model id —
+  `DetectedModel.id` for LLMs, `ImageModel.id`=`repo#file` for image models), so the on-disk folder
+  and repoID are never touched and loading/training/the HF cache keep working. The alias is applied
+  wherever the name shows — Models-tab LLM rows, the Image-models section, and the Imagine model
+  picker — via `ModelMetaStore.displayName(for:default:)`; "Reset to original" clears it.
+  `ModelNotesSheet.save()` was fixed to preserve the alias (it rebuilt `ModelMeta` from scratch,
+  which would have wiped `displayName`).
+
 - **Session 2026-07-19 (cont.) — Single-file SDXL/SD support + "what my installed models support" overview.**
   **Single-file checkpoints** (A1111/LDM `.safetensors`, e.g. the user's `WAI-NSFW-illustrious-SDXL`
   with v9/v12/v14) now work in Imagine. `sdxl_generate.py` gained `--convert-cache`: a single-file

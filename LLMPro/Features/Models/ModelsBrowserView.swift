@@ -51,6 +51,9 @@ struct ModelsBrowserView: View {
     @State private var ggufExportTarget: ModelRegistry.DetectedModel?
     @State private var notesTarget: ModelRegistry.DetectedModel?
     @State private var cardTarget: ModelRegistry.DetectedModel?
+    /// Rename works for both LLMs and image models, so it's keyed by a stable id +
+    /// current default name rather than a specific model type.
+    @State private var renameTarget: RenameTarget?
     @State private var showCompare: Bool = false
     @State private var favorites = FavoritesStore.shared
     /// Downloaded image models (FLUX/SDXL/SD) surfaced so the user sees every model they
@@ -96,6 +99,9 @@ struct ModelsBrowserView: View {
             }
             .sheet(isPresented: $showGGUFImport) {
                 GGUFImportView()
+            }
+            .sheet(item: $renameTarget) { target in
+                RenameModelSheet(modelID: target.id, defaultName: target.defaultName)
             }
             .sheet(item: $ggufExportTarget) { target in
                 GGUFExportSheet(model: target)
@@ -255,6 +261,9 @@ struct ModelsBrowserView: View {
                             Button(favorites.isModelPinned(local.id) ? "Unpin" : "Pin to top",
                                    systemImage: favorites.isModelPinned(local.id) ? "star.slash" : "star") {
                                 favorites.toggleModel(local.id)
+                            }
+                            Button("Rename…", systemImage: "pencil") {
+                                renameTarget = RenameTarget(id: local.id, defaultName: local.displayName)
                             }
                             Button("Notes & tags…", systemImage: "tag") { notesTarget = local }
                             Divider()
@@ -470,6 +479,9 @@ struct ModelsBrowserView: View {
                 ImageModelRow(model: m)
                     .card(padding: 10, cornerRadius: 10)
                     .contextMenu {
+                        Button("Rename…", systemImage: "pencil") {
+                            renameTarget = RenameTarget(id: m.id, defaultName: m.name)
+                        }
                         Button("Show in Finder") {
                             if let dir = ImageGenService.shared.snapshotDir(for: m.repo) {
                                 NSWorkspace.shared.activateFileViewerSelecting([dir])
@@ -834,10 +846,18 @@ private struct ModelResultCard: View {
     }
 }
 
+/// Identifies a model to rename (any type — LLM or image), by its stable metadata id
+/// and current default name. `Identifiable` so it can drive a `.sheet(item:)`.
+struct RenameTarget: Identifiable {
+    let id: String
+    let defaultName: String
+}
+
 /// A downloaded image model in the Models tab. Compact: what it is + what it supports
 /// (image generation, in the Imagine tab). Not an LLM, so no Teach/Chat/convert actions.
 private struct ImageModelRow: View {
     let model: ImageModel
+    @State private var meta = ModelMetaStore.shared
 
     private var familyLabel: String {
         switch model.family {
@@ -854,7 +874,7 @@ private struct ImageModelRow: View {
         HStack(spacing: 10) {
             Image(systemName: "photo.artframe").font(.title3).foregroundStyle(Color.brand).frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.name).font(.headline).lineLimit(1)
+                Text(meta.displayName(for: model.id, default: model.name)).font(.headline).lineLimit(1)
                 Text("\(familyLabel) · image generation").font(.caption).foregroundStyle(.secondary)
                 Label("Imagine · Story illustrations", systemImage: "sparkles")
                     .font(.caption2).foregroundStyle(.tertiary).labelStyle(.titleAndIcon)
@@ -892,7 +912,7 @@ private struct LocalModelRow: View {
             .buttonStyle(.borderless)
             .help(favorites.isModelPinned(model.id) ? "Unpin" : "Pin to top")
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.displayName).font(.headline)
+                Text(meta.displayName(for: model.id, default: model.displayName)).font(.headline)
                 Text("\(model.architecture) · \(model.quantization) · \(model.humanSize)")
                     .font(.caption).foregroundStyle(.secondary)
                 // What the user can actually do with this model. A regular MLX LLM does

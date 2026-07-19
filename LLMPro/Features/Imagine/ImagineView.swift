@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 struct ImagineView: View {
     @State private var store = ImagineStore.shared
     @State private var imageGen = ImageGenService.shared
+    @State private var meta = ModelMetaStore.shared
 
     @State private var prompt = ""
     @AppStorage("imagineModelRepo") private var modelRepo = ImageModel.default.repo
@@ -194,7 +195,8 @@ struct ImagineView: View {
                         Section("Download & use") { ForEach(toGet) { modelButton($0) } }
                     }
                 } label: {
-                    Label(selectedModel.name, systemImage: "cube.box").lineLimit(1)
+                    Label(meta.displayName(for: selectedModel.id, default: selectedModel.name),
+                          systemImage: "cube.box").lineLimit(1)
                 }
                 .menuStyle(.borderlessButton).fixedSize()
                 .help(selectedModel.note + (imageGen.isModelDownloaded(selectedModel.repo) ? " · ready" : " · downloads on first use"))
@@ -255,11 +257,12 @@ struct ImagineView: View {
     /// (size / quality hint) is the secondary line.
     @ViewBuilder
     private func modelButton(_ m: ImageModel) -> some View {
+        let display = meta.displayName(for: m.id, default: m.name)
         Button { modelRepo = m.id } label: {
             if m.id == modelRepo {
-                Label("\(m.name) — \(m.note)", systemImage: "checkmark")
+                Label("\(display) — \(m.note)", systemImage: "checkmark")
             } else {
-                Text("\(m.name) — \(m.note)")
+                Text("\(display) — \(m.note)")
             }
         }
     }

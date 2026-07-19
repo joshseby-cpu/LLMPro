@@ -63,7 +63,11 @@ struct ModelNotesSheet: View {
     }
 
     private func save() {
-        store.set(ModelMeta(notes: notes.trimmingCharacters(in: .whitespacesAndNewlines), tags: parsedTags), for: modelID)
+        // Preserve any rename alias on this model — only update notes + tags.
+        var m = store.meta(for: modelID)
+        m.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        m.tags = parsedTags
+        store.set(m, for: modelID)
         dismiss()
     }
 }
